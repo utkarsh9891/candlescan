@@ -117,6 +117,38 @@ async function tryFetch(url) {
   return res.json();
 }
 
+/**
+ * r.jina.ai fetches the URL server-side and returns text with a short header; body is raw JSON.
+ * CORS allows arbitrary origins (with credentials echo) — reliable when allorigins/corsproxy are down.
+ */
+async function tryFetchJinaReader(yahooUrl) {
+  const proxyUrl = `https://r.jina.ai/${yahooUrl}`;
+  const res = await fetch(proxyUrl, { cache: 'no-store' });
+  if (!res.ok) throw new Error(String(res.status));
+  const text = await res.text();
+  const marker = 'Markdown Content:';
+  const i = text.indexOf(marker);
+  const slice = (i >= 0 ? text.slice(i + marker.length) : text).trim();
+  const j = slice.indexOf('{');
+  if (j === -1) throw new Error('no json in jina body');
+  return JSON.parse(slice.slice(j));
+}
+
+/** Optional build-time proxy: set VITE_CANDLESCAN_PROXY_URL to a prefix ending before the encoded Yahoo URL, e.g. https://your-worker.workers.dev/?url= */
+function tryFetchFromEnvProxy(yahooUrl) {
+  let base;
+  try {
+    base = import.meta.env && import.meta.env.VITE_CANDLESCAN_PROXY_URL;
+  } catch {
+    base = '';
+  }
+  base = typeof base === 'string' ? base.trim() : '';
+  if (!base) return null;
+  const enc = encodeURIComponent(yahooUrl);
+  const url = base.includes('%s') ? base.replace('%s', enc) : `${base}${enc}`;
+  return () => tryFetch(url);
+}
+
 /** allorigins.win wraps JSON in { contents, status } — sometimes works when /raw fails */
 async function tryFetchAllOriginsGet(yahooUrl) {
   const enc = encodeURIComponent(yahooUrl);
@@ -157,14 +189,18 @@ async function fetchWithFallbacks(symbol, interval, range) {
 
   /**
    * Never call Yahoo directly from the browser on static hosts (e.g. github.io):
-   * Yahoo does not send Access-Control-Allow-Origin for our origin — only noisy failed preflights.
-   * Public CORS proxies below are the supported path for GitHub Pages.
+   * Yahoo does not send Access-Control-Allow-Origin for our origin.
+   * Order: optional BYO proxy → Jina (stable JSON + CORS) → Codetabs → legacy public proxies (often 403/522).
    */
+  const envProxy = tryFetchFromEnvProxy(yahooUrl);
+  if (envProxy) attempts.push(envProxy);
+
   attempts.push(
+    () => tryFetchJinaReader(yahooUrl),
+    () => tryFetchCodetabsProxy(yahooUrl),
     () => tryFetch(`https://api.allorigins.win/raw?url=${enc}`),
     () => tryFetchAllOriginsGet(yahooUrl),
-    () => tryFetch(`https://corsproxy.io/?${enc}`),
-    () => tryFetchCodetabsProxy(yahooUrl)
+    () => tryFetch(`https://corsproxy.io/?${enc}`)
   );
 
   for (const run of attempts) {
