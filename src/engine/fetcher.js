@@ -63,18 +63,6 @@ function isDevSimulateRequested() {
   }
 }
 
-function isLoopbackOrFileHost() {
-  if (typeof window === 'undefined') return false;
-  const h = (window.location.hostname || '').toLowerCase();
-  return (
-    h === 'localhost' ||
-    h === '127.0.0.1' ||
-    h === '[::1]' ||
-    h === '0.0.0.0' ||
-    h === ''
-  );
-}
-
 /** Production build served over http://127.0.0.1 (or localhost) — local-dev-server.mjs provides /__candlescan-yahoo */
 function isProdHttpLoopback() {
   if (typeof window === 'undefined') return false;
@@ -129,16 +117,36 @@ async function tryFetch(url) {
   return res.json();
 }
 
-async function fetchWithFallbacks(symbol, interval, range) {
-  const direct = buildYahooUrl(symbol, interval, range);
-  const enc = encodeURIComponent(direct);
+/** allorigins.win wraps JSON in { contents, status } — sometimes works when /raw fails */
+async function tryFetchAllOriginsGet(yahooUrl) {
+  const enc = encodeURIComponent(yahooUrl);
+  const res = await fetch(
+    `https://api.allorigins.win/get?url=${enc}`,
+    { cache: 'no-store' }
+  );
+  if (!res.ok) throw new Error(String(res.status));
+  const wrap = await res.json();
+  if (wrap.contents == null || wrap.contents === '') throw new Error('empty contents');
+  return JSON.parse(typeof wrap.contents === 'string' ? wrap.contents : String(wrap.contents));
+}
 
-  const allorigins = () =>
-    tryFetch(`https://api.allorigins.win/raw?url=${enc}`);
-  const corsproxy = () => tryFetch(`https://corsproxy.io/?${enc}`);
+/** Third public proxy (Codetabs) — extra fallback on GitHub Pages where direct Yahoo is always CORS-blocked */
+async function tryFetchCodetabsProxy(yahooUrl) {
+  const res = await fetch(
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`,
+    { cache: 'no-store' }
+  );
+  if (!res.ok) throw new Error(String(res.status));
+  return res.json();
+}
+
+async function fetchWithFallbacks(symbol, interval, range) {
+  const yahooUrl = buildYahooUrl(symbol, interval, range);
+  const enc = encodeURIComponent(yahooUrl);
 
   const attempts = [];
 
+  /* Same-origin proxy: Vite dev or local Node server (never CORS issues) */
   if (typeof window !== 'undefined') {
     if (isViteDev() || isProdHttpLoopback()) {
       attempts.push(() =>
@@ -147,15 +155,17 @@ async function fetchWithFallbacks(symbol, interval, range) {
     }
   }
 
-  if (!isLoopbackOrFileHost()) {
-    attempts.push(() => tryFetch(direct));
-  }
-
-  attempts.push(allorigins, corsproxy);
-
-  if (isLoopbackOrFileHost()) {
-    attempts.push(() => tryFetch(direct));
-  }
+  /**
+   * Never call Yahoo directly from the browser on static hosts (e.g. github.io):
+   * Yahoo does not send Access-Control-Allow-Origin for our origin — only noisy failed preflights.
+   * Public CORS proxies below are the supported path for GitHub Pages.
+   */
+  attempts.push(
+    () => tryFetch(`https://api.allorigins.win/raw?url=${enc}`),
+    () => tryFetchAllOriginsGet(yahooUrl),
+    () => tryFetch(`https://corsproxy.io/?${enc}`),
+    () => tryFetchCodetabsProxy(yahooUrl)
+  );
 
   for (const run of attempts) {
     try {
