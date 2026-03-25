@@ -34,7 +34,9 @@ export default function App() {
   const [sym, setSym] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [live, setLive] = useState(true);
+  const [live, setLive] = useState(false);
+  const [simulated, setSimulated] = useState(false);
+  const [scanError, setScanError] = useState('');
   const [candles, setCandles] = useState([]);
   const [patterns, setPatterns] = useState([]);
   const [box, setBox] = useState(null);
@@ -53,16 +55,35 @@ export default function App() {
     const s = String(symbol).trim();
     if (!s) return;
     setLoading(true);
+    setScanError('');
     try {
-      const { candles: cd, live: lv, companyName: cn, displaySymbol } = await fetchOHLCV(
-        s,
-        timeframe
-      );
+      const result = await fetchOHLCV(s, timeframe);
+      const {
+        candles: cd,
+        live: lv,
+        simulated: sim,
+        error: err,
+        companyName: cn,
+        displaySymbol,
+      } = result;
+
       activeSymRef.current = displaySymbol;
       setSym(displaySymbol);
-      setCandles(cd);
-      setLive(lv);
       setCompanyName(cn || displaySymbol);
+      setSimulated(!!sim);
+      setLive(!!lv);
+
+      if (err || !cd?.length) {
+        setCandles([]);
+        setPatterns([]);
+        setBox(null);
+        setRisk(null);
+        setScanError(err || 'No data returned.');
+        setLastScan(new Date().toLocaleTimeString());
+        return;
+      }
+
+      setCandles(cd);
       const pat = detectPatterns(cd);
       const bx = detectLiquidityBox(cd);
       const rk = computeRiskScore({ candles: cd, patterns: pat, box: bx });
@@ -103,6 +124,12 @@ export default function App() {
 
   const chartH = mode === 'simple' ? 140 : 175;
 
+  let headerBadge = 'idle';
+  if (loading) headerBadge = 'idle';
+  else if (scanError) headerBadge = 'offline';
+  else if (simulated) headerBadge = 'demo';
+  else if (sym && candles.length) headerBadge = live ? 'live' : 'offline';
+
   const viewProps = {
     sym,
     companyName,
@@ -115,7 +142,7 @@ export default function App() {
 
   return (
     <div style={shell}>
-      <Header live={live} lastScan={lastScan} />
+      <Header badge={headerBadge} lastScan={lastScan} />
       <ModeToggle mode={mode} onChange={setMode} />
       <TimeframePills mode={mode} value={timeframe} onChange={setTimeframe} />
       <SearchBar
@@ -197,7 +224,27 @@ export default function App() {
         </div>
       )}
 
-      {!sym || !risk ? (
+      {scanError ? (
+        <div
+          role="alert"
+          style={{
+            padding: 14,
+            borderRadius: 10,
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#991b1b',
+            fontSize: 14,
+            lineHeight: 1.5,
+            marginBottom: 12,
+          }}
+        >
+          {scanError}
+        </div>
+      ) : null}
+
+      {!sym ? (
+        <EmptyState />
+      ) : scanError ? null : !risk ? (
         <EmptyState />
       ) : (
         <>
@@ -218,12 +265,12 @@ export default function App() {
           lineHeight: 1.5,
         }}
       >
-        {!live && (
+        {simulated ? (
           <p style={{ margin: '0 0 8px' }}>
-            Simulated data — Yahoo Finance was unreachable from this browser. For live OHLCV, try
-            another network or deploy to GitHub Pages.
+            Demo data — you are in dev mode with <code style={{ fontSize: 11 }}>?simulate=1</code>.
+            Remove it to load real Yahoo Finance data.
           </p>
-        )}
+        ) : null}
         <p style={{ margin: 0 }}>
           Educational tool only — not financial advice. You are responsible for your trades.
         </p>
