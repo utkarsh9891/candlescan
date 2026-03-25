@@ -1,52 +1,172 @@
 # CandleScan
 
-Intraday decision-support for NSE stocks: candlestick pattern detection, liquidity-box analysis, and a **0–100 risk score**. Mobile-first, light-mode UI. Not a trading bot — a signal scanner with risk scoring.
+React + Vite mini-app: NSE-oriented candlestick pattern hints, liquidity-box readout, and a **0–100 risk score**. Mobile-first, light UI.
 
-**Status:** in progress.
+**Educational only — not financial advice.**
 
-## Run locally
+Live (when deployed): `https://utkarsh9891.github.io/candlescan/`  
+Source: this repository.
+
+---
+
+## Tech stack
+
+- **React 18** — UI
+- **Vite 6** — dev server, production build, `/__candlescan-yahoo` dev proxy
+- **Yahoo Finance** chart API (v8) — OHLCV (via proxy on localhost dev, CORS proxies on HTTPS deploy)
+
+---
+
+## Prerequisites
+
+- **Node.js** LTS ([nodejs.org](https://nodejs.org))
+- **npm** (bundled with Node)
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/utkarsh9891/candlescan.git
+cd candlescan
+npm install
+npm start
+```
+
+Open **http://127.0.0.1:5173/candlescan/** (printed in the terminal).
+
+---
+
+## npm scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm start` / `npm run dev` | Vite dev server (fixed host/port in `vite.config.js`) |
+| `npm run build` | Production bundle → `dist/` (`base: /candlescan/`) |
+| `npm run preview` | Serve `dist/` locally (no dev proxy; uses CORS fallbacks like GitHub Pages) |
+| `npm run pages` | Build + copy `dist/` into sibling **`../utkarsh9891.github.io/candlescan/`** (or pass path — see `scripts/deploy-to-pages.sh`) |
+
+---
+
+## Project layout
+
+```text
+candlescan/
+├── index.html              # Vite entry
+├── vite.config.js          # base, dev proxy, server host/port
+├── package.json
+├── scripts/
+│   ├── start.sh            # npm start wrapper (prints URL)
+│   └── deploy-to-pages.sh  # npm run pages
+└── src/
+    ├── main.jsx
+    ├── App.jsx
+    ├── components/         # UI pieces
+    └── engine/             # fetcher, patterns, liquidity, risk
+```
+
+---
+
+## Local development
+
+### Normal dev (live Yahoo via Vite)
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
 
-Open the URL Vite prints (usually `http://localhost:5173/candlescan/`).
+Vite proxies **`/__candlescan-yahoo`** → `query1.finance.yahoo.com` so the browser stays same-origin.
 
-## Preview a production build
+### Demo OHLCV without Yahoo (dev only)
+
+Add **`?simulate=1`** (or `simulate=true`) to the dev URL:
+
+`http://127.0.0.1:5173/candlescan/?simulate=1`
+
+Only active when **`import.meta.env.DEV`** is true — **not** on the production build.
+
+### Production build locally
 
 ```bash
 npm run build
 npm run preview
 ```
 
+### Full site + CandleScan (matches Pages layout)
+
+Use the **[utkarsh9891.github.io](https://github.com/utkarsh9891/utkarsh9891.github.io)** repo:
+
+```bash
+cd ../utkarsh9891.github.io   # sibling clone
+npm start
+```
+
+That server also implements **`/__candlescan-yahoo`** so the **built** app under **`/candlescan/`** gets live data on **http://127.0.0.1:8080/**.
+
+---
+
+## Data loading by environment
+
+| Environment | How Yahoo is reached |
+|-------------|----------------------|
+| **`npm start` here** | Vite dev proxy `/__candlescan-yahoo` |
+| **Pages repo `npm start`** | Node `local-dev-server.mjs` — same path |
+| **GitHub Pages (HTTPS)** | Public CORS proxies (`allorigins`, `corsproxy`, …) after direct fetch |
+
+If every path fails on HTTPS, the UI shows an error (no silent simulated data except **`?simulate=1`** in dev).
+
+---
+
 ## Deploy to GitHub Pages
 
-The app is served from **`https://utkarsh9891.github.io/candlescan/`**. The built assets need to land in the **`candlescan/`** folder of the **[utkarsh9891.github.io](https://github.com/utkarsh9891/utkarsh9891.github.io)** repo.
-
-### One-command deploy script
+Output must land in **`utkarsh9891.github.io/candlescan/`**:
 
 ```bash
-chmod +x scripts/deploy-to-pages.sh
-./scripts/deploy-to-pages.sh /path/to/utkarsh9891.github.io
+npm install
+npm run pages
 ```
 
-This runs `npm ci`, `npm run build`, and copies `dist/` into the target repo's `candlescan/` folder. You then commit and push **`utkarsh9891.github.io`** to publish.
-
-### Manual steps
+If **`../utkarsh9891.github.io`** exists, it is used automatically; otherwise pass the path:
 
 ```bash
-npm run build
-rm -rf /path/to/utkarsh9891.github.io/candlescan/*
-cp -R dist/. /path/to/utkarsh9891.github.io/candlescan/
+npm run pages -- /path/to/utkarsh9891.github.io
+```
+
+Then commit and push **`candlescan/`** in the Pages repo (typically **`master`**).
+
+```bash
 cd /path/to/utkarsh9891.github.io
-git add candlescan && git commit -m "Deploy CandleScan" && git push
+git add candlescan
+git commit -m "Deploy CandleScan"
+git push origin master
 ```
 
-## Data source
+---
 
-Uses Yahoo Finance v8 chart API. If CORS blocks the request (common in dev), the app falls back to **simulated OHLCV** and shows a SIMULATED badge.
+## Debugging & troubleshooting
 
-## Disclaimer
+| Issue | What to try |
+|-------|-------------|
+| **`npm start` says run `npm install`** | Run `npm install` once in this repo. |
+| **Blank or wrong base path** | `vite.config.js` sets `base: '/candlescan/'` for Pages; dev URL must include `/candlescan/`. |
+| **No chart data on GitHub Pages** | Networks/ad blockers may block CORS proxies; try another network or device. |
+| **No data in `npm run preview`** | Expected — no dev proxy; use **`npm start`** or the Pages repo **`npm start`**. |
+| **Verbose Vite logs** | `DEBUG=vite:* npm start` (shell-dependent). |
+| **Inspect built bundle** | After `npm run build`, check `dist/assets/*.js`. |
 
-Educational tool only — not financial advice. You are responsible for your trades.
+### Health checks
+
+```bash
+# Dev server up — from repo root
+curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:5173/candlescan/
+
+# After build
+test -f dist/index.html && echo "build ok"
+```
+
+---
+
+## License
+
+See [LICENSE](LICENSE) in this repository.

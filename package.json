@@ -4,9 +4,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "start": "bash scripts/start.sh",
+    "dev": "bash scripts/start.sh",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "pages": "bash scripts/deploy-to-pages.sh"
   },
   "dependencies": {
     "react": "^18.3.1",
