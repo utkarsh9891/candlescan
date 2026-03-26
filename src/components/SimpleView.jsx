@@ -1,4 +1,5 @@
 import RiskRing from './RiskRing.jsx';
+import RiskScoreSignals from './RiskScoreSignals.jsx';
 
 const card = {
   padding: 16,
@@ -84,6 +85,8 @@ export default function SimpleView({
           Score under 40 — consider skipping this setup.
         </p>
       )}
+
+      <RiskScoreSignals breakdown={risk.breakdown} total={risk.total} />
 
       <div style={{ ...card, background: actionBg, borderColor: '#e2e5eb' }}>
         <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 6 }}>Action</div>
