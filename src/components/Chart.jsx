@@ -5,7 +5,7 @@ const mono = "'SF Mono', Menlo, monospace";
 const MIN_VISIBLE = 12;
 const MAX_VISIBLE_CAP = 140;
 const PX_PER_CANDLE = 12;
-const MIN_CHART_WIDTH = 420;
+const MIN_CHART_WIDTH = 280;
 const X_AXIS_HEIGHT = 22;
 
 const btnStyle = {
@@ -539,20 +539,28 @@ export default function Chart({
 
           {box && !boxVisible && (
             <g>
-              <line x1={leftGutter} y1={yFor(box.high)} x2={w} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.4} />
-              <line x1={leftGutter} y1={yFor(box.low)} x2={w} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.4} />
+              <line x1={leftGutter} y1={yFor(box.high)} x2={w} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
+              <text x={leftGutter + 4} y={yFor(box.high) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Hi</text>
+              <line x1={leftGutter} y1={yFor(box.low)} x2={w} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
+              <text x={leftGutter + 4} y={yFor(box.low) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Lo</text>
             </g>
           )}
 
           {/* Entry / SL / Target lines */}
           {risk && (risk.action === 'STRONG BUY' || risk.action === 'BUY' || risk.action === 'STRONG SHORT' || risk.action === 'SHORT') && (
             <g>
+              {/* Entry — blue dashed */}
               <line x1={leftGutter} y1={yFor(risk.entry)} x2={w} y2={yFor(risk.entry)} stroke="#2563eb" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
-              <text x={w - 4} y={yFor(risk.entry) - 3} textAnchor="end" fontSize={9} fill="#2563eb" fontFamily={mono} fontWeight={600}>Entry {risk.entry.toFixed(2)}</text>
-              <line x1={leftGutter} y1={yFor(risk.sl)} x2={w} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
-              <text x={w - 4} y={yFor(risk.sl) - 3} textAnchor="end" fontSize={9} fill="#dc2626" fontFamily={mono} fontWeight={600}>SL {risk.sl.toFixed(2)}</text>
-              <line x1={leftGutter} y1={yFor(risk.target)} x2={w} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
-              <text x={w - 4} y={yFor(risk.target) - 3} textAnchor="end" fontSize={9} fill="#16a34a" fontFamily={mono} fontWeight={600}>Target {risk.target.toFixed(2)}</text>
+              <rect x={leftGutter + 2} y={yFor(risk.entry) - 12} width={72} height={14} rx={3} fill="#2563eb" opacity={0.85} />
+              <text x={leftGutter + 6} y={yFor(risk.entry) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>Entry {risk.entry.toFixed(0)}</text>
+              {/* SL — red dashed */}
+              <line x1={leftGutter} y1={yFor(risk.sl)} x2={w} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
+              <rect x={leftGutter + 2} y={yFor(risk.sl) - 12} width={56} height={14} rx={3} fill="#dc2626" opacity={0.85} />
+              <text x={leftGutter + 6} y={yFor(risk.sl) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>SL {risk.sl.toFixed(0)}</text>
+              {/* Target — green dashed */}
+              <line x1={leftGutter} y1={yFor(risk.target)} x2={w} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
+              <rect x={leftGutter + 2} y={yFor(risk.target) - 12} width={72} height={14} rx={3} fill="#16a34a" opacity={0.85} />
+              <text x={leftGutter + 6} y={yFor(risk.target) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>Target {risk.target.toFixed(0)}</text>
             </g>
           )}
 
