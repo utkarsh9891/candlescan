@@ -1,4 +1,6 @@
-# CLAUDE.md — AI Agent Guide for CandleScan
+# AGENTS.md — Coding Agent Guide for CandleScan
+
+> This file helps AI coding agents (Claude, Cursor, Copilot, Aider, etc.) understand the project quickly.
 
 ## What is this project?
 CandleScan is a React + Vite mobile-first web app for NSE (National Stock Exchange of India) candlestick pattern detection, liquidity box analysis, and risk scoring. It fetches OHLCV data from Yahoo Finance and renders interactive SVG charts.
