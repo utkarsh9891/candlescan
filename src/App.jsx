@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { fetchOHLCV } from './engine/fetcher.js';
 import { detectPatterns } from './engine/patterns.js';
 import { detectLiquidityBox } from './engine/liquidityBox.js';
@@ -14,8 +14,7 @@ import TraderView from './components/TraderView.jsx';
 import ScalpView from './components/ScalpView.jsx';
 import SignalFilters from './components/SignalFilters.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
-
-const QUICK = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'SBIN', 'ITC', 'TATAMOTORS', 'WIPRO'];
+import { getRandomQuickStocks } from './data/niftyStocks.js';
 
 const ALL_CATEGORIES = new Set([
   'engulfing', 'piercing', 'hammer', 'reversal', 'pullback', 'liquidity', 'momentum', 'indecision',
@@ -53,9 +52,15 @@ export default function App() {
   // Signal filter state
   const [activeFilters, setActiveFilters] = useState(ALL_CATEGORIES);
 
+  // Signal highlight toggle
+  const [highlightSignals, setHighlightSignals] = useState(false);
+
   // Drawing tool state
   const [drawingMode, setDrawingMode] = useState(null);
-  const [drawingsMap, setDrawingsMap] = useState({}); // keyed by symbol
+  const [drawingsMap, setDrawingsMap] = useState({});
+
+  // Random quick stocks from Nifty 100 + Next 100
+  const quickStocks = useMemo(() => getRandomQuickStocks(8), []);
 
   // History with localStorage persistence
   const [history, setHistory] = useState(() => {
@@ -70,7 +75,7 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem('candlescan_history', JSON.stringify(history));
-    } catch { /* quota exceeded — ignore */ }
+    } catch { /* quota exceeded */ }
   }, [history]);
 
   useEffect(() => {
@@ -86,14 +91,7 @@ export default function App() {
     setScanError('');
     try {
       const result = await fetchOHLCV(s, timeframe);
-      const {
-        candles: cd,
-        live: lv,
-        simulated: sim,
-        error: err,
-        companyName: cn,
-        displaySymbol,
-      } = result;
+      const { candles: cd, live: lv, simulated: sim, error: err, companyName: cn, displaySymbol } = result;
 
       activeSymRef.current = displaySymbol;
       setSym(displaySymbol);
@@ -166,9 +164,11 @@ export default function App() {
     companyName,
     candles,
     patterns: filteredPatterns,
+    allPatterns: patterns,
     risk,
     box,
     changePct,
+    activeFilters,
   };
 
   // Drawings for current symbol
@@ -178,6 +178,13 @@ export default function App() {
       ...prev,
       [sym]: [...(prev[sym] || []), drawing],
     }));
+  };
+  const handleDrawingUpdate = (idx, updated) => {
+    setDrawingsMap((prev) => {
+      const arr = [...(prev[sym] || [])];
+      arr[idx] = updated;
+      return { ...prev, [sym]: arr };
+    });
   };
   const clearDrawings = () => {
     setDrawingsMap((prev) => {
@@ -193,15 +200,10 @@ export default function App() {
       <Header badge={headerBadge} lastScan={lastScan} />
       <ModeToggle mode={mode} onChange={setMode} />
       <TimeframePills mode={mode} value={timeframe} onChange={setTimeframe} />
-      <SearchBar
-        inputVal={inputVal}
-        setInputVal={setInputVal}
-        onScan={onScanClick}
-        loading={loading}
-      />
+      <SearchBar inputVal={inputVal} setInputVal={setInputVal} onScan={onScanClick} loading={loading} />
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-        {QUICK.map((t) => (
+        {quickStocks.map((t) => (
           <button
             key={t}
             type="button"
@@ -224,23 +226,8 @@ export default function App() {
       </div>
 
       {loading && (
-        <div
-          style={{
-            height: 4,
-            borderRadius: 2,
-            background: '#e2e5eb',
-            marginBottom: 12,
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{
-              height: '100%',
-              width: '40%',
-              background: '#2563eb',
-              animation: 'csload 0.9s ease-in-out infinite',
-            }}
-          />
+        <div style={{ height: 4, borderRadius: 2, background: '#e2e5eb', marginBottom: 12, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: '40%', background: '#2563eb', animation: 'csload 0.9s ease-in-out infinite' }} />
         </div>
       )}
 
@@ -296,21 +283,45 @@ export default function App() {
         <EmptyState />
       ) : (
         <>
-          <SignalFilters active={activeFilters} onChange={setActiveFilters} />
-          <DrawingToolbar
-            active={drawingMode}
-            onChange={setDrawingMode}
-            onClear={clearDrawings}
-          />
+          {/* Toolbar row: drawing tools + signal filter dropdown + highlight toggle */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
+            <div style={{ flex: 1 }} />
+            <SignalFilters active={activeFilters} onChange={setActiveFilters} />
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 11,
+                fontWeight: 600,
+                color: highlightSignals ? '#2563eb' : '#8892a8',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={highlightSignals}
+                onChange={(e) => setHighlightSignals(e.target.checked)}
+                style={{ accentColor: '#2563eb', margin: 0 }}
+              />
+              Highlight
+            </label>
+          </div>
           <Chart
             candles={candles}
             box={box}
             risk={risk}
             height={chartH}
             sym={sym}
+            timeframe={timeframe}
             drawingMode={drawingMode}
             drawings={currentDrawings}
             onDrawingComplete={handleDrawingComplete}
+            onDrawingUpdate={handleDrawingUpdate}
+            patterns={patterns}
+            highlightSignals={highlightSignals}
           />
           {mode === 'simple' && <SimpleView {...viewProps} />}
           {mode === 'trader' && <TraderView {...viewProps} />}

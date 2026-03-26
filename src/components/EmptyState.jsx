@@ -10,7 +10,7 @@ export default function EmptyState() {
       }}
     >
       Enter a symbol and tap <strong style={{ color: '#4a5068' }}>Scan</strong>, or pick a
-      quick ticker below.
+      quick ticker above.
     </div>
   );
 }
