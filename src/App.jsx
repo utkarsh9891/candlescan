@@ -22,7 +22,7 @@ const shell = {
   fontSize: 14,
   color: '#1a1d26',
   padding: '12px 12px 32px',
-  maxWidth: 480,
+  maxWidth: 560,
   margin: '0 auto',
   boxSizing: 'border-box',
 };
@@ -122,7 +122,7 @@ export default function App() {
         100
       : 0;
 
-  const chartH = mode === 'simple' ? 140 : 175;
+  const chartH = mode === 'simple' ? 240 : 300;
 
   let headerBadge = 'idle';
   if (loading) headerBadge = 'idle';
@@ -248,7 +248,7 @@ export default function App() {
         <EmptyState />
       ) : (
         <>
-          <Chart candles={candles} box={box} height={chartH} />
+          <Chart candles={candles} box={box} height={chartH} sym={sym} />
           {mode === 'simple' && <SimpleView {...viewProps} />}
           {mode === 'trader' && <TraderView {...viewProps} />}
           {mode === 'scalp' && <ScalpView {...viewProps} />}
