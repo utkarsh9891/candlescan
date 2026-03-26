@@ -120,26 +120,19 @@ If every path fails on HTTPS, the UI shows an error (no silent simulated data ex
 
 ## Deploy to GitHub Pages
 
-Output must land in **`utkarsh9891.github.io/candlescan/`**:
+Deployment is automated via **GitHub Actions** (`.github/workflows/deploy.yml`).
+
+**On every push to `main`:**
+1. GitHub Actions builds the app (`npm ci && npm run build`)
+2. Deploys `dist/` to GitHub Pages
+3. Live at **`https://utkarsh9891.github.io/candlescan/`**
+
+**Setup (one-time):** Go to repo Settings → Pages → Source: **"GitHub Actions"**
+
+### Manual deploy (legacy)
 
 ```bash
-npm install
-npm run pages
-```
-
-If **`../utkarsh9891.github.io`** exists, it is used automatically; otherwise pass the path:
-
-```bash
-npm run pages -- /path/to/utkarsh9891.github.io
-```
-
-Then commit and push **`candlescan/`** in the Pages repo (typically **`master`**).
-
-```bash
-cd /path/to/utkarsh9891.github.io
-git add candlescan
-git commit -m "Deploy CandleScan"
-git push origin master
+npm run pages   # Build + copy to ../utkarsh9891.github.io/candlescan/
 ```
 
 ---
