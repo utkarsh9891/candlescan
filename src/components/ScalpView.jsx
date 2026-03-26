@@ -95,7 +95,7 @@ export default function ScalpView(props) {
         </div>
       </div>
 
-      {(risk.action === 'BUY' || risk.action === 'SHORT') && !showTimer && (
+      {(risk.action === 'BUY' || risk.action === 'SHORT' || risk.action === 'STRONG BUY' || risk.action === 'STRONG SHORT') && !showTimer && (
         <button
           type="button"
           onClick={() => start(5)}

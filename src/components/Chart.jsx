@@ -22,9 +22,29 @@ const btnStyle = {
   cursor: 'pointer',
 };
 
-export default function Chart({ candles, box, height = 240, sym = '' }) {
+const toolBtnStyle = {
+  ...btnStyle,
+  fontSize: 12,
+  fontWeight: 600,
+  padding: '0 8px',
+  minWidth: 'auto',
+  minHeight: 30,
+};
+
+export default function Chart({
+  candles,
+  box,
+  risk,
+  height = 240,
+  sym = '',
+  drawingMode = null,
+  drawings = [],
+  onDrawingComplete,
+}) {
   const [visibleCount, setVisibleCount] = useState(DEFAULT_VISIBLE);
   const wrapRef = useRef(null);
+  const svgRef = useRef(null);
+  const [pendingPoint, setPendingPoint] = useState(null);
 
   useEffect(() => {
     setVisibleCount(DEFAULT_VISIBLE);
@@ -46,6 +66,8 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
 
   const slice =
     count > 0 && candles?.length ? candles.slice(-count) : [];
+
+  const sliceStartIdx = candles?.length ? candles.length - slice.length : 0;
 
   const zoomIn = useCallback(() => {
     setVisibleCount((v) => Math.max(floorBars, Math.floor(v * 0.72)));
@@ -88,6 +110,11 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
     lo = Math.min(lo, box.low - box.manipulationZone);
     hi = Math.max(hi, box.high + box.manipulationZone);
   }
+  // Include entry/sl/target in price range
+  if (risk) {
+    lo = Math.min(lo, risk.sl, risk.target);
+    hi = Math.max(hi, risk.sl, risk.target);
+  }
   const pad = (hi - lo) * 0.06 || hi * 0.01;
   lo -= pad;
   hi += pad;
@@ -100,11 +127,98 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
 
   const xFor = (i) => leftGutter + (i / Math.max(slice.length - 1, 1)) * chartW;
   const yFor = (p) => h - ((p - lo) / range) * (h - 8) - 4;
+  const priceFor = (y) => lo + ((h - 4 - y) / (h - 8)) * range;
 
   const gridYs = [0, 0.25, 0.5, 0.75, 1].map((t) => lo + range * t);
 
   const atMinZoom = count <= floorBars;
   const atMaxZoom = count >= maxVisible;
+
+  /* ── Drawing interaction ────────────────────────────────────── */
+  const getSvgCoords = (e) => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const rect = svg.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    return { x, y };
+  };
+
+  const handleSvgClick = (e) => {
+    if (!drawingMode || !onDrawingComplete) return;
+    const coords = getSvgCoords(e);
+    if (!coords) return;
+
+    const price = priceFor(coords.y);
+    // Find closest candle index
+    const idx = Math.round(((coords.x - leftGutter) / chartW) * (slice.length - 1));
+    const clampIdx = Math.max(0, Math.min(slice.length - 1, idx));
+
+    if (drawingMode === 'hline') {
+      onDrawingComplete({ type: 'hline', price });
+      return;
+    }
+
+    if (drawingMode === 'trendline') {
+      if (!pendingPoint) {
+        setPendingPoint({ price, idx: clampIdx });
+      } else {
+        onDrawingComplete({
+          type: 'trendline',
+          price1: pendingPoint.price,
+          idx1: pendingPoint.idx,
+          price2: price,
+          idx2: clampIdx,
+        });
+        setPendingPoint(null);
+      }
+      return;
+    }
+
+    if (drawingMode === 'box') {
+      if (!pendingPoint) {
+        setPendingPoint({ price, idx: clampIdx });
+      } else {
+        onDrawingComplete({
+          type: 'box',
+          priceTop: Math.max(pendingPoint.price, price),
+          priceBot: Math.min(pendingPoint.price, price),
+          idx1: Math.min(pendingPoint.idx, clampIdx),
+          idx2: Math.max(pendingPoint.idx, clampIdx),
+        });
+        setPendingPoint(null);
+      }
+      return;
+    }
+  };
+
+  // Clear pending point when drawing mode changes
+  useEffect(() => {
+    setPendingPoint(null);
+  }, [drawingMode]);
+
+  /* ── Box positioning ────────────────────────────────────────── */
+  let boxX = null;
+  let boxW = null;
+  let boxVisible = false;
+  if (box && box.startIdx != null && box.endIdx != null) {
+    const relStart = box.startIdx - sliceStartIdx;
+    const relEnd = box.endIdx - sliceStartIdx;
+    // Check if box overlaps with visible slice
+    if (relEnd >= 0 && relStart < slice.length) {
+      const clampStart = Math.max(0, relStart);
+      const clampEnd = Math.min(slice.length - 1, relEnd);
+      boxX = xFor(clampStart) - (chartW / slice.length) * 0.4;
+      const boxEndX = xFor(clampEnd) + (chartW / slice.length) * 0.4;
+      boxW = boxEndX - boxX;
+      boxVisible = true;
+    }
+  } else if (box) {
+    // Legacy: no indices, span full width
+    boxX = xFor(0);
+    boxW = chartW;
+    boxVisible = true;
+  }
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -119,7 +233,12 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
         }}
       >
         <span style={{ fontSize: 12, color: '#8892a8', fontWeight: 500 }}>
-          Chart · last {slice.length} bars (scroll wheel zooms)
+          Chart · last {slice.length} bars
+          {drawingMode && (
+            <span style={{ color: '#2563eb', marginLeft: 6 }}>
+              [Drawing: {drawingMode}{pendingPoint ? ' — click end point' : ''}]
+            </span>
+          )}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button
@@ -175,11 +294,19 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
           borderRadius: 10,
           border: '1px solid #e2e5eb',
           background: '#fff',
+          cursor: drawingMode ? 'crosshair' : 'default',
         }}
         role="img"
         aria-label={`Candlestick chart, ${slice.length} bars`}
       >
-        <svg width={w} height={h + 18} style={{ display: 'block' }}>
+        <svg
+          ref={svgRef}
+          width={w}
+          height={h + 18}
+          style={{ display: 'block' }}
+          onClick={handleSvgClick}
+        >
+          {/* Grid */}
           {gridYs.map((gy, i) => (
             <g key={i}>
               <line
@@ -202,20 +329,67 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
             </g>
           ))}
 
-          {box && (
-            <rect
-              x={xFor(0)}
-              y={yFor(box.high)}
-              width={chartW}
-              height={Math.max(2, yFor(box.low) - yFor(box.high))}
-              fill="rgba(37, 99, 235, 0.08)"
-              stroke="#2563eb"
-              strokeWidth={1}
-              strokeDasharray="4 3"
-              rx={2}
-            />
+          {/* Liquidity box */}
+          {box && boxVisible && (
+            <g>
+              <rect
+                x={boxX}
+                y={yFor(box.high)}
+                width={boxW}
+                height={Math.max(2, yFor(box.low) - yFor(box.high))}
+                fill="rgba(37, 99, 235, 0.08)"
+                stroke="#2563eb"
+                strokeWidth={1}
+                strokeDasharray="4 3"
+                rx={2}
+              />
+              {/* Manipulation zone — top band */}
+              <rect
+                x={boxX}
+                y={yFor(box.high + box.manipulationZone)}
+                width={boxW}
+                height={Math.max(1, yFor(box.high) - yFor(box.high + box.manipulationZone))}
+                fill="rgba(234, 88, 12, 0.12)"
+                rx={1}
+              />
+              {/* Manipulation zone — bottom band */}
+              <rect
+                x={boxX}
+                y={yFor(box.low)}
+                width={boxW}
+                height={Math.max(1, yFor(box.low - box.manipulationZone) - yFor(box.low))}
+                fill="rgba(234, 88, 12, 0.12)"
+                rx={1}
+              />
+            </g>
           )}
 
+          {/* Box dashed lines when box exists but is outside visible range */}
+          {box && !boxVisible && (
+            <g>
+              <line x1={leftGutter} y1={yFor(box.high)} x2={w} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.4} />
+              <line x1={leftGutter} y1={yFor(box.low)} x2={w} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.4} />
+            </g>
+          )}
+
+          {/* Entry / SL / Target lines */}
+          {risk && (risk.action === 'STRONG BUY' || risk.action === 'BUY' || risk.action === 'STRONG SHORT' || risk.action === 'SHORT') && (
+            <g>
+              {/* Entry */}
+              <line x1={leftGutter} y1={yFor(risk.entry)} x2={w} y2={yFor(risk.entry)} stroke="#2563eb" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+              <text x={w - 4} y={yFor(risk.entry) - 3} textAnchor="end" fontSize={9} fill="#2563eb" fontFamily={mono} fontWeight={600}>Entry {risk.entry.toFixed(2)}</text>
+
+              {/* Stop Loss */}
+              <line x1={leftGutter} y1={yFor(risk.sl)} x2={w} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+              <text x={w - 4} y={yFor(risk.sl) - 3} textAnchor="end" fontSize={9} fill="#dc2626" fontFamily={mono} fontWeight={600}>SL {risk.sl.toFixed(2)}</text>
+
+              {/* Target */}
+              <line x1={leftGutter} y1={yFor(risk.target)} x2={w} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+              <text x={w - 4} y={yFor(risk.target) - 3} textAnchor="end" fontSize={9} fill="#16a34a" fontFamily={mono} fontWeight={600}>Target {risk.target.toFixed(2)}</text>
+            </g>
+          )}
+
+          {/* Candles */}
           {slice.map((c, i) => {
             const x = xFor(i);
             const bw = Math.max(2, chartW / slice.length - 1.5);
@@ -247,6 +421,7 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
             );
           })}
 
+          {/* Current price line */}
           {(() => {
             const last = slice[slice.length - 1];
             const y = yFor(last.c);
@@ -276,6 +451,61 @@ export default function Chart({ candles, box, height = 240, sym = '' }) {
               </g>
             );
           })()}
+
+          {/* User drawings */}
+          {drawings.map((d, di) => {
+            if (d.type === 'hline') {
+              const y = yFor(d.price);
+              return (
+                <g key={`d-${di}`}>
+                  <line x1={leftGutter} y1={y} x2={w} y2={y} stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="6 3" />
+                  <text x={leftGutter + 4} y={y - 3} fontSize={9} fill="#8b5cf6" fontFamily={mono}>{d.price.toFixed(2)}</text>
+                </g>
+              );
+            }
+            if (d.type === 'trendline') {
+              return (
+                <line
+                  key={`d-${di}`}
+                  x1={xFor(d.idx1)}
+                  y1={yFor(d.price1)}
+                  x2={xFor(d.idx2)}
+                  y2={yFor(d.price2)}
+                  stroke="#8b5cf6"
+                  strokeWidth={1.5}
+                />
+              );
+            }
+            if (d.type === 'box') {
+              return (
+                <rect
+                  key={`d-${di}`}
+                  x={xFor(d.idx1)}
+                  y={yFor(d.priceTop)}
+                  width={Math.max(2, xFor(d.idx2) - xFor(d.idx1))}
+                  height={Math.max(2, yFor(d.priceBot) - yFor(d.priceTop))}
+                  fill="rgba(139, 92, 246, 0.08)"
+                  stroke="#8b5cf6"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 2"
+                  rx={2}
+                />
+              );
+            }
+            return null;
+          })}
+
+          {/* Pending drawing point */}
+          {pendingPoint && (
+            <circle
+              cx={xFor(pendingPoint.idx)}
+              cy={yFor(pendingPoint.price)}
+              r={4}
+              fill="#8b5cf6"
+              stroke="#fff"
+              strokeWidth={1.5}
+            />
+          )}
         </svg>
       </div>
     </div>

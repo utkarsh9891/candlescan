@@ -1,4 +1,3 @@
-import RiskRing from './RiskRing.jsx';
 import SimpleView from './SimpleView.jsx';
 
 const card = {
@@ -32,14 +31,25 @@ export default function TraderView(props) {
           <div style={{ fontSize: 13, lineHeight: 1.6, fontFamily: "'SF Mono', Menlo, monospace" }}>
             <div>High {box.high.toFixed(2)} — Low {box.low.toFixed(2)}</div>
             <div>Range {box.range.toFixed(3)} · Manip. zone ±{box.manipulationZone.toFixed(3)}</div>
-            <div>Breakout: {box.breakout}</div>
-            <div>Trap: {box.trap}</div>
+            <div>
+              Breakout: <span style={{ fontWeight: 700, color: box.breakout === 'bullish' ? '#16a34a' : box.breakout === 'bearish' ? '#dc2626' : '#8892a8' }}>
+                {box.breakout}
+              </span>
+            </div>
+            <div>
+              Trap: <span style={{ fontWeight: 700, color: box.trap !== 'none' ? '#d97706' : '#8892a8' }}>
+                {box.trap}
+              </span>
+            </div>
           </div>
         </div>
       )}
 
       <div style={card}>
         <div style={{ fontWeight: 700, marginBottom: 10, color: '#1a1d26' }}>Patterns</div>
+        {patterns.length === 0 && (
+          <div style={{ fontSize: 13, color: '#8892a8' }}>No patterns detected (check signal filters)</div>
+        )}
         {patterns.map((p) => (
           <div
             key={p.name + p.category}
@@ -52,6 +62,9 @@ export default function TraderView(props) {
             <div style={{ fontWeight: 700 }}>
               {p.emoji} {p.name}{' '}
               <span style={{ color: '#8892a8', fontWeight: 500 }}>({p.category})</span>
+              <span style={{ fontFamily: "'SF Mono', Menlo, monospace", fontSize: 11, marginLeft: 8, color: '#4a5068' }}>
+                str:{(p.strength * 100).toFixed(0)}% rel:{(p.reliability * 100).toFixed(0)}%
+              </span>
             </div>
             <div style={{ color: '#4a5068', marginTop: 4 }}>{p.description}</div>
           </div>

@@ -35,7 +35,7 @@ export default function RiskRing({ score, level }) {
         {score}
       </div>
       <div style={{ marginTop: 72, fontSize: 12, color: '#8892a8', fontWeight: 600 }}>
-        Risk score
+        Confidence
       </div>
     </div>
   );

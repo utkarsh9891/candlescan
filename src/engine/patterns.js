@@ -81,6 +81,31 @@ export function detectPatterns(candles) {
     }
   }
 
+  /* --- Piercing Pattern (bullish 2-candle) --- */
+  if (prev && n >= 3) {
+    const pb = body(prev);
+    const cb = body(cur);
+    if (
+      !isBull(prev) && isBull(cur) &&
+      cur.o < prev.l &&
+      cur.c > midBody(prev) &&
+      cur.c < prev.o &&
+      cb > 0 && pb > 0
+    ) {
+      const ctx = priorTrend(candles, n - 1, 4, 'down');
+      patterns.push({
+        name: 'Piercing Pattern',
+        direction: 'bullish',
+        strength: ctx ? 0.68 : 0.50,
+        category: 'piercing',
+        emoji: '🔷',
+        tip: 'Opens below prior low, closes above prior midpoint',
+        description: 'Bullish 2-candle reversal: gap-down open then strong recovery past prior body midpoint.',
+        reliability: 0.60,
+      });
+    }
+  }
+
   /* --- Hammer family --- */
   const r = range(cur);
   const b = body(cur);
@@ -151,8 +176,7 @@ export function detectPatterns(candles) {
     const b0 = body(c0),
       b1 = body(c1),
       b2 = body(c2);
-    const r0 = range(c0),
-      r1 = range(c1);
+    const r1 = range(c1);
     if (!isBull(c0) && b0 > avgBody5 * 1.1 && b1 < r1 * 0.35 && isBull(c2) && b2 > avgBody5) {
       const mid0 = midBody(c0);
       if (c2.c > mid0) {
@@ -252,7 +276,41 @@ export function detectPatterns(candles) {
         reliability: 0.59,
       });
     }
-    if (r > 1e-9 && b < r * 0.25 && uw > r * 0.35 && lw > r * 0.35) {
+  }
+
+  /* --- Indecision: Doji and Spinning Top --- */
+  let hasDoji = false;
+  if (r > 1e-9) {
+    // Doji: very tiny body, notable wicks on both sides
+    if (b < r * 0.10 && uw > r * 0.25 && lw > r * 0.25) {
+      hasDoji = true;
+      patterns.push({
+        name: 'Doji',
+        direction: 'neutral',
+        strength: 0.45,
+        category: 'indecision',
+        emoji: '➕',
+        tip: 'Perfect indecision — open ≈ close',
+        description: 'Extremely small body with wicks on both sides. Market is undecided; wait for the next candle.',
+        reliability: 0.42,
+      });
+    }
+    // Spinning Top: small body (but larger than doji), wicks exceed body
+    if (!hasDoji && b < r * 0.30 && b >= r * 0.10 && uw > b && lw > b) {
+      patterns.push({
+        name: 'Spinning Top',
+        direction: 'neutral',
+        strength: 0.40,
+        category: 'indecision',
+        emoji: '🔄',
+        tip: 'Weak indecision — small body, long wicks',
+        description: 'Small body with notable wicks. Mild indecision; trend may continue or reverse.',
+        reliability: 0.38,
+      });
+    }
+
+    // Manipulation Candle — only if no Doji detected (Doji is more specific)
+    if (!hasDoji && b < r * 0.25 && uw > r * 0.35 && lw > r * 0.35) {
       patterns.push({
         name: 'Manipulation Candle',
         direction: 'neutral',
@@ -268,15 +326,38 @@ export function detectPatterns(candles) {
 
   /* --- Momentum --- */
   if (avgBody5 > 1e-9 && b >= avgBody5 * 2.2) {
+    // Detect termination risk by checking if the momentum candle shows signs of exhaustion
+    let terminationRisk = 'low';
+    if (n >= 2) {
+      const prevCandle = candles[n - 2];
+      const momDirection = isBull(cur) ? 'bullish' : 'bearish';
+
+      // Long wick opposite to momentum direction = potential exhaustion
+      if (momDirection === 'bullish' && uw > b * 0.5) terminationRisk = 'medium';
+      if (momDirection === 'bearish' && lw > b * 0.5) terminationRisk = 'medium';
+      if (momDirection === 'bullish' && uw > b * 0.8) terminationRisk = 'high';
+      if (momDirection === 'bearish' && lw > b * 0.8) terminationRisk = 'high';
+
+      // Declining volume on continuation
+      if (prevCandle.v > 0 && cur.v < prevCandle.v * 0.7) {
+        terminationRisk = terminationRisk === 'low' ? 'medium' : 'high';
+      }
+    }
+
     patterns.push({
       name: 'Momentum Candle',
       direction: isBull(cur) ? 'bullish' : 'bearish',
       strength: Math.min(0.85, 0.5 + (b / (avgBody5 * 4)) * 0.35),
       category: 'momentum',
       emoji: isBull(cur) ? '🚀' : '⬇️',
-      tip: 'Unusually large body — strong push',
-      description: 'Body much larger than recent average — directional impulse.',
+      tip: terminationRisk === 'high'
+        ? 'Strong push but showing exhaustion signs'
+        : terminationRisk === 'medium'
+          ? 'Strong push with some caution signals'
+          : 'Unusually large body — strong push',
+      description: `Body much larger than recent average — directional impulse. Termination risk: ${terminationRisk}.`,
       reliability: 0.52,
+      terminationRisk,
     });
   }
 
