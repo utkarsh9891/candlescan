@@ -10,43 +10,12 @@ const card = {
 };
 
 export default function TraderView(props) {
-  const { patterns, risk, box, candles, sym, companyName, changePct } = props;
-  const bd = risk.breakdown;
+  const { patterns, box, candles, sym, companyName, changePct } = props;
   const last5 = candles.slice(-5);
 
   return (
     <div>
       <SimpleView {...props} />
-
-      <div style={card}>
-        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10, color: '#1a1d26' }}>
-          Risk breakdown
-        </div>
-        <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
-          <tbody>
-            {[
-              ['Signal clarity', bd.signalClarity, 25],
-              ['Low noise', bd.lowNoise, 20],
-              ['Risk : reward', bd.riskReward, 25],
-              ['Pattern reliability', bd.patternReliability, 15],
-              ['Confluence', bd.confluence, 15],
-            ].map(([label, val, max]) => (
-              <tr key={label}>
-                <td style={{ padding: '6px 0', color: '#4a5068' }}>{label}</td>
-                <td
-                  style={{
-                    textAlign: 'right',
-                    fontFamily: "'SF Mono', Menlo, monospace",
-                    fontWeight: 600,
-                  }}
-                >
-                  {val} / {max}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
 
       <div style={{ ...card, fontSize: 14, color: '#4a5068' }}>
         <strong style={{ color: '#1a1d26' }}>{sym}</strong>
