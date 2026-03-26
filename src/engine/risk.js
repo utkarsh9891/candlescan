@@ -2,6 +2,45 @@
  * Risk score 0-100 + trade action hints.
  */
 
+/** Max points per component (sum = 100). Weights for normalized blend = max_k / 100. */
+export const RISK_SIGNAL_DEFINITIONS = [
+  {
+    key: 'signalClarity',
+    label: 'Signal clarity',
+    max: 25,
+    meaning:
+      'Measures how decisive the strongest detected candlestick pattern is. It uses pattern strength on a 0–1 scale × 25 (capped at 25). With no ranked pattern, only a small baseline applies—clear, strong setups score highest.',
+  },
+  {
+    key: 'lowNoise',
+    label: 'Low noise (trend quality)',
+    max: 20,
+    meaning:
+      'Rewards cleaner directional movement vs chop. ATR over recent bars is compared to average candle body size; high chop (whipsaw) lowers this component. Max 20 when the market is relatively “quiet” vs its own recent bodies.',
+  },
+  {
+    key: 'riskReward',
+    label: 'Risk : reward',
+    max: 25,
+    meaning:
+      'Scores the distance to a structural stop (prior bar high/low vs entry) versus a 2R profit target. Better R:R tiers earn more (up to 25). Poor structure or tight stops relative to target reduce this score.',
+  },
+  {
+    key: 'patternReliability',
+    label: 'Pattern reliability',
+    max: 15,
+    meaning:
+      'Uses the model reliability (0–1) of the top pattern from the pattern library × 15. More statistically reliable pattern types (per built-in weights) add more points; absent patterns get a small floor.',
+  },
+  {
+    key: 'confluence',
+    label: 'Confluence',
+    max: 15,
+    meaning:
+      'Bonus stack: above-average volume on the latest bar (+5), SMA10 vs SMA20 aligned with pattern direction (+5), neutral patterns (+2), and liquidity-box breakout or trap signal (+5). Capped at 15 total.',
+  },
+];
+
 function sma(vals, n) {
   if (!vals.length || n < 1) return null;
   const slice = vals.slice(-n);
