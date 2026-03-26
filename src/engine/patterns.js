@@ -64,6 +64,7 @@ export function detectPatterns(candles) {
         description:
           'Current bullish body fully covers prior bearish body; stronger after a short downtrend.',
         reliability: 0.62,
+        candleIndices: [n - 2, n - 1],
       });
     }
     if (isBull(prev) && !isBull(cur) && cur.o >= prev.c && cur.c <= prev.o && cb >= pb * 0.95) {
@@ -77,6 +78,7 @@ export function detectPatterns(candles) {
         tip: 'Red engulfs green → sell bias',
         description: 'Bearish body fully covers prior bullish body; stronger after uptrend.',
         reliability: 0.6,
+        candleIndices: [n - 2, n - 1],
       });
     }
   }
@@ -102,6 +104,7 @@ export function detectPatterns(candles) {
         tip: 'Opens below prior low, closes above prior midpoint',
         description: 'Bullish 2-candle reversal: gap-down open then strong recovery past prior body midpoint.',
         reliability: 0.60,
+        candleIndices: [n - 2, n - 1],
       });
     }
   }
@@ -128,6 +131,7 @@ export function detectPatterns(candles) {
         tip: 'Long lower wick after dip → bounce idea',
         description: 'Long lower shadow, small body at top of range — classic bullish rejection.',
         reliability: 0.58,
+        candleIndices: [n - 1],
       });
     }
     if (smallBody && longUp && tinyLow && priorTrend(candles, n - 1, 5, 'down')) {
@@ -140,6 +144,7 @@ export function detectPatterns(candles) {
         tip: 'Weak bullish reversal hint',
         description: 'Upper wick after decline — buyers tried; needs confirmation.',
         reliability: 0.45,
+        candleIndices: [n - 1],
       });
     }
     if (smallBody && longUp && tinyLow && priorTrend(candles, n - 1, 5, 'up')) {
@@ -152,6 +157,7 @@ export function detectPatterns(candles) {
         tip: 'Rejection at highs',
         description: 'Long upper wick after rally — potential exhaustion.',
         reliability: 0.57,
+        candleIndices: [n - 1],
       });
     }
     if (smallBody && longLow && tinyUp && priorTrend(candles, n - 1, 5, 'up')) {
@@ -164,6 +170,7 @@ export function detectPatterns(candles) {
         tip: 'Caution at top',
         description: 'Hammer-like after uptrend — weaker bearish warning.',
         reliability: 0.48,
+        candleIndices: [n - 1],
       });
     }
   }
@@ -189,6 +196,7 @@ export function detectPatterns(candles) {
           tip: 'Three-candle bullish reversal',
           description: 'Big red, small star, strong green closing past midpoint of first candle.',
           reliability: 0.64,
+          candleIndices: [n - 3, n - 2, n - 1],
         });
       }
     }
@@ -204,6 +212,7 @@ export function detectPatterns(candles) {
           tip: 'Three-candle bearish reversal',
           description: 'Big green, small body, strong red closing below midpoint of first.',
           reliability: 0.63,
+          candleIndices: [n - 3, n - 2, n - 1],
         });
       }
     }
@@ -228,6 +237,7 @@ export function detectPatterns(candles) {
         tip: 'Trend resume after shallow dip',
         description: 'Strong up-leg, 1–2 red candles, strong green continuation.',
         reliability: 0.55,
+        candleIndices: [n - 3, n - 2, n - 1],
       });
     }
     let bearRun = 0;
@@ -244,6 +254,7 @@ export function detectPatterns(candles) {
         tip: 'Trend resume after bounce',
         description: 'Strong down-leg, small bounce, strong red continuation.',
         reliability: 0.54,
+        candleIndices: [n - 3, n - 2, n - 1],
       });
     }
   }
@@ -262,6 +273,7 @@ export function detectPatterns(candles) {
         tip: 'Stops run under lows, close reclaimed',
         description: 'Wick below recent lows then close back above — stop-hunt reversal up.',
         reliability: 0.6,
+        candleIndices: [n - 1],
       });
     }
     if (cur.h > recentHigh && cur.c < recentHigh && upperWick(cur) > body(cur) * 1.2) {
@@ -274,6 +286,7 @@ export function detectPatterns(candles) {
         tip: 'Stops above highs, failed breakout',
         description: 'Wick above recent highs then close back inside range.',
         reliability: 0.59,
+        candleIndices: [n - 1],
       });
     }
   }
@@ -293,6 +306,7 @@ export function detectPatterns(candles) {
         tip: 'Perfect indecision — open ≈ close',
         description: 'Extremely small body with wicks on both sides. Market is undecided; wait for the next candle.',
         reliability: 0.42,
+        candleIndices: [n - 1],
       });
     }
     // Spinning Top: small body (but larger than doji), wicks exceed body
@@ -306,6 +320,7 @@ export function detectPatterns(candles) {
         tip: 'Weak indecision — small body, long wicks',
         description: 'Small body with notable wicks. Mild indecision; trend may continue or reverse.',
         reliability: 0.38,
+        candleIndices: [n - 1],
       });
     }
 
@@ -320,6 +335,7 @@ export function detectPatterns(candles) {
         tip: 'Choppy indecision — wait',
         description: 'Tiny body, long wicks both sides — liquidity grab / fake-out risk.',
         reliability: 0.4,
+        candleIndices: [n - 1],
       });
     }
   }
@@ -358,6 +374,7 @@ export function detectPatterns(candles) {
       description: `Body much larger than recent average — directional impulse. Termination risk: ${terminationRisk}.`,
       reliability: 0.52,
       terminationRisk,
+      candleIndices: [n - 1],
     });
   }
 

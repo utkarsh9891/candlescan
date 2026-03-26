@@ -40,25 +40,24 @@ export default function ScalpView(props) {
   if (leftSec < 60) timerColor = '#dc2626';
   else if (leftSec < 180) timerColor = '#d97706';
 
-  return (
-    <div>
-      <TraderView {...props} />
-
+  // Timer section rendered separately so App can place it near chart
+  const timerSection = (
+    <div style={{ marginBottom: 12 }}>
       {showTimer && (
         <div
           style={{
-            marginBottom: 12,
-            padding: 16,
+            marginBottom: 8,
+            padding: 12,
             borderRadius: 10,
             border: `2px solid ${timerColor}`,
             background: leftSec < 60 ? '#fef2f2' : '#fff',
             textAlign: 'center',
           }}
         >
-          <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 4 }}>Exit timer</div>
+          <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 2 }}>Exit timer</div>
           <div
             style={{
-              fontSize: 32,
+              fontSize: 28,
               fontWeight: 800,
               color: timerColor,
               fontFamily: "'SF Mono', Menlo, monospace",
@@ -68,32 +67,33 @@ export default function ScalpView(props) {
             {String(mm).padStart(2, '0')}:{String(ss).padStart(2, '0')}
           </div>
           {leftSec === 0 && (
-            <div style={{ marginTop: 8, fontWeight: 800, color: '#dc2626', fontSize: 16 }}>
+            <div style={{ marginTop: 4, fontWeight: 800, color: '#dc2626', fontSize: 14 }}>
               EXIT NOW!
             </div>
           )}
-          <button
-            type="button"
-            onClick={stop}
-            style={{ ...btn(false), marginTop: 12, minWidth: 120 }}
-          >
-            Stop timer
+          <button type="button" onClick={stop} style={{ ...btn(false), marginTop: 8, minWidth: 100, minHeight: 32, fontSize: 12 }}>
+            Stop
           </button>
         </div>
       )}
 
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#4a5068' }}>
-          Exit timer presets
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {[4, 5, 8, 10, 15].map((m) => (
-            <button key={m} type="button" style={btn(false)} onClick={() => start(m)}>
-              {m}m
-            </button>
-          ))}
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: '#8892a8', fontWeight: 600 }}>Timer:</span>
+        {[4, 5, 8, 10, 15].map((m) => (
+          <button key={m} type="button" style={{ ...btn(durationMin === m), minHeight: 30, padding: '0 10px', fontSize: 11 }} onClick={() => start(m)}>
+            {m}m
+          </button>
+        ))}
       </div>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* Timer section placed right after chart (before analysis views) */}
+      {timerSection}
+
+      <TraderView {...props} />
 
       {(risk.action === 'BUY' || risk.action === 'SHORT' || risk.action === 'STRONG BUY' || risk.action === 'STRONG SHORT') && !showTimer && (
         <button

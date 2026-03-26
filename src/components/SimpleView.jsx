@@ -32,6 +32,8 @@ export default function SimpleView({
   patterns,
   risk,
   changePct,
+  activeFilters,
+  allPatterns,
 }) {
   const top = patterns.slice(0, 3);
   const confidence = risk.confidence ?? risk.total;
@@ -47,8 +49,15 @@ export default function SimpleView({
   const actStyle = actionStyle(risk.action);
   const ctx = contextLabels[risk.context] || contextLabels.mid_range;
 
+  // Build signal status: which enabled categories were identified
+  const identifiedCategories = new Set((allPatterns || patterns).map((p) => p.category));
+  const enabledList = activeFilters
+    ? Array.from(activeFilters)
+    : ['engulfing', 'piercing', 'hammer', 'reversal', 'pullback', 'liquidity', 'momentum', 'indecision'];
+
   return (
     <div>
+      {/* 1. Price card */}
       <div style={{ ...card, textAlign: 'center' }}>
         <div style={{ fontSize: 13, color: '#8892a8' }}>{companyName || sym}</div>
         <div
@@ -74,47 +83,7 @@ export default function SimpleView({
         </div>
       </div>
 
-      <RiskRing score={confidence} level={risk.level} />
-
-      {/* Context badge */}
-      <div
-        style={{
-          textAlign: 'center',
-          marginBottom: 8,
-          padding: '5px 10px',
-          borderRadius: 6,
-          background: ctx.bg,
-          color: ctx.color,
-          fontWeight: 700,
-          fontSize: 11,
-          letterSpacing: 0.5,
-          display: 'inline-block',
-          marginLeft: '50%',
-          transform: 'translateX(-50%)',
-        }}
-      >
-        {ctx.text}
-      </div>
-
-      <div
-        style={{
-          textAlign: 'center',
-          marginBottom: 12,
-          padding: '8px 12px',
-          borderRadius: 8,
-          background: badge.bg,
-          color: badge.color,
-          fontWeight: 800,
-          fontSize: 13,
-          letterSpacing: 0.5,
-        }}
-      >
-        {badge.text} · Confidence {confidence}%
-      </div>
-
-      <RiskScoreSignals breakdown={risk.breakdown} total={risk.total} />
-
-      {/* Action card with Entry/SL/Target */}
+      {/* 2. Action card (moved up) */}
       <div style={{ ...card, background: actStyle.bg, borderColor: '#e2e5eb' }}>
         <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 6 }}>Action</div>
         <div style={{ fontSize: 20, fontWeight: 800, color: '#1a1d26', marginBottom: 10 }}>
@@ -148,6 +117,68 @@ export default function SimpleView({
         )}
       </div>
 
+      {/* 3. Context + Risk badge */}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+        <div
+          style={{
+            padding: '5px 10px',
+            borderRadius: 6,
+            background: ctx.bg,
+            color: ctx.color,
+            fontWeight: 700,
+            fontSize: 11,
+            letterSpacing: 0.5,
+          }}
+        >
+          {ctx.text}
+        </div>
+        <div
+          style={{
+            padding: '5px 10px',
+            borderRadius: 6,
+            background: badge.bg,
+            color: badge.color,
+            fontWeight: 700,
+            fontSize: 11,
+            letterSpacing: 0.5,
+          }}
+        >
+          {badge.text} · {confidence}%
+        </div>
+      </div>
+
+      {/* 4. Score ring */}
+      <RiskRing score={confidence} level={risk.level} />
+
+      {/* 5. Signal status: which enabled signals were identified */}
+      <div style={{ ...card, padding: 12 }}>
+        <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 8, fontWeight: 600 }}>
+          Signals identified ({enabledList.filter((c) => identifiedCategories.has(c)).length}/{enabledList.length} enabled)
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {enabledList.map((cat) => {
+            const found = identifiedCategories.has(cat);
+            return (
+              <span
+                key={cat}
+                style={{
+                  fontSize: 11,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  background: found ? '#eff6ff' : '#f5f6f8',
+                  color: found ? '#2563eb' : '#c4c9d4',
+                  border: `1px solid ${found ? '#bfdbfe' : '#eef0f4'}`,
+                }}
+              >
+                {cat}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 6. Pattern chips */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
         {top.map((p) => (
           <span
@@ -171,17 +202,8 @@ export default function SimpleView({
         ))}
       </div>
 
-      <div style={{ height: 8, borderRadius: 4, background: '#eef0f4', overflow: 'hidden' }}>
-        <div
-          style={{
-            width: `${confidence}%`,
-            height: '100%',
-            background:
-              risk.level === 'low' ? '#16a34a' : risk.level === 'moderate' ? '#d97706' : '#dc2626',
-            borderRadius: 4,
-          }}
-        />
-      </div>
+      {/* 7. Score details (moved to bottom) */}
+      <RiskScoreSignals breakdown={risk.breakdown} total={risk.total} />
     </div>
   );
 }

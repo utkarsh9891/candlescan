@@ -1,5 +1,4 @@
 const TOOLS = [
-  { key: 'trendline', label: 'Trend', icon: '╱' },
   { key: 'hline', label: 'H-Line', icon: '─' },
   { key: 'box', label: 'Box', icon: '▭' },
 ];
@@ -16,7 +15,7 @@ const btnBase = {
 
 export default function DrawingToolbar({ active, onChange, onClear }) {
   return (
-    <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+    <>
       <span style={{ fontSize: 12, color: '#8892a8', marginRight: 2 }}>Draw:</span>
       {TOOLS.map(({ key, label, icon }) => {
         const on = active === key;
@@ -48,6 +47,6 @@ export default function DrawingToolbar({ active, onChange, onClear }) {
       >
         Clear
       </button>
-    </div>
+    </>
   );
 }
