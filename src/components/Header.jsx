@@ -1,4 +1,12 @@
-export default function Header({ live, lastScan }) {
+export default function Header({ badge, lastScan }) {
+  const styles = {
+    live: { bg: '#16a34a', label: 'LIVE' },
+    demo: { bg: '#d97706', label: 'DEMO' },
+    offline: { bg: '#dc2626', label: 'NO DATA' },
+    idle: { bg: '#cbd5e1', label: 'READY' },
+  };
+  const s = styles[badge] || styles.idle;
+
   return (
     <header
       style={{
@@ -27,12 +35,10 @@ export default function Header({ live, lastScan }) {
               width: 8,
               height: 8,
               borderRadius: '50%',
-              background: live ? '#16a34a' : '#d97706',
+              background: s.bg,
             }}
           />
-          <span style={{ color: '#4a5068', fontWeight: 600 }}>
-            {live ? 'LIVE' : 'SIMULATED'}
-          </span>
+          <span style={{ color: '#4a5068', fontWeight: 600 }}>{s.label}</span>
         </span>
         {lastScan ? (
           <span style={{ color: '#8892a8', fontSize: 12 }}>

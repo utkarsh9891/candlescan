@@ -1,5 +1,8 @@
 /**
- * Yahoo Finance v8 chart API + CORS fallbacks + simulated OHLCV.
+ * Yahoo Finance v8 chart API + CORS fallbacks.
+ * Primary: Cloudflare Worker proxy (candlescan-proxy.workers.dev).
+ * Fallback: Jina Reader (r.jina.ai).
+ * Simulated OHLCV exists only in Vite dev when the URL has ?simulate=1 (or simulate=true).
  */
 
 const BASE_PRICES = {
@@ -23,6 +26,12 @@ export const TIMEFRAME_MAP = {
   '1d': { interval: '1d', range: '6mo' },
 };
 
+/**
+ * Cloudflare Worker URL — deploy worker/ directory, then paste the URL here.
+ * Until deployed, leave blank and the app falls through to Jina/public proxies.
+ */
+const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
+
 function normalizeSymbol(raw) {
   const s = String(raw || '')
     .trim()
@@ -36,6 +45,45 @@ function normalizeSymbol(raw) {
 
 function buildYahooUrl(symbol, interval, range) {
   return `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
+}
+
+function buildDevProxyUrl(symbol, interval, range) {
+  const path = `/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
+  return `/__candlescan-yahoo${path}`;
+}
+
+function isViteDev() {
+  try {
+    return import.meta.env && import.meta.env.DEV === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Dev-only: ?simulate=1 or simulate=true */
+function isDevSimulateRequested() {
+  if (!isViteDev() || typeof window === 'undefined') return false;
+  try {
+    const v = new URLSearchParams(window.location.search).get('simulate');
+    return v === '1' || v === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** Production build served over http://127.0.0.1 (or localhost) — local-dev-server.mjs provides /__candlescan-yahoo */
+function isProdHttpLoopback() {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (import.meta.env && import.meta.env.DEV === true) return false;
+    if (import.meta.env && import.meta.env.PROD !== true) return false;
+  } catch {
+    return false;
+  }
+  const p = window.location.protocol;
+  if (p !== 'http:') return false;
+  const h = (window.location.hostname || '').toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
 }
 
 function parseChartJson(data) {
@@ -77,15 +125,87 @@ async function tryFetch(url) {
   return res.json();
 }
 
-async function fetchWithFallbacks(symbol, interval, range) {
-  const direct = buildYahooUrl(symbol, interval, range);
-  const enc = encodeURIComponent(direct);
+/**
+ * Cloudflare Worker proxy — most reliable path for production.
+ */
+async function tryFetchCfWorker(yahooUrl) {
+  if (!CF_WORKER_URL) throw new Error('CF_WORKER_URL not set');
+  const url = `${CF_WORKER_URL}?url=${encodeURIComponent(yahooUrl)}`;
+  return tryFetch(url);
+}
 
-  const attempts = [
-    () => tryFetch(direct),
-    () => tryFetch(`https://corsproxy.io/?${enc}`),
+/**
+ * r.jina.ai fetches the URL server-side and returns text with a short header; body is raw JSON.
+ */
+async function tryFetchJinaReader(yahooUrl) {
+  const proxyUrl = `https://r.jina.ai/${yahooUrl}`;
+  const res = await fetch(proxyUrl, { cache: 'no-store' });
+  if (!res.ok) throw new Error(String(res.status));
+  const text = await res.text();
+  const marker = 'Markdown Content:';
+  const i = text.indexOf(marker);
+  const slice = (i >= 0 ? text.slice(i + marker.length) : text).trim();
+  const j = slice.indexOf('{');
+  if (j === -1) throw new Error('no json in jina body');
+  return JSON.parse(slice.slice(j));
+}
+
+/** Optional build-time proxy: set VITE_CANDLESCAN_PROXY_URL */
+function tryFetchFromEnvProxy(yahooUrl) {
+  let base;
+  try {
+    base = import.meta.env && import.meta.env.VITE_CANDLESCAN_PROXY_URL;
+  } catch {
+    base = '';
+  }
+  base = typeof base === 'string' ? base.trim() : '';
+  if (!base) return null;
+  const enc = encodeURIComponent(yahooUrl);
+  const url = base.includes('%s') ? base.replace('%s', enc) : `${base}${enc}`;
+  return () => tryFetch(url);
+}
+
+/** allorigins.win wraps JSON in { contents, status } */
+async function tryFetchAllOriginsGet(yahooUrl) {
+  const enc = encodeURIComponent(yahooUrl);
+  const res = await fetch(
+    `https://api.allorigins.win/get?url=${enc}`,
+    { cache: 'no-store' }
+  );
+  if (!res.ok) throw new Error(String(res.status));
+  const wrap = await res.json();
+  if (wrap.contents == null || wrap.contents === '') throw new Error('empty contents');
+  return JSON.parse(typeof wrap.contents === 'string' ? wrap.contents : String(wrap.contents));
+}
+
+async function fetchWithFallbacks(symbol, interval, range) {
+  const yahooUrl = buildYahooUrl(symbol, interval, range);
+  const enc = encodeURIComponent(yahooUrl);
+
+  const attempts = [];
+
+  /* Same-origin proxy: Vite dev or local Node server (never CORS issues) */
+  if (typeof window !== 'undefined') {
+    if (isViteDev() || isProdHttpLoopback()) {
+      attempts.push(() =>
+        tryFetch(new URL(buildDevProxyUrl(symbol, interval, range), window.location.origin).href)
+      );
+    }
+  }
+
+  /* Cloudflare Worker — primary production proxy */
+  attempts.push(() => tryFetchCfWorker(yahooUrl));
+
+  /* Optional env-var proxy */
+  const envProxy = tryFetchFromEnvProxy(yahooUrl);
+  if (envProxy) attempts.push(envProxy);
+
+  /* Fallbacks */
+  attempts.push(
+    () => tryFetchJinaReader(yahooUrl),
     () => tryFetch(`https://api.allorigins.win/raw?url=${enc}`),
-  ];
+    () => tryFetchAllOriginsGet(yahooUrl),
+  );
 
   for (const run of attempts) {
     try {
@@ -116,7 +236,7 @@ function hashStr(s) {
 }
 
 /**
- * Simulated OHLCV with injectable last-candle bias for demo patterns.
+ * Dev-only demo series when ?simulate=1 (not used in production builds).
  */
 export function generateSimulatedCandles(symbol, count = 80) {
   const key = symbol.replace(/[^A-Z]/gi, '').toUpperCase() || 'X';
@@ -141,7 +261,6 @@ export function generateSimulatedCandles(symbol, count = 80) {
   }
 
   const lastO = price;
-  /* inject simple bullish engulfing-ish last two candles */
   if (cycle === 0) {
     const c1 = lastO * (1 - 0.004);
     candles.push({
@@ -202,12 +321,24 @@ export function generateSimulatedCandles(symbol, count = 80) {
 }
 
 /**
- * @returns {{ candles: Array, live: boolean, yahooSymbol: string, displaySymbol: string }}
+ * @returns {{ candles: Array, live: boolean, simulated: boolean, error?: string, yahooSymbol: string, displaySymbol: string, companyName: string }}
  */
 export async function fetchOHLCV(inputSymbol, timeframeKey) {
   const tf = TIMEFRAME_MAP[timeframeKey] || TIMEFRAME_MAP['5m'];
   const yahooSymbol = normalizeSymbol(inputSymbol);
   const displaySymbol = inputSymbol.trim().toUpperCase() || yahooSymbol;
+
+  if (isDevSimulateRequested()) {
+    const sim = generateSimulatedCandles(displaySymbol, 90);
+    return {
+      candles: sim,
+      live: false,
+      simulated: true,
+      yahooSymbol,
+      displaySymbol,
+      companyName: displaySymbol,
+    };
+  }
 
   const { candles, live, companyName: cn } = await fetchWithFallbacks(
     yahooSymbol,
@@ -219,16 +350,19 @@ export async function fetchOHLCV(inputSymbol, timeframeKey) {
     return {
       candles,
       live,
+      simulated: false,
       yahooSymbol,
       displaySymbol,
       companyName: cn || displaySymbol,
     };
   }
 
-  const sim = generateSimulatedCandles(displaySymbol, 90);
   return {
-    candles: sim,
+    candles: [],
     live: false,
+    simulated: false,
+    error:
+      'Could not load chart data from Yahoo Finance (network, CORS, or rate limits). Check your connection and try again.',
     yahooSymbol,
     displaySymbol,
     companyName: displaySymbol,
