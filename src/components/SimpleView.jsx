@@ -9,6 +9,22 @@ const card = {
   marginBottom: 12,
 };
 
+const contextLabels = {
+  at_support: { text: 'AT SUPPORT', color: '#16a34a', bg: '#f0fdf4' },
+  at_resistance: { text: 'AT RESISTANCE', color: '#dc2626', bg: '#fef2f2' },
+  mid_range: { text: 'MID-RANGE', color: '#8892a8', bg: '#f5f6f8' },
+  breakout: { text: 'BREAKOUT', color: '#d97706', bg: '#fffbeb' },
+};
+
+function actionStyle(action) {
+  if (action === 'STRONG BUY') return { bg: '#f0fdf4', color: '#16a34a' };
+  if (action === 'BUY') return { bg: '#f0fdf4', color: '#16a34a' };
+  if (action === 'STRONG SHORT') return { bg: '#fef2f2', color: '#dc2626' };
+  if (action === 'SHORT') return { bg: '#fef2f2', color: '#dc2626' };
+  if (action === 'WAIT') return { bg: '#fffbeb', color: '#d97706' };
+  return { bg: '#f5f6f8', color: '#8892a8' };
+}
+
 export default function SimpleView({
   sym,
   companyName,
@@ -18,22 +34,18 @@ export default function SimpleView({
   changePct,
 }) {
   const top = patterns.slice(0, 3);
+  const confidence = risk.confidence ?? risk.total;
+
   const badge =
     risk.level === 'low'
       ? { text: 'LOW RISK', bg: '#f0fdf4', color: '#16a34a' }
       : risk.level === 'moderate'
         ? { text: 'MODERATE', bg: '#fffbeb', color: '#d97706' }
-        : { text: 'HIGH RISK ⚠', bg: '#fef2f2', color: '#dc2626' };
+        : { text: 'HIGH RISK', bg: '#fef2f2', color: '#dc2626' };
 
   const last = candles[candles.length - 1];
-  const actionBg =
-    risk.action === 'BUY'
-      ? '#f0fdf4'
-      : risk.action === 'SHORT'
-        ? '#fef2f2'
-        : risk.action === 'WAIT'
-          ? '#fffbeb'
-          : '#f5f6f8';
+  const actStyle = actionStyle(risk.action);
+  const ctx = contextLabels[risk.context] || contextLabels.mid_range;
 
   return (
     <div>
@@ -62,7 +74,27 @@ export default function SimpleView({
         </div>
       </div>
 
-      <RiskRing score={risk.total} level={risk.level} />
+      <RiskRing score={confidence} level={risk.level} />
+
+      {/* Context badge */}
+      <div
+        style={{
+          textAlign: 'center',
+          marginBottom: 8,
+          padding: '5px 10px',
+          borderRadius: 6,
+          background: ctx.bg,
+          color: ctx.color,
+          fontWeight: 700,
+          fontSize: 11,
+          letterSpacing: 0.5,
+          display: 'inline-block',
+          marginLeft: '50%',
+          transform: 'translateX(-50%)',
+        }}
+      >
+        {ctx.text}
+      </div>
 
       <div
         style={{
@@ -77,32 +109,42 @@ export default function SimpleView({
           letterSpacing: 0.5,
         }}
       >
-        {badge.text}
+        {badge.text} · Confidence {confidence}%
       </div>
-
-      {risk.level === 'high' && (
-        <p style={{ fontSize: 13, color: '#dc2626', textAlign: 'center', margin: '0 0 12px' }}>
-          Score under 40 — consider skipping this setup.
-        </p>
-      )}
 
       <RiskScoreSignals breakdown={risk.breakdown} total={risk.total} />
 
-      <div style={{ ...card, background: actionBg, borderColor: '#e2e5eb' }}>
+      {/* Action card with Entry/SL/Target */}
+      <div style={{ ...card, background: actStyle.bg, borderColor: '#e2e5eb' }}>
         <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 6 }}>Action</div>
         <div style={{ fontSize: 20, fontWeight: 800, color: '#1a1d26', marginBottom: 10 }}>
           {risk.action}
         </div>
-        {risk.action === 'BUY' || risk.action === 'SHORT' ? (
-          <div style={{ fontSize: 13, color: '#4a5068', lineHeight: 1.6, fontFamily: "'SF Mono', Menlo, monospace" }}>
-            <div>Entry ~ {risk.entry.toFixed(2)}</div>
-            <div>SL {risk.sl.toFixed(2)}</div>
-            <div>Target ~ {risk.target.toFixed(2)}</div>
+        <div style={{ fontSize: 13, color: '#4a5068', lineHeight: 1.8, fontFamily: "'SF Mono', Menlo, monospace" }}>
+          <div>
+            Entry ~ <strong>{risk.entry.toFixed(2)}</strong>
           </div>
-        ) : risk.action === 'WAIT' ? (
-          <p style={{ margin: 0, fontSize: 13, color: '#4a5068' }}>Pattern forming — wait for confirmation.</p>
-        ) : (
-          <p style={{ margin: 0, fontSize: 13, color: '#4a5068' }}>No clear signal right now.</p>
+          <div>
+            SL <strong style={{ color: '#dc2626' }}>{risk.sl.toFixed(2)}</strong>
+            <span style={{ color: '#8892a8', fontSize: 11, marginLeft: 6 }}>
+              ({Math.abs(risk.entry - risk.sl).toFixed(2)} pts)
+            </span>
+          </div>
+          <div>
+            Target ~ <strong style={{ color: '#16a34a' }}>{risk.target.toFixed(2)}</strong>
+            <span style={{ color: '#8892a8', fontSize: 11, marginLeft: 6 }}>
+              ({Math.abs(risk.target - risk.entry).toFixed(2)} pts)
+            </span>
+          </div>
+          <div style={{ marginTop: 4, fontSize: 12, color: '#8892a8' }}>
+            R:R {risk.rr.toFixed(1)} · {risk.direction === 'long' ? '▲ Long' : '▼ Short'}
+          </div>
+        </div>
+        {risk.action === 'WAIT' && (
+          <p style={{ margin: '8px 0 0', fontSize: 13, color: '#4a5068' }}>Pattern forming — wait for confirmation candle.</p>
+        )}
+        {risk.action === 'NO TRADE' && (
+          <p style={{ margin: '8px 0 0', fontSize: 13, color: '#4a5068' }}>No clear signal right now. Consider skipping.</p>
         )}
       </div>
 
@@ -120,6 +162,11 @@ export default function SimpleView({
             }}
           >
             {p.emoji} {p.name}
+            {p.terminationRisk && p.terminationRisk !== 'low' && (
+              <span style={{ color: p.terminationRisk === 'high' ? '#dc2626' : '#d97706', marginLeft: 4, fontSize: 10 }}>
+                ({p.terminationRisk} exhaustion)
+              </span>
+            )}
           </span>
         ))}
       </div>
@@ -127,7 +174,7 @@ export default function SimpleView({
       <div style={{ height: 8, borderRadius: 4, background: '#eef0f4', overflow: 'hidden' }}>
         <div
           style={{
-            width: `${risk.total}%`,
+            width: `${confidence}%`,
             height: '100%',
             background:
               risk.level === 'low' ? '#16a34a' : risk.level === 'moderate' ? '#d97706' : '#dc2626',

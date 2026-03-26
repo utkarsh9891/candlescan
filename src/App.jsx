@@ -12,8 +12,14 @@ import EmptyState from './components/EmptyState.jsx';
 import SimpleView from './components/SimpleView.jsx';
 import TraderView from './components/TraderView.jsx';
 import ScalpView from './components/ScalpView.jsx';
+import SignalFilters from './components/SignalFilters.jsx';
+import DrawingToolbar from './components/DrawingToolbar.jsx';
 
 const QUICK = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'SBIN', 'ITC', 'TATAMOTORS', 'WIPRO'];
+
+const ALL_CATEGORIES = new Set([
+  'engulfing', 'piercing', 'hammer', 'reversal', 'pullback', 'liquidity', 'momentum', 'indecision',
+]);
 
 const shell = {
   minHeight: '100vh',
@@ -41,9 +47,31 @@ export default function App() {
   const [patterns, setPatterns] = useState([]);
   const [box, setBox] = useState(null);
   const [risk, setRisk] = useState(null);
-  const [history, setHistory] = useState([]);
   const [lastScan, setLastScan] = useState('');
   const activeSymRef = useRef('');
+
+  // Signal filter state
+  const [activeFilters, setActiveFilters] = useState(ALL_CATEGORIES);
+
+  // Drawing tool state
+  const [drawingMode, setDrawingMode] = useState(null);
+  const [drawingsMap, setDrawingsMap] = useState({}); // keyed by symbol
+
+  // History with localStorage persistence
+  const [history, setHistory] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('candlescan_history') || '[]');
+      return Array.isArray(saved) ? saved.slice(0, 10) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('candlescan_history', JSON.stringify(history));
+    } catch { /* quota exceeded — ignore */ }
+  }, [history]);
 
   useEffect(() => {
     if (mode === 'simple' && !['1m', '5m', '15m'].includes(timeframe)) {
@@ -93,7 +121,7 @@ export default function App() {
       setLastScan(new Date().toLocaleTimeString());
       setHistory((h) => {
         const next = [
-          { symbol: displaySymbol, riskScore: rk.total },
+          { symbol: displaySymbol, riskScore: rk.confidence },
           ...h.filter((x) => x.symbol !== displaySymbol),
         ];
         return next.slice(0, 10);
@@ -130,14 +158,34 @@ export default function App() {
   else if (simulated) headerBadge = 'demo';
   else if (sym && candles.length) headerBadge = live ? 'live' : 'offline';
 
+  // Filter patterns for display (score uses all patterns)
+  const filteredPatterns = patterns.filter((p) => activeFilters.has(p.category));
+
   const viewProps = {
     sym,
     companyName,
     candles,
-    patterns,
+    patterns: filteredPatterns,
     risk,
     box,
     changePct,
+  };
+
+  // Drawings for current symbol
+  const currentDrawings = drawingsMap[sym] || [];
+  const handleDrawingComplete = (drawing) => {
+    setDrawingsMap((prev) => ({
+      ...prev,
+      [sym]: [...(prev[sym] || []), drawing],
+    }));
+  };
+  const clearDrawings = () => {
+    setDrawingsMap((prev) => {
+      const next = { ...prev };
+      delete next[sym];
+      return next;
+    });
+    setDrawingMode(null);
   };
 
   return (
@@ -213,7 +261,7 @@ export default function App() {
                   borderRadius: 8,
                   border: '1px solid #e2e5eb',
                   background: '#fff',
-                  color: h.riskScore >= 60 ? '#16a34a' : '#8892a8',
+                  color: h.riskScore >= 65 ? '#16a34a' : '#8892a8',
                   cursor: 'pointer',
                 }}
               >
@@ -248,7 +296,22 @@ export default function App() {
         <EmptyState />
       ) : (
         <>
-          <Chart candles={candles} box={box} height={chartH} sym={sym} />
+          <SignalFilters active={activeFilters} onChange={setActiveFilters} />
+          <DrawingToolbar
+            active={drawingMode}
+            onChange={setDrawingMode}
+            onClear={clearDrawings}
+          />
+          <Chart
+            candles={candles}
+            box={box}
+            risk={risk}
+            height={chartH}
+            sym={sym}
+            drawingMode={drawingMode}
+            drawings={currentDrawings}
+            onDrawingComplete={handleDrawingComplete}
+          />
           {mode === 'simple' && <SimpleView {...viewProps} />}
           {mode === 'trader' && <TraderView {...viewProps} />}
           {mode === 'scalp' && <ScalpView {...viewProps} />}

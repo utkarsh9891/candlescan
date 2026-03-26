@@ -1,5 +1,7 @@
 /**
  * Yahoo Finance v8 chart API + CORS fallbacks.
+ * Primary: Cloudflare Worker proxy (candlescan-proxy.workers.dev).
+ * Fallback: Jina Reader (r.jina.ai).
  * Simulated OHLCV exists only in Vite dev when the URL has ?simulate=1 (or simulate=true).
  */
 
@@ -23,6 +25,12 @@ export const TIMEFRAME_MAP = {
   '1h': { interval: '60m', range: '1mo' },
   '1d': { interval: '1d', range: '6mo' },
 };
+
+/**
+ * Cloudflare Worker URL — deploy worker/ directory, then paste the URL here.
+ * Until deployed, leave blank and the app falls through to Jina/public proxies.
+ */
+const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 function normalizeSymbol(raw) {
   const s = String(raw || '')
@@ -118,8 +126,16 @@ async function tryFetch(url) {
 }
 
 /**
+ * Cloudflare Worker proxy — most reliable path for production.
+ */
+async function tryFetchCfWorker(yahooUrl) {
+  if (!CF_WORKER_URL) throw new Error('CF_WORKER_URL not set');
+  const url = `${CF_WORKER_URL}?url=${encodeURIComponent(yahooUrl)}`;
+  return tryFetch(url);
+}
+
+/**
  * r.jina.ai fetches the URL server-side and returns text with a short header; body is raw JSON.
- * CORS allows arbitrary origins (with credentials echo) — reliable when allorigins/corsproxy are down.
  */
 async function tryFetchJinaReader(yahooUrl) {
   const proxyUrl = `https://r.jina.ai/${yahooUrl}`;
@@ -134,7 +150,7 @@ async function tryFetchJinaReader(yahooUrl) {
   return JSON.parse(slice.slice(j));
 }
 
-/** Optional build-time proxy: set VITE_CANDLESCAN_PROXY_URL to a prefix ending before the encoded Yahoo URL, e.g. https://your-worker.workers.dev/?url= */
+/** Optional build-time proxy: set VITE_CANDLESCAN_PROXY_URL */
 function tryFetchFromEnvProxy(yahooUrl) {
   let base;
   try {
@@ -149,7 +165,7 @@ function tryFetchFromEnvProxy(yahooUrl) {
   return () => tryFetch(url);
 }
 
-/** allorigins.win wraps JSON in { contents, status } — sometimes works when /raw fails */
+/** allorigins.win wraps JSON in { contents, status } */
 async function tryFetchAllOriginsGet(yahooUrl) {
   const enc = encodeURIComponent(yahooUrl);
   const res = await fetch(
@@ -160,16 +176,6 @@ async function tryFetchAllOriginsGet(yahooUrl) {
   const wrap = await res.json();
   if (wrap.contents == null || wrap.contents === '') throw new Error('empty contents');
   return JSON.parse(typeof wrap.contents === 'string' ? wrap.contents : String(wrap.contents));
-}
-
-/** Third public proxy (Codetabs) — extra fallback on GitHub Pages where direct Yahoo is always CORS-blocked */
-async function tryFetchCodetabsProxy(yahooUrl) {
-  const res = await fetch(
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`,
-    { cache: 'no-store' }
-  );
-  if (!res.ok) throw new Error(String(res.status));
-  return res.json();
 }
 
 async function fetchWithFallbacks(symbol, interval, range) {
@@ -187,20 +193,18 @@ async function fetchWithFallbacks(symbol, interval, range) {
     }
   }
 
-  /**
-   * Never call Yahoo directly from the browser on static hosts (e.g. github.io):
-   * Yahoo does not send Access-Control-Allow-Origin for our origin.
-   * Order: optional BYO proxy → Jina (stable JSON + CORS) → Codetabs → legacy public proxies (often 403/522).
-   */
+  /* Cloudflare Worker — primary production proxy */
+  attempts.push(() => tryFetchCfWorker(yahooUrl));
+
+  /* Optional env-var proxy */
   const envProxy = tryFetchFromEnvProxy(yahooUrl);
   if (envProxy) attempts.push(envProxy);
 
+  /* Fallbacks */
   attempts.push(
     () => tryFetchJinaReader(yahooUrl),
-    () => tryFetchCodetabsProxy(yahooUrl),
     () => tryFetch(`https://api.allorigins.win/raw?url=${enc}`),
     () => tryFetchAllOriginsGet(yahooUrl),
-    () => tryFetch(`https://corsproxy.io/?${enc}`)
   );
 
   for (const run of attempts) {
