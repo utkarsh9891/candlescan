@@ -229,16 +229,16 @@ export function computeRiskScore({ candles, patterns, box }) {
 
   /* ── Risk level ──────────────────────────────────────────────── */
   let level = 'high';
-  if (confidence >= 72) level = 'low';
-  else if (confidence >= 55) level = 'moderate';
+  if (confidence >= 65) level = 'low';
+  else if (confidence >= 50) level = 'moderate';
 
   /* ── Action ──────────────────────────────────────────────────── */
   let action = 'NO TRADE';
-  if (confidence >= 72 && top && top.direction !== 'neutral') {
+  if (confidence >= 65 && top && top.direction !== 'neutral') {
     action = top.direction === 'bearish' ? 'STRONG SHORT' : 'STRONG BUY';
-  } else if (confidence >= 58 && top && top.direction !== 'neutral') {
+  } else if (confidence >= 52 && top && top.direction !== 'neutral') {
     action = top.direction === 'bearish' ? 'SHORT' : 'BUY';
-  } else if (confidence >= 50 && top) {
+  } else if (confidence >= 45 && top) {
     action = 'WAIT';
   }
 

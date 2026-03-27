@@ -2,10 +2,8 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 const mono = "'SF Mono', Menlo, monospace";
 
-const MIN_VISIBLE = 12;
+const MIN_VISIBLE = 30;
 const MAX_VISIBLE_CAP = 140;
-const PX_PER_CANDLE = 12;
-const MIN_CHART_WIDTH = 280;
 const X_AXIS_HEIGHT = 22;
 
 const btnStyle = {
@@ -34,6 +32,10 @@ function countLatestSessionCandles(candles) {
   for (let i = candles.length - 1; i >= 0; i--) {
     if (candles[i].t >= sessionStart) count++;
     else break;
+  }
+  // If very few candles in current session (e.g., market just opened), include some from prior session
+  if (count < MIN_VISIBLE && candles.length > count) {
+    count = Math.min(candles.length, Math.max(MIN_VISIBLE, count + 20));
   }
   return count;
 }
@@ -75,10 +77,23 @@ export default function Chart({
     return today >= MIN_VISIBLE ? Math.min(today, MAX_VISIBLE_CAP) : Math.min(58, MAX_VISIBLE_CAP);
   });
   const [panOffset, setPanOffset] = useState(0);
+  const [containerWidth, setContainerWidth] = useState(0);
   const wrapRef = useRef(null);
   const svgRef = useRef(null);
   const [pendingPoint, setPendingPoint] = useState(null);
   const [mousePos, setMousePos] = useState(null);
+
+  // Measure container width on mount and resize
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const measure = () => setContainerWidth(el.clientWidth);
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro) ro.observe(el);
+    else window.addEventListener('resize', measure);
+    return () => { if (ro) ro.disconnect(); else window.removeEventListener('resize', measure); };
+  }, []);
   const [draggingHLine, setDraggingHLine] = useState(null);
 
   // Touch state refs
@@ -218,7 +233,7 @@ export default function Chart({
     };
   }, [panOffset, visibleCount, count, maxVisible, candles?.length]);
 
-  if (!slice.length) return null;
+  const canRender = slice.length > 0 && containerWidth > 0;
 
   let lo = Infinity, hi = -Infinity;
   for (const c of slice) {
@@ -238,7 +253,8 @@ export default function Chart({
   hi += pad;
   const range = hi - lo || 1;
 
-  const w = Math.max(MIN_CHART_WIDTH, slice.length * PX_PER_CANDLE);
+  // Chart width fills the container; candle width adapts
+  const w = containerWidth > 0 ? containerWidth : 400;
   const h = height;
   const totalH = h + X_AXIS_HEIGHT;
   const leftGutter = 40;
@@ -262,11 +278,30 @@ export default function Chart({
     let prevTs = null;
     for (let i = 0; i < slice.length; i += step) {
       if (slice[i].t) {
-        labels.push({ idx: i, text: formatTimestamp(slice[i].t, timeframe, prevTs) });
+        const isDateChange = prevTs != null && (() => {
+          const cur = new Date(slice[i].t * 1000);
+          const prev = new Date(prevTs * 1000);
+          return cur.getDate() !== prev.getDate() || cur.getMonth() !== prev.getMonth();
+        })();
+        labels.push({
+          idx: i,
+          text: formatTimestamp(slice[i].t, timeframe, prevTs),
+          isDateChange,
+        });
         prevTs = slice[i].t;
       }
     }
-    return labels;
+    // Remove labels adjacent to date-change labels to avoid overlap
+    const filtered = [];
+    for (let i = 0; i < labels.length; i++) {
+      const isNearDateChange =
+        (i > 0 && labels[i - 1].isDateChange) ||
+        (i < labels.length - 1 && labels[i + 1]?.isDateChange);
+      if (labels[i].isDateChange || !isNearDateChange) {
+        filtered.push(labels[i]);
+      }
+    }
+    return filtered;
   }, [slice, timeframe]);
 
   /* ── Pattern highlight indices + labels ───────────────────────── */
@@ -409,6 +444,14 @@ export default function Chart({
       }
     : null;
 
+  if (!canRender) {
+    return (
+      <div style={{ marginBottom: 12 }}>
+        <div ref={wrapRef} style={{ borderRadius: 10, border: '1px solid #e2e5eb', background: '#fff', minHeight: slice.length ? height + X_AXIS_HEIGHT : 0 }} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ marginBottom: 12 }}>
       <div
@@ -443,8 +486,7 @@ export default function Chart({
       <div
         ref={wrapRef}
         style={{
-          overflowX: 'auto',
-          WebkitOverflowScrolling: 'touch',
+          overflow: 'hidden',
           borderRadius: 10,
           border: '1px solid #e2e5eb',
           background: '#fff',
@@ -518,8 +560,8 @@ export default function Chart({
             );
           })}
 
-          {/* Liquidity box */}
-          {box && boxVisible && (
+          {/* Liquidity box — only when highlight is on */}
+          {highlightSignals && box && boxVisible && (
             <g>
               <rect x={boxX} y={yFor(box.high)} width={boxW}
                 height={Math.max(2, yFor(box.low) - yFor(box.high))}
@@ -537,7 +579,7 @@ export default function Chart({
             </g>
           )}
 
-          {box && !boxVisible && (
+          {highlightSignals && box && !boxVisible && (
             <g>
               <line x1={leftGutter} y1={yFor(box.high)} x2={w} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
               <text x={leftGutter + 4} y={yFor(box.high) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Hi</text>
@@ -743,14 +785,15 @@ export default function Chart({
           )}
 
           {/* X-axis timestamps */}
-          {xLabels.map(({ idx, text }) => (
+          {xLabels.map(({ idx, text, isDateChange }) => (
             <text
               key={`xl-${idx}`}
               x={xFor(idx)}
               y={h + 15}
               textAnchor="middle"
-              fontSize={10}
-              fill="#8892a8"
+              fontSize={isDateChange ? 10 : 9}
+              fontWeight={isDateChange ? 700 : 400}
+              fill={isDateChange ? '#2563eb' : '#8892a8'}
               fontFamily={mono}
             >
               {text}

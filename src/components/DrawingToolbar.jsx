@@ -1,16 +1,19 @@
 const TOOLS = [
-  { key: 'hline', label: 'H-Line', icon: '─' },
-  { key: 'box', label: 'Box', icon: '▭' },
+  { key: 'hline', icon: '━' },
+  { key: 'box', icon: '▭' },
 ];
 
 const btnBase = {
-  minHeight: 30,
-  padding: '0 10px',
-  fontSize: 11,
+  minHeight: 28,
+  minWidth: 32,
+  padding: '0 8px',
+  fontSize: 14,
   fontWeight: 600,
   borderRadius: 6,
   border: '1px solid',
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  lineHeight: '28px',
 };
 
 export default function DrawingToolbar({ active, onChange, onClear }) {
@@ -31,7 +34,7 @@ export default function DrawingToolbar({ active, onChange, onClear }) {
               color: on ? '#8b5cf6' : '#4a5068',
             }}
           >
-            {icon} {label}
+            {icon}
           </button>
         );
       })}

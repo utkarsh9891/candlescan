@@ -27,7 +27,7 @@ const shell = {
   fontSize: 14,
   color: '#1a1d26',
   padding: '12px 12px 32px',
-  maxWidth: 560,
+  maxWidth: 620,
   margin: '0 auto',
   boxSizing: 'border-box',
 };
@@ -53,7 +53,7 @@ export default function App() {
   const [activeFilters, setActiveFilters] = useState(ALL_CATEGORIES);
 
   // Signal highlight toggle
-  const [highlightSignals, setHighlightSignals] = useState(false);
+  const [highlightSignals, setHighlightSignals] = useState(true);
 
   // Drawing tool state
   const [drawingMode, setDrawingMode] = useState(null);
@@ -202,18 +202,18 @@ export default function App() {
       <TimeframePills mode={mode} value={timeframe} onChange={setTimeframe} />
       <SearchBar inputVal={inputVal} setInputVal={setInputVal} onScan={onScanClick} loading={loading} />
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
         {quickStocks.map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => onQuick(t)}
             style={{
-              minHeight: 36,
-              padding: '0 12px',
-              fontSize: 12,
+              minHeight: 28,
+              padding: '0 8px',
+              fontSize: 11,
               fontWeight: 600,
-              borderRadius: 8,
+              borderRadius: 6,
               border: '1px solid #e2e5eb',
               background: '#fff',
               color: '#2563eb',
@@ -232,23 +232,23 @@ export default function App() {
       )}
 
       {history.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 6 }}>Recent</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 4 }}>Recent</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
             {history.map((h) => (
               <button
                 key={h.symbol}
                 type="button"
                 onClick={() => onQuick(h.symbol)}
                 style={{
-                  minHeight: 36,
-                  padding: '0 10px',
-                  fontSize: 12,
+                  minHeight: 28,
+                  padding: '0 8px',
+                  fontSize: 11,
                   fontWeight: 600,
-                  borderRadius: 8,
+                  borderRadius: 6,
                   border: '1px solid #e2e5eb',
                   background: '#fff',
-                  color: h.riskScore >= 65 ? '#16a34a' : '#8892a8',
+                  color: h.riskScore >= 65 ? '#16a34a' : h.riskScore >= 50 ? '#d97706' : '#8892a8',
                   cursor: 'pointer',
                 }}
               >
@@ -283,28 +283,30 @@ export default function App() {
         <EmptyState />
       ) : (
         <>
-          {/* Toolbar row: drawing tools + signal filter dropdown + highlight toggle */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Toolbar row */}
+          <div style={{ display: 'flex', gap: 5, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
-            <div style={{ flex: 1 }} />
+            <div style={{ flex: 1, minWidth: 4 }} />
             <SignalFilters active={activeFilters} onChange={setActiveFilters} />
             <label
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 4,
-                fontSize: 11,
+                gap: 3,
+                fontSize: 10,
                 fontWeight: 600,
                 color: highlightSignals ? '#2563eb' : '#8892a8',
                 cursor: 'pointer',
                 userSelect: 'none',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >
               <input
                 type="checkbox"
                 checked={highlightSignals}
                 onChange={(e) => setHighlightSignals(e.target.checked)}
-                style={{ accentColor: '#2563eb', margin: 0 }}
+                style={{ accentColor: '#2563eb', margin: 0, width: 14, height: 14 }}
               />
               Highlight
             </label>
@@ -356,7 +358,8 @@ export default function App() {
           100% { transform: translateX(350%); }
         }
         * { box-sizing: border-box; }
-        body { margin: 0; }
+        body { margin: 0; overflow-x: hidden; }
+        html { overflow-x: hidden; }
       `}</style>
     </div>
   );
