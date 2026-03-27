@@ -31,29 +31,43 @@ export default function Header({ badge, lastScan, mode, onModeChange, children }
           <span style={{ color: '#8892a8', fontSize: 12 }}>Scan: {lastScan}</span>
         ) : null}
 
-        {/* Simple / Advanced toggle */}
-        <button
-          type="button"
-          onClick={() => onModeChange(isAdv ? 'simple' : 'advanced')}
-          aria-label={`Switch to ${isAdv ? 'simple' : 'advanced'} mode`}
+        {/* Simple / Advanced segmented toggle */}
+        <div
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '4px 10px',
-            fontSize: 11,
-            fontWeight: 700,
+            display: 'inline-flex',
             borderRadius: 999,
             border: '1px solid #e2e5eb',
-            background: isAdv ? '#2563eb' : '#fff',
-            color: isAdv ? '#fff' : '#4a5068',
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-            transition: 'all 0.15s',
+            background: '#f0f1f4',
+            padding: 2,
+            gap: 0,
           }}
         >
-          {isAdv ? 'Advanced' : 'Simple'}
-        </button>
+          {['simple', 'advanced'].map((m) => {
+            const active = mode === m;
+            return (
+              <button
+                key={m}
+                type="button"
+                onClick={() => onModeChange(m)}
+                style={{
+                  padding: '3px 10px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  borderRadius: 999,
+                  border: 'none',
+                  background: active ? '#fff' : 'transparent',
+                  color: active ? '#1a1d26' : '#8892a8',
+                  cursor: 'pointer',
+                  boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  transition: 'all 0.15s',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {m === 'simple' ? 'Simple' : 'Advanced'}
+              </button>
+            );
+          })}
+        </div>
 
         {children}
       </div>
