@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import RiskRing from './RiskRing.jsx';
 import RiskScoreSignals from './RiskScoreSignals.jsx';
+import { SIGNAL_CATEGORIES } from '../data/signalCategories.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -27,9 +28,12 @@ export default function SimpleView({
   changePct,
   activeFilters,
   allPatterns,
+  viewMode = 'simple',
+  signalMeta = { categoryCount: SIGNAL_CATEGORIES.length, rulesApprox: 46 },
 }) {
   const [showDetails, setShowDetails] = useState(false);
-  const top = patterns.slice(0, 3);
+  const isAdvanced = viewMode === 'advanced';
+  const top = patterns.slice(0, isAdvanced ? 3 : 2);
   const confidence = risk.confidence ?? risk.total;
   const last = candles[candles.length - 1];
   const ctx = contextLabels[risk.context] || contextLabels.mid_range;
@@ -66,9 +70,15 @@ export default function SimpleView({
             <div style={{ fontSize: 20, fontWeight: 800, color: actColor, lineHeight: 1.1 }}>
               {risk.action}
             </div>
-            <div style={{ fontSize: 11, color: '#8892a8', marginTop: 2 }}>
-              R:R {risk.rr.toFixed(1)} · {risk.direction === 'long' ? '▲ Buy' : '▼ Sell'}
-            </div>
+            {isAdvanced ? (
+              <div style={{ fontSize: 11, color: '#8892a8', marginTop: 2 }}>
+                R:R {risk.rr.toFixed(1)} · {risk.direction === 'long' ? '▲ Buy' : '▼ Sell'}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: '#8892a8', marginTop: 2 }}>
+                {risk.direction === 'long' ? '▲ Long bias' : '▼ Short bias'}
+              </div>
+            )}
           </div>
         </div>
 
@@ -101,7 +111,7 @@ export default function SimpleView({
         )}
       </div>
 
-      {/* Signals + patterns — compact */}
+      {/* Signals + patterns — compact in Simple, full digest in Advanced */}
       <div style={{
         padding: 10,
         borderRadius: 10,
@@ -111,7 +121,8 @@ export default function SimpleView({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
           <span style={{ fontSize: 11, color: '#8892a8', fontWeight: 600 }}>
-            Signals {identifiedCount}/{enabledList.length}
+            {isAdvanced ? 'Signal evaluation' : 'Quick signals'}{' '}
+            {identifiedCount}/{enabledList.length}
           </span>
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {top.map((p) => (
@@ -124,24 +135,37 @@ export default function SimpleView({
             ))}
           </div>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {enabledList.map((cat) => {
-            const found = identifiedCategories.has(cat);
-            return (
-              <span key={cat} style={{
-                fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 600,
-                background: found ? '#eff6ff' : '#f9fafb',
-                color: found ? '#2563eb' : '#d1d5db',
-                border: `1px solid ${found ? '#bfdbfe' : '#f0f0f0'}`,
-              }}>
-                {cat}
-              </span>
-            );
-          })}
-        </div>
+        {isAdvanced ? (
+          <>
+            <div style={{ fontSize: 11, color: '#4a5068', lineHeight: 1.5, marginBottom: 8 }}>
+              ~{signalMeta.rulesApprox}+ rules across {signalMeta.categoryCount} pattern families;{' '}
+              <strong>{(allPatterns || patterns).length}</strong> live hit(s) on the latest bar (before filters).
+              Score blends signal clarity, noise, R:R, pattern reliability, and confluence.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {enabledList.map((cat) => {
+                const found = identifiedCategories.has(cat);
+                return (
+                  <span key={cat} style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 600,
+                    background: found ? '#eff6ff' : '#f9fafb',
+                    color: found ? '#2563eb' : '#d1d5db',
+                    border: `1px solid ${found ? '#bfdbfe' : '#f0f0f0'}`,
+                  }}>
+                    {cat}
+                  </span>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 11, color: '#8892a8', lineHeight: 1.45 }}>
+            Categories turned on in the menu: <strong>{enabledList.length}</strong>. Open Advanced for full rule
+            counts, bid/ask, and extra panels — trade call stays the same.
+          </div>
+        )}
       </div>
 
-      {/* Expandable score details */}
       <button
         type="button"
         onClick={() => setShowDetails((v) => !v)}
@@ -157,7 +181,7 @@ export default function SimpleView({
           marginBottom: 4,
         }}
       >
-        {showDetails ? '▾ Hide score details' : '▸ Show score details'}
+        {showDetails ? '▾ Hide score details' : isAdvanced ? '▸ Show score details' : '▸ Score breakdown'}
       </button>
       {showDetails && <RiskScoreSignals breakdown={risk.breakdown} total={risk.total} />}
     </div>

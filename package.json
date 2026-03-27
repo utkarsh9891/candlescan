@@ -8,7 +8,9 @@
     "dev": "bash scripts/start.sh",
     "build": "vite build",
     "preview": "vite preview",
-    "pages": "bash scripts/deploy-to-pages.sh"
+    "pages": "bash scripts/deploy-to-pages.sh",
+    "test:batch": "node scripts/batch-test.mjs",
+    "cache:charts": "node scripts/warm-chart-cache.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

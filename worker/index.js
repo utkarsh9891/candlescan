@@ -38,17 +38,24 @@ export default {
     const url = new URL(request.url);
     const target = url.searchParams.get('url');
 
-    if (!target || !target.startsWith('https://query1.finance.yahoo.com/')) {
-      return new Response('Bad request — only Yahoo Finance URLs allowed', {
+    const yahooOk = target.startsWith('https://query1.finance.yahoo.com/');
+    const nseOk = target.startsWith('https://www.nseindia.com/api/');
+    if (!target || (!yahooOk && !nseOk)) {
+      return new Response('Bad request — allowed: Yahoo chart API or NSE /api/* only', {
         status: 400,
         headers: corsHeaders(origin),
       });
     }
 
     try {
-      const resp = await fetch(target, {
-        headers: { 'User-Agent': 'CandleScan/1.0' },
-      });
+      const headers = {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      };
+      if (nseOk) headers.Referer = 'https://www.nseindia.com/';
+
+      const resp = await fetch(target, { headers });
       const body = await resp.text();
 
       return new Response(body, {

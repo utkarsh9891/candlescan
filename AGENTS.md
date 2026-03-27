@@ -26,7 +26,9 @@ npm start
 - **Chart**: Custom SVG in `src/components/Chart.jsx`
 - **Analysis engine**: `src/engine/` (fetcher, patterns, liquidityBox, risk)
 - **Deployment**: GitHub Actions → GitHub Pages at `utkarsh9891.github.io/candlescan/`
-- **CORS proxy**: Cloudflare Worker at `worker/` for Yahoo Finance API
+- **CORS proxy**: Cloudflare Worker at `worker/` for Yahoo Finance + NSE India `/api/*`
+- **Index constituents**: NSE `equity-stockIndices` at runtime (`src/engine/nseIndexFetch.js`); dev uses Vite proxy `/candlescan/__candlescan-nse`
+- **Local chart cache**: `cache/charts/` (gitignored) — `vite-plugin-chart-cache.mjs` + `scripts/lib/chart-cache-fs.mjs`; `npm run cache:charts` / `test:batch`
 
 ## Key files
 | File | Purpose |
@@ -37,11 +39,13 @@ npm start
 | `src/engine/patterns.js` | Candlestick pattern detection (8 categories, returns candleIndices) |
 | `src/engine/liquidityBox.js` | Consolidation box detection |
 | `src/engine/risk.js` | 5-component risk scoring (0-100), action determination |
-| `src/data/niftyStocks.js` | Nifty 100 + Next 100 stock symbols (~200) |
+| `src/config/nseIndices.js` | NSE index catalog + default index id |
+| `src/engine/nseIndexFetch.js` | Fetch & parse index constituents (browser) |
+| `src/data/niftyStocks.js` | Deprecated stub; re-exports config only |
 | `src/components/SimpleView.jsx` | Main decision display (Action → Score → Details) |
 | `src/components/SignalFilters.jsx` | Dropdown signal filter popover |
 | `vite.config.js` | Build config, base path `/candlescan/`, dev proxy |
-| `worker/index.js` | Cloudflare Worker CORS proxy for Yahoo Finance |
+| `worker/index.js` | Cloudflare Worker CORS proxy (Yahoo chart + NSE API) |
 
 ## Chart interactions (Chart.jsx)
 - **Zoom**: ctrl+wheel (trackpad pinch) or +/- buttons

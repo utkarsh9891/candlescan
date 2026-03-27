@@ -23,9 +23,55 @@ const timerBtn = (active) => ({
   cursor: 'pointer',
 });
 
+function QuoteMicroCard({ quote, last, sym }) {
+  const bid = quote?.bid;
+  const ask = quote?.ask;
+  const hasBook = bid != null && ask != null && ask > 0 && bid > 0;
+  const spread = hasBook ? ask - bid : null;
+  const rangePct =
+    last && last.c > 0 ? ((last.h - last.l) / last.c) * 100 : null;
+
+  return (
+    <div style={{ ...card }}>
+      <div style={{ fontWeight: 700, marginBottom: 8, color: '#1a1d26', fontSize: 13 }}>Quote · microstructure</div>
+      {hasBook ? (
+        <div style={{ fontSize: 12, lineHeight: 1.75, fontFamily: mono, color: '#4a5068' }}>
+          <div>
+            Bid <strong>{bid.toFixed(2)}</strong> ({quote.bidSize ?? '—'} size) · Ask{' '}
+            <strong>{ask.toFixed(2)}</strong> ({quote.askSize ?? '—'} size)
+          </div>
+          <div>
+            Spread <strong>{spread.toFixed(3)}</strong>
+            {quote.last != null && (
+              <span style={{ color: '#8892a8', marginLeft: 8 }}>Last {quote.last.toFixed(2)}</span>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: '#8892a8', lineHeight: 1.5, marginBottom: 8 }}>
+          No live bid/ask from Yahoo for this symbol (common on some NSE listings). Using candle
+          microstructure instead.
+        </div>
+      )}
+      {(quote?.dayHigh != null || quote?.dayLow != null) && (
+        <div style={{ fontSize: 11, fontFamily: mono, color: '#4a5068', marginBottom: 6 }}>
+          Session H/L{' '}
+          <strong>{quote.dayHigh?.toFixed(2) ?? '—'}</strong> / <strong>{quote.dayLow?.toFixed(2) ?? '—'}</strong>
+        </div>
+      )}
+      {last && rangePct != null && (
+        <div style={{ fontSize: 11, fontFamily: mono, color: '#4a5068' }}>
+          Last bar range vs close: <strong>{rangePct.toFixed(3)}%</strong> ({sym})
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdvancedView(props) {
-  const { patterns, box, candles, sym, companyName, changePct, risk } = props;
+  const { patterns, box, candles, sym, companyName, changePct, risk, quote } = props;
   const last5 = candles.slice(-5);
+  const last = candles.length ? candles[candles.length - 1] : null;
 
   /* ── Exit timer (from ScalpView) ─────────────────────────────── */
   const [durationMin, setDurationMin] = useState(null);
@@ -49,8 +95,9 @@ export default function AdvancedView(props) {
 
   return (
     <div>
-      {/* Core analysis (same as Simple) */}
       <SimpleView {...props} />
+
+      <QuoteMicroCard quote={quote} last={last} sym={sym} />
 
       {/* Exit timer */}
       {showTimer && (
