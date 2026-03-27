@@ -4,15 +4,13 @@ import { detectPatterns } from './engine/patterns.js';
 import { detectLiquidityBox } from './engine/liquidityBox.js';
 import { computeRiskScore } from './engine/risk.js';
 import Header from './components/Header.jsx';
-import ModeToggle from './components/ModeToggle.jsx';
 import TimeframePills from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
 import Chart from './components/Chart.jsx';
 import EmptyState from './components/EmptyState.jsx';
 import SimpleView from './components/SimpleView.jsx';
-import TraderView from './components/TraderView.jsx';
-import ScalpView from './components/ScalpView.jsx';
-import SignalFilters from './components/SignalFilters.jsx';
+import AdvancedView from './components/AdvancedView.jsx';
+import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import { getRandomQuickStocks } from './data/niftyStocks.js';
 
@@ -78,11 +76,7 @@ export default function App() {
     } catch { /* quota exceeded */ }
   }, [history]);
 
-  useEffect(() => {
-    if (mode === 'simple' && !['1m', '5m', '15m'].includes(timeframe)) {
-      setTimeframe('5m');
-    }
-  }, [mode, timeframe]);
+  // All timeframes available in all modes now
 
   const runScan = useCallback(async (symbol) => {
     const s = String(symbol).trim();
@@ -197,7 +191,14 @@ export default function App() {
 
   return (
     <div style={shell}>
-      <Header badge={headerBadge} lastScan={lastScan} />
+      <Header badge={headerBadge} lastScan={lastScan}>
+        <GlobalMenu
+          mode={mode}
+          onModeChange={setMode}
+          activeFilters={activeFilters}
+          onFiltersChange={setActiveFilters}
+        />
+      </Header>
       <SearchBar inputVal={inputVal} setInputVal={setInputVal} onScan={onScanClick} loading={loading} />
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
@@ -283,10 +284,9 @@ export default function App() {
         <>
           {/* Timeframe + toolbar row */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <TimeframePills mode={mode} value={timeframe} onChange={setTimeframe} />
+            <TimeframePills value={timeframe} onChange={setTimeframe} />
             <div style={{ flex: 1, minWidth: 4 }} />
             <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
-            <SignalFilters active={activeFilters} onChange={setActiveFilters} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
             <label
@@ -325,7 +325,7 @@ export default function App() {
             patterns={patterns}
             highlightSignals={highlightSignals}
           />
-          <SimpleView {...viewProps} />
+          {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
         </>
       )}
 

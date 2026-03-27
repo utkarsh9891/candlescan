@@ -1,7 +1,7 @@
 const pill = (active) => ({
-  minHeight: 36,
-  padding: '0 14px',
-  fontSize: 13,
+  minHeight: 32,
+  padding: '0 10px',
+  fontSize: 12,
   fontWeight: 600,
   borderRadius: 999,
   border: active ? 'none' : '1px solid #e2e5eb',
@@ -10,26 +10,13 @@ const pill = (active) => ({
   cursor: 'pointer',
 });
 
-export default function TimeframePills({ mode, value, onChange }) {
-  const simpleTfs = ['1m', '5m', '15m'];
-  const allTfs = ['1m', '5m', '15m', '30m', '1h', '1d'];
-  const list = mode === 'simple' ? simpleTfs : allTfs;
+const ALL_TFS = ['1m', '5m', '15m', '30m', '1h', '1d'];
+
+export default function TimeframePills({ value, onChange }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 12,
-      }}
-    >
-      {list.map((tf) => (
-        <button
-          key={tf}
-          type="button"
-          style={pill(value === tf)}
-          onClick={() => onChange(tf)}
-        >
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+      {ALL_TFS.map((tf) => (
+        <button key={tf} type="button" style={pill(value === tf)} onClick={() => onChange(tf)}>
           {tf}
         </button>
       ))}

@@ -1,4 +1,4 @@
-export default function Header({ badge, lastScan }) {
+export default function Header({ badge, lastScan, children }) {
   const styles = {
     live: { bg: '#16a34a', label: 'LIVE' },
     demo: { bg: '#d97706', label: 'DEMO' },
@@ -28,7 +28,7 @@ export default function Header({ badge, lastScan }) {
       >
         CandleScan
       </h1>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span
             style={{
@@ -45,6 +45,7 @@ export default function Header({ badge, lastScan }) {
             Scan: {lastScan}
           </span>
         ) : null}
+        {children}
       </div>
     </header>
   );
