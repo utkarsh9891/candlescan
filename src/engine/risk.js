@@ -217,8 +217,18 @@ export function computeRiskScore({ candles, patterns, box }) {
   else if (top?.direction === 'bearish' && context === 'at_support') confluence -= 3;
   else if (context === 'breakout') confluence += 3;
 
-  // Box breakout / trap
-  if (box && (box.breakout !== 'none' || box.trap !== 'none')) confluence += 5;
+  // Box breakout / trap — graduated by quality and strength
+  if (box) {
+    const bq = box.quality || 0;
+    const bs = box.breakoutStrength || 0;
+    const td = box.trapDepth || 0;
+
+    if (box.breakout !== 'none') {
+      confluence += Math.round(2 + bq * 2 + bs * 1); // 2–5
+    } else if (box.trap !== 'none' && td > 0.3) {
+      confluence += Math.round(1 + bq * 2 + td * 1); // 1–4
+    }
+  }
 
   confluence = Math.max(0, confluence);
 
