@@ -120,7 +120,7 @@ export function computeRiskScore({ candles, patterns, box }) {
   const chop = Math.min(1, atr / (avgBody * 3));
   const lowNoise = (1 - chop) * 20;
 
-  /* ── 3. Risk:Reward (max 25) — swing-based, not hardcoded ──── */
+  /* ── 3. Risk:Reward (max 25) — ATR-aware swing-based ────────── */
   const direction =
     top?.direction === 'bearish' ? 'short' : top?.direction === 'bullish' ? 'long' : 'long';
 
@@ -131,22 +131,30 @@ export function computeRiskScore({ candles, patterns, box }) {
 
   let slDist, targetDist, sl, target;
   const entry = cur.c;
+  const atrVal = atrLike(candles, 14);
 
   if (direction === 'long') {
-    slDist = Math.max(entry - swingLow, entry * 0.003);
+    slDist = Math.max(entry - swingLow, atrVal * 0.8, entry * 0.003);
     sl = entry - slDist;
-    // Target: resistance from wider window or minimum 2R
-    const widerHighs = candles.slice(-15).map((c) => c.h);
+    // Target: use wider resistance, ATR projection, or swing range — pick best
+    const widerHighs = candles.slice(-20).map((c) => c.h);
     const resistance = Math.max(...widerHighs);
-    targetDist = Math.max(resistance - entry, slDist * 2);
+    const resistanceDist = resistance - entry;
+    const atrTarget = atrVal * 1.8; // ATR-based projection
+    // Use the median of available targets, not the max (avoids inflated R:R)
+    const candidates = [resistanceDist, atrTarget, slDist * 1.5].filter(d => d > 0).sort((a, b) => a - b);
+    targetDist = candidates.length > 1 ? candidates[Math.floor(candidates.length / 2)] : (candidates[0] || slDist * 1.5);
     target = entry + targetDist;
   } else {
-    slDist = Math.max(swingHigh - entry, entry * 0.003);
+    slDist = Math.max(swingHigh - entry, atrVal * 0.8, entry * 0.003);
     sl = entry + slDist;
-    // Target: support from wider window or minimum 2R
-    const widerLows = candles.slice(-15).map((c) => c.l);
+    // Target: use wider support, ATR projection — median approach
+    const widerLows = candles.slice(-20).map((c) => c.l);
     const support = Math.min(...widerLows);
-    targetDist = Math.max(entry - support, slDist * 2);
+    const supportDist = entry - support;
+    const atrTarget = atrVal * 1.8;
+    const candidates = [supportDist, atrTarget, slDist * 1.5].filter(d => d > 0).sort((a, b) => a - b);
+    targetDist = candidates.length > 1 ? candidates[Math.floor(candidates.length / 2)] : (candidates[0] || slDist * 1.5);
     target = entry - targetDist;
   }
 
@@ -154,11 +162,14 @@ export function computeRiskScore({ candles, patterns, box }) {
   // Clamp extreme R:R
   const rrClamped = Math.min(5, Math.max(0.3, rr));
 
+  // Graduated scoring — more granular, less likely to cluster at 25
   let rrScore = 5;
-  if (rrClamped >= 2.5) rrScore = 25;
-  else if (rrClamped >= 2) rrScore = 22;
-  else if (rrClamped >= 1.5) rrScore = 18;
+  if (rrClamped >= 3) rrScore = 25;
+  else if (rrClamped >= 2.5) rrScore = 22;
+  else if (rrClamped >= 2) rrScore = 19;
+  else if (rrClamped >= 1.5) rrScore = 15;
   else if (rrClamped >= 1) rrScore = 10;
+  else if (rrClamped >= 0.8) rrScore = 7;
 
   /* ── 4. Pattern reliability (max 15) ─────────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;
@@ -227,16 +238,16 @@ export function computeRiskScore({ candles, patterns, box }) {
     confluence: Math.min(15, Math.round(Math.max(0, confluence))),
   };
 
-  /* ── Risk level ──────────────────────────────────────────────── */
-  let level = 'high';
-  if (confidence >= 65) level = 'low';
-  else if (confidence >= 50) level = 'moderate';
+  /* ── Confidence level (higher = stronger signal) ─────────────── */
+  let level = 'low';           // < 55 → weak signal
+  if (confidence >= 70) level = 'high';   // strong signal
+  else if (confidence >= 55) level = 'moderate';
 
   /* ── Action ──────────────────────────────────────────────────── */
   let action = 'NO TRADE';
-  if (confidence >= 65 && top && top.direction !== 'neutral') {
+  if (confidence >= 70 && top && top.direction !== 'neutral') {
     action = top.direction === 'bearish' ? 'STRONG SHORT' : 'STRONG BUY';
-  } else if (confidence >= 52 && top && top.direction !== 'neutral') {
+  } else if (confidence >= 55 && top && top.direction !== 'neutral') {
     action = top.direction === 'bearish' ? 'SHORT' : 'BUY';
   } else if (confidence >= 45 && top) {
     action = 'WAIT';

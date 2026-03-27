@@ -4,15 +4,13 @@ import { detectPatterns } from './engine/patterns.js';
 import { detectLiquidityBox } from './engine/liquidityBox.js';
 import { computeRiskScore } from './engine/risk.js';
 import Header from './components/Header.jsx';
-import ModeToggle from './components/ModeToggle.jsx';
 import TimeframePills from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
 import Chart from './components/Chart.jsx';
 import EmptyState from './components/EmptyState.jsx';
 import SimpleView from './components/SimpleView.jsx';
-import TraderView from './components/TraderView.jsx';
-import ScalpView from './components/ScalpView.jsx';
-import SignalFilters from './components/SignalFilters.jsx';
+import AdvancedView from './components/AdvancedView.jsx';
+import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import { getRandomQuickStocks } from './data/niftyStocks.js';
 
@@ -33,7 +31,9 @@ const shell = {
 };
 
 export default function App() {
-  const [mode, setMode] = useState('simple');
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem('candlescan_mode') || 'simple'; } catch { return 'simple'; }
+  });
   const [timeframe, setTimeframe] = useState('5m');
   const [inputVal, setInputVal] = useState('');
   const [sym, setSym] = useState('');
@@ -79,10 +79,10 @@ export default function App() {
   }, [history]);
 
   useEffect(() => {
-    if (mode === 'simple' && !['1m', '5m', '15m'].includes(timeframe)) {
-      setTimeframe('5m');
-    }
-  }, [mode, timeframe]);
+    try { localStorage.setItem('candlescan_mode', mode); } catch { /* quota */ }
+  }, [mode]);
+
+  // All timeframes available in all modes now
 
   const runScan = useCallback(async (symbol) => {
     const s = String(symbol).trim();
@@ -148,7 +148,7 @@ export default function App() {
         100
       : 0;
 
-  const chartH = mode === 'simple' ? 240 : 300;
+  const chartH = 260;
 
   let headerBadge = 'idle';
   if (loading) headerBadge = 'idle';
@@ -197,9 +197,12 @@ export default function App() {
 
   return (
     <div style={shell}>
-      <Header badge={headerBadge} lastScan={lastScan} />
-      <ModeToggle mode={mode} onChange={setMode} />
-      <TimeframePills mode={mode} value={timeframe} onChange={setTimeframe} />
+      <Header badge={headerBadge} lastScan={lastScan} mode={mode} onModeChange={setMode}>
+        <GlobalMenu
+          activeFilters={activeFilters}
+          onFiltersChange={setActiveFilters}
+        />
+      </Header>
       <SearchBar inputVal={inputVal} setInputVal={setInputVal} onScan={onScanClick} loading={loading} />
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
@@ -248,7 +251,7 @@ export default function App() {
                   borderRadius: 6,
                   border: '1px solid #e2e5eb',
                   background: '#fff',
-                  color: h.riskScore >= 65 ? '#16a34a' : h.riskScore >= 50 ? '#d97706' : '#8892a8',
+                  color: h.riskScore >= 70 ? '#16a34a' : h.riskScore >= 55 ? '#d97706' : '#8892a8',
                   cursor: 'pointer',
                 }}
               >
@@ -283,23 +286,24 @@ export default function App() {
         <EmptyState />
       ) : (
         <>
-          {/* Toolbar row */}
-          <div style={{ display: 'flex', gap: 5, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
+          {/* Timeframe + toolbar row */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <TimeframePills value={timeframe} onChange={setTimeframe} />
             <div style={{ flex: 1, minWidth: 4 }} />
-            <SignalFilters active={activeFilters} onChange={setActiveFilters} />
+            <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
             <label
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 3,
-                fontSize: 10,
+                gap: 4,
+                fontSize: 11,
                 fontWeight: 600,
                 color: highlightSignals ? '#2563eb' : '#8892a8',
                 cursor: 'pointer',
                 userSelect: 'none',
                 whiteSpace: 'nowrap',
-                flexShrink: 0,
               }}
             >
               <input
@@ -308,7 +312,7 @@ export default function App() {
                 onChange={(e) => setHighlightSignals(e.target.checked)}
                 style={{ accentColor: '#2563eb', margin: 0, width: 14, height: 14 }}
               />
-              Highlight
+              Highlight Signals
             </label>
           </div>
           <Chart
@@ -325,9 +329,7 @@ export default function App() {
             patterns={patterns}
             highlightSignals={highlightSignals}
           />
-          {mode === 'simple' && <SimpleView {...viewProps} />}
-          {mode === 'trader' && <TraderView {...viewProps} />}
-          {mode === 'scalp' && <ScalpView {...viewProps} />}
+          {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
         </>
       )}
 

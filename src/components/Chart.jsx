@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 const mono = "'SF Mono', Menlo, monospace";
 
 const MIN_VISIBLE = 30;
-const MAX_VISIBLE_CAP = 140;
+const MAX_VISIBLE_CAP = 300;
 const X_AXIS_HEIGHT = 22;
 
 const btnStyle = {
