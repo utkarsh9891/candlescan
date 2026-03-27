@@ -70,7 +70,7 @@ function QuoteMicroCard({ quote, last, sym }) {
 
 export default function AdvancedView(props) {
   const { patterns, box, candles, sym, companyName, changePct, risk, quote } = props;
-  const last5 = candles.slice(-5);
+
   const last = candles.length ? candles[candles.length - 1] : null;
 
   /* ── Exit timer (from ScalpView) ─────────────────────────────── */
@@ -194,34 +194,6 @@ export default function AdvancedView(props) {
         ))}
       </div>
 
-      {/* OHLCV table */}
-      <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>Last 5 Candles</div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ fontSize: 11, width: '100%', fontFamily: mono, borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ color: '#8892a8' }}>
-                <th style={{ textAlign: 'left', padding: '4px 6px' }}>O</th>
-                <th style={{ padding: '4px 6px' }}>H</th>
-                <th style={{ padding: '4px 6px' }}>L</th>
-                <th style={{ padding: '4px 6px' }}>C</th>
-                <th style={{ padding: '4px 6px' }}>V</th>
-              </tr>
-            </thead>
-            <tbody>
-              {last5.map((c, i) => (
-                <tr key={i} style={{ borderTop: '1px solid #eef0f4' }}>
-                  <td style={{ padding: '4px 6px' }}>{c.o.toFixed(2)}</td>
-                  <td style={{ padding: '4px 6px' }}>{c.h.toFixed(2)}</td>
-                  <td style={{ padding: '4px 6px' }}>{c.l.toFixed(2)}</td>
-                  <td style={{ padding: '4px 6px' }}>{c.c.toFixed(2)}</td>
-                  <td style={{ padding: '4px 6px' }}>{(c.v / 1e3).toFixed(0)}k</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
 
       <style>{`
         @keyframes pulse {
