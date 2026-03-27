@@ -82,14 +82,51 @@ export default function SimpleView({
           </div>
         </div>
 
-        {/* Entry / SL / Target — always shown */}
-        <div style={{ display: 'flex', gap: 10, fontSize: 11, fontFamily: mono, color: '#4a5068', marginBottom: 6, flexWrap: 'wrap' }}>
-          <div>Entry <strong>{risk.entry.toFixed(2)}</strong></div>
-          <div>SL <strong style={{ color: '#dc2626' }}>{risk.sl.toFixed(2)}</strong></div>
-          <div>Target <strong style={{ color: '#16a34a' }}>{risk.target.toFixed(2)}</strong></div>
-          <div style={{ color: '#8892a8', fontSize: 10 }}>
-            {risk.direction === 'long' ? '▲ Buy side' : '▼ Sell side'}
+        {/* Entry / SL / Target — prominent for quick mobile reading */}
+        <div style={{
+          display: 'flex',
+          gap: 6,
+          fontFamily: mono,
+          marginBottom: 8,
+          flexWrap: 'wrap',
+        }}>
+          <div style={{
+            flex: '1 1 auto',
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: '#f5f6f8',
+            border: '1px solid #e2e5eb',
+            minWidth: 80,
+          }}>
+            <div style={{ fontSize: 10, color: '#8892a8', fontWeight: 600, marginBottom: 2 }}>Entry</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#1a1d26' }}>{risk.entry.toFixed(2)}</div>
           </div>
+          <div style={{
+            flex: '1 1 auto',
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            minWidth: 80,
+          }}>
+            <div style={{ fontSize: 10, color: '#dc2626', fontWeight: 600, marginBottom: 2 }}>Stop Loss</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#dc2626' }}>{risk.sl.toFixed(2)}</div>
+          </div>
+          <div style={{
+            flex: '1 1 auto',
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: '#f0fdf4',
+            border: '1px solid #bbf7d0',
+            minWidth: 80,
+          }}>
+            <div style={{ fontSize: 10, color: '#16a34a', fontWeight: 600, marginBottom: 2 }}>Target</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#16a34a' }}>{risk.target.toFixed(2)}</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 6 }}>
+          {risk.direction === 'long' ? '▲ Buy side' : '▼ Sell side'}
+          {isAdvanced && <span style={{ marginLeft: 8 }}>R:R {risk.rr.toFixed(1)}</span>}
         </div>
 
         {risk.action === 'WAIT' && (
@@ -100,14 +137,23 @@ export default function SimpleView({
         )}
 
         {/* Badges row: context + confidence */}
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
-          <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: ctx.bg, color: ctx.color, letterSpacing: 0.3 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+          <span style={{
+            fontSize: 13,
+            fontWeight: 800,
+            padding: '6px 12px',
+            borderRadius: 6,
+            background: ctx.bg,
+            color: ctx.color,
+            letterSpacing: 0.5,
+            border: `1px solid ${ctx.color}22`,
+          }}>
             {ctx.text}
           </span>
-          <RiskRing score={confidence} level={risk.level} />
+          <RiskRing score={confidence} level={risk.level} size="large" />
         </div>
         {ctx.desc && (
-          <div style={{ fontSize: 10, color: '#8892a8', lineHeight: 1.4 }}>{ctx.desc}</div>
+          <div style={{ fontSize: 11, color: '#8892a8', lineHeight: 1.4 }}>{ctx.desc}</div>
         )}
       </div>
 
