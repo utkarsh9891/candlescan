@@ -30,7 +30,7 @@ export const TIMEFRAME_MAP = {
  * Cloudflare Worker URL — deploy worker/ directory, then paste the URL here.
  * Until deployed, leave blank and the app falls through to Jina/public proxies.
  */
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
+export const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 function normalizeSymbol(raw) {
   const s = String(raw || '')
@@ -117,6 +117,20 @@ function parseChartJson(data) {
     });
   }
   return candles.length ? { candles, companyName } : null;
+}
+
+/**
+ * Yahoo often appends a snapshot bar with O≈H≈L≈C (no range). Pattern detection treats
+ * the last candle as "current"; zero-range bars prevent engulfing, momentum, hammer, etc.
+ */
+export function trimTrailingFlatCandles(candles) {
+  if (!candles?.length) return candles;
+  const out = candles.slice();
+  const eps = 1e-6;
+  while (out.length > 5 && Math.abs(out[out.length - 1].h - out[out.length - 1].l) < eps) {
+    out.pop();
+  }
+  return out;
 }
 
 async function tryFetch(url) {
@@ -347,8 +361,9 @@ export async function fetchOHLCV(inputSymbol, timeframeKey) {
   );
 
   if (candles?.length) {
+    const trimmed = trimTrailingFlatCandles(candles);
     return {
-      candles,
+      candles: trimmed,
       live,
       simulated: false,
       yahooSymbol,

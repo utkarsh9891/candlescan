@@ -39,8 +39,8 @@ export default function GlobalMenu({ activeFilters, onFiltersChange }) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         style={{
-          width: 36,
-          height: 36,
+          width: 40,
+          height: 40,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -51,8 +51,10 @@ export default function GlobalMenu({ activeFilters, onFiltersChange }) {
           color: open ? '#2563eb' : '#4a5068',
           cursor: 'pointer',
           flexShrink: 0,
+          WebkitTapHighlightColor: 'transparent',
         }}
-        aria-label="Settings menu"
+        aria-label="Signal filters"
+        aria-expanded={open}
       >
         ☰
       </button>
@@ -61,20 +63,34 @@ export default function GlobalMenu({ activeFilters, onFiltersChange }) {
         <div
           style={{
             position: 'absolute',
-            top: 40,
+            top: 44,
             right: 0,
-            zIndex: 200,
+            zIndex: 250,
+            width: 'min(320px, calc(100vw - 24px))',
             background: '#fff',
             border: '1px solid #e2e5eb',
             borderRadius: 10,
             padding: 8,
-            minWidth: 200,
-            boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+            maxHeight: 'min(72vh, 540px)',
+            overflowY: 'auto',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
+            boxSizing: 'border-box',
           }}
         >
-          {/* Signal filters header */}
-          <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            Signal Filters
+          <div
+            style={{
+              padding: '6px 10px',
+              fontSize: 11,
+              fontWeight: 700,
+              color: '#8892a8',
+              textTransform: 'uppercase',
+              letterSpacing: 0.5,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            Signal filters
             <span
               style={{
                 fontSize: 10,
@@ -96,31 +112,48 @@ export default function GlobalMenu({ activeFilters, onFiltersChange }) {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                padding: '5px 10px',
+                padding: '8px 10px',
                 cursor: 'pointer',
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: 600,
                 color: activeFilters.has(key) ? '#1a1d26' : '#8892a8',
                 borderRadius: 4,
+                WebkitTapHighlightColor: 'transparent',
               }}
             >
               <input
                 type="checkbox"
                 checked={activeFilters.has(key)}
                 onChange={() => toggleFilter(key)}
-                style={{ accentColor: '#2563eb', margin: 0 }}
+                style={{ accentColor: '#2563eb', margin: 0, width: 18, height: 18 }}
               />
               {label}
             </label>
           ))}
 
-          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, paddingTop: 6, padding: '6px 10px 4px', display: 'flex', gap: 6 }}>
+          <div
+            style={{
+              borderTop: '1px solid #eef0f4',
+              marginTop: 6,
+              paddingTop: 8,
+              padding: '6px 10px 4px',
+              display: 'flex',
+              gap: 6,
+            }}
+          >
             <button
               type="button"
               onClick={() => onFiltersChange(new Set(CATEGORIES.map((c) => c.key)))}
               style={{
-                flex: 1, fontSize: 10, fontWeight: 600, padding: '4px 0',
-                border: '1px solid #e2e5eb', borderRadius: 4, background: '#fff', color: '#2563eb', cursor: 'pointer',
+                flex: 1,
+                fontSize: 12,
+                fontWeight: 600,
+                padding: '8px 0',
+                border: '1px solid #e2e5eb',
+                borderRadius: 6,
+                background: '#fff',
+                color: '#2563eb',
+                cursor: 'pointer',
               }}
             >
               All
@@ -129,8 +162,15 @@ export default function GlobalMenu({ activeFilters, onFiltersChange }) {
               type="button"
               onClick={() => onFiltersChange(new Set())}
               style={{
-                flex: 1, fontSize: 10, fontWeight: 600, padding: '4px 0',
-                border: '1px solid #e2e5eb', borderRadius: 4, background: '#fff', color: '#8892a8', cursor: 'pointer',
+                flex: 1,
+                fontSize: 12,
+                fontWeight: 600,
+                padding: '8px 0',
+                border: '1px solid #e2e5eb',
+                borderRadius: 6,
+                background: '#fff',
+                color: '#8892a8',
+                cursor: 'pointer',
               }}
             >
               None

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { fetchOHLCV } from './engine/fetcher.js';
 import { detectPatterns } from './engine/patterns.js';
 import { detectLiquidityBox } from './engine/liquidityBox.js';
@@ -12,11 +12,36 @@ import SimpleView from './components/SimpleView.jsx';
 import AdvancedView from './components/AdvancedView.jsx';
 import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
-import { getRandomQuickStocks } from './data/niftyStocks.js';
+import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
+import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID } from './config/nseIndices.js';
+import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES } from './data/signalCategories.js';
+import { fetchNseIndexSymbolList } from './engine/nseIndexFetch.js';
+import { fetchYahooQuote } from './engine/yahooQuote.js';
 
-const ALL_CATEGORIES = new Set([
-  'engulfing', 'piercing', 'hammer', 'reversal', 'pullback', 'liquidity', 'momentum', 'indecision',
-]);
+const ALL_CATEGORIES = new Set(SIGNAL_CATEGORIES);
+
+const NSE_SYM_CACHE_PREFIX = 'candlescan_nse_syms_v1_';
+const NSE_SYM_CACHE_MS = 45 * 60 * 1000;
+
+function readNseSymsCache(indexId) {
+  try {
+    const raw = sessionStorage.getItem(NSE_SYM_CACHE_PREFIX + indexId);
+    if (!raw) return null;
+    const { t, syms } = JSON.parse(raw);
+    if (!Array.isArray(syms) || Date.now() - t > NSE_SYM_CACHE_MS) return null;
+    return syms;
+  } catch {
+    return null;
+  }
+}
+
+function writeNseSymsCache(indexId, syms) {
+  try {
+    sessionStorage.setItem(NSE_SYM_CACHE_PREFIX + indexId, JSON.stringify({ t: Date.now(), syms }));
+  } catch {
+    /* quota */
+  }
+}
 
 const shell = {
   minHeight: '100vh',
@@ -47,7 +72,23 @@ export default function App() {
   const [box, setBox] = useState(null);
   const [risk, setRisk] = useState(null);
   const [lastScan, setLastScan] = useState('');
+  const [yahooSym, setYahooSym] = useState('');
+  const [quote, setQuote] = useState(null);
   const activeSymRef = useRef('');
+
+  const [nseIndex, setNseIndex] = useState(() => {
+    try {
+      const s = localStorage.getItem('candlescan_nse_index');
+      if (s && NSE_INDEX_OPTIONS.some((o) => o.id === s)) return s;
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_NSE_INDEX_ID;
+  });
+  const [constituents, setConstituents] = useState([]);
+  const [constituentsLoading, setConstituentsLoading] = useState(false);
+  const [constituentsError, setConstituentsError] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Signal filter state
   const [activeFilters, setActiveFilters] = useState(ALL_CATEGORIES);
@@ -58,9 +99,6 @@ export default function App() {
   // Drawing tool state
   const [drawingMode, setDrawingMode] = useState(null);
   const [drawingsMap, setDrawingsMap] = useState({});
-
-  // Random quick stocks from Nifty 100 + Next 100
-  const quickStocks = useMemo(() => getRandomQuickStocks(8), []);
 
   // History with localStorage persistence
   const [history, setHistory] = useState(() => {
@@ -82,20 +120,61 @@ export default function App() {
     try { localStorage.setItem('candlescan_mode', mode); } catch { /* quota */ }
   }, [mode]);
 
-  // All timeframes available in all modes now
+  useEffect(() => {
+    try {
+      localStorage.setItem('candlescan_nse_index', nseIndex);
+    } catch {
+      /* quota */
+    }
+  }, [nseIndex]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const cached = readNseSymsCache(nseIndex);
+      if (cached?.length) {
+        setConstituents(cached);
+        setConstituentsError('');
+        setConstituentsLoading(false);
+        return;
+      }
+      setConstituentsLoading(true);
+      setConstituentsError('');
+      setConstituents([]);
+      try {
+        const syms = await fetchNseIndexSymbolList(nseIndex);
+        if (!cancelled) {
+          setConstituents(syms);
+          writeNseSymsCache(nseIndex, syms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setConstituentsError(e?.message || 'Could not load NSE index.');
+          setConstituents([]);
+        }
+      } finally {
+        if (!cancelled) setConstituentsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [nseIndex]);
 
   const runScan = useCallback(async (symbol) => {
     const s = String(symbol).trim();
     if (!s) return;
     setLoading(true);
     setScanError('');
+    setQuote(null);
     try {
       const result = await fetchOHLCV(s, timeframe);
-      const { candles: cd, live: lv, simulated: sim, error: err, companyName: cn, displaySymbol } = result;
+      const { candles: cd, live: lv, simulated: sim, error: err, companyName: cn, displaySymbol, yahooSymbol } = result;
 
       activeSymRef.current = displaySymbol;
       setSym(displaySymbol);
       setCompanyName(cn || displaySymbol);
+      setYahooSym(yahooSymbol || '');
       setSimulated(!!sim);
       setLive(!!lv);
 
@@ -104,6 +183,7 @@ export default function App() {
         setPatterns([]);
         setBox(null);
         setRisk(null);
+        setYahooSym('');
         setScanError(err || 'No data returned.');
         setLastScan(new Date().toLocaleTimeString());
         return;
@@ -128,6 +208,20 @@ export default function App() {
       setLoading(false);
     }
   }, [timeframe]);
+
+  useEffect(() => {
+    if (mode !== 'advanced' || simulated || !yahooSym || !risk) {
+      setQuote(null);
+      return undefined;
+    }
+    let cancelled = false;
+    fetchYahooQuote(yahooSym).then((q) => {
+      if (!cancelled) setQuote(q);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, simulated, yahooSym, risk, lastScan]);
 
   useEffect(() => {
     if (!activeSymRef.current) return;
@@ -159,6 +253,11 @@ export default function App() {
   // Filter patterns for display (score uses all patterns)
   const filteredPatterns = patterns.filter((p) => activeFilters.has(p.category));
 
+  const signalMeta = {
+    categoryCount: SIGNAL_CATEGORIES.length,
+    rulesApprox: APPROX_PATTERN_RULES,
+  };
+
   const viewProps = {
     sym,
     companyName,
@@ -169,6 +268,10 @@ export default function App() {
     box,
     changePct,
     activeFilters,
+    viewMode: mode,
+    yahooSymbol: yahooSym,
+    quote,
+    signalMeta,
   };
 
   // Drawings for current symbol
@@ -198,35 +301,18 @@ export default function App() {
   return (
     <div style={shell}>
       <Header badge={headerBadge} lastScan={lastScan} mode={mode} onModeChange={setMode}>
-        <GlobalMenu
-          activeFilters={activeFilters}
-          onFiltersChange={setActiveFilters}
-        />
+        <GlobalMenu activeFilters={activeFilters} onFiltersChange={setActiveFilters} />
       </Header>
-      <SearchBar inputVal={inputVal} setInputVal={setInputVal} onScan={onScanClick} loading={loading} />
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
-        {quickStocks.map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => onQuick(t)}
-            style={{
-              minHeight: 28,
-              padding: '0 8px',
-              fontSize: 11,
-              fontWeight: 600,
-              borderRadius: 6,
-              border: '1px solid #e2e5eb',
-              background: '#fff',
-              color: '#2563eb',
-              cursor: 'pointer',
-            }}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+      <SearchBar
+        inputVal={inputVal}
+        setInputVal={setInputVal}
+        onScan={onScanClick}
+        loading={loading}
+        onOpenStockList={() => setSidebarOpen(true)}
+        universeLabel={
+          NSE_INDEX_OPTIONS.find((o) => o.id === nseIndex)?.label ?? nseIndex
+        }
+      />
 
       {loading && (
         <div style={{ height: 4, borderRadius: 2, background: '#e2e5eb', marginBottom: 12, overflow: 'hidden' }}>
@@ -332,6 +418,22 @@ export default function App() {
           {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
         </>
       )}
+
+      <IndexConstituentsSidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        indexLabel={nseIndex}
+        nseIndexOptions={NSE_INDEX_OPTIONS}
+        selectedNseIndex={nseIndex}
+        onNseIndexChange={setNseIndex}
+        symbols={constituents}
+        loading={constituentsLoading}
+        error={constituentsError}
+        onSelectSymbol={(s) => {
+          setInputVal(s);
+          onQuick(s);
+        }}
+      />
 
       <footer
         style={{
