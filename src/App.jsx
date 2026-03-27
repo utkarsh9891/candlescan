@@ -31,7 +31,9 @@ const shell = {
 };
 
 export default function App() {
-  const [mode, setMode] = useState('simple');
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem('candlescan_mode') || 'simple'; } catch { return 'simple'; }
+  });
   const [timeframe, setTimeframe] = useState('5m');
   const [inputVal, setInputVal] = useState('');
   const [sym, setSym] = useState('');
@@ -75,6 +77,10 @@ export default function App() {
       localStorage.setItem('candlescan_history', JSON.stringify(history));
     } catch { /* quota exceeded */ }
   }, [history]);
+
+  useEffect(() => {
+    try { localStorage.setItem('candlescan_mode', mode); } catch { /* quota */ }
+  }, [mode]);
 
   // All timeframes available in all modes now
 
@@ -191,10 +197,8 @@ export default function App() {
 
   return (
     <div style={shell}>
-      <Header badge={headerBadge} lastScan={lastScan}>
+      <Header badge={headerBadge} lastScan={lastScan} mode={mode} onModeChange={setMode}>
         <GlobalMenu
-          mode={mode}
-          onModeChange={setMode}
           activeFilters={activeFilters}
           onFiltersChange={setActiveFilters}
         />
