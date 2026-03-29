@@ -20,7 +20,7 @@ export async function fetchYahooQuote(yahooSymbol) {
     const headers = {};
     try {
       const token = typeof localStorage !== 'undefined' ? localStorage.getItem('candlescan_batch_key') : '';
-      if (token) headers['X-Batch-Token'] = token;
+      if (token && /^[a-f0-9]{64}$/.test(token)) headers['X-Batch-Token'] = token;
     } catch { /* ignore */ }
     const res = await fetch(proxy, { cache: 'no-store', headers });
     if (!res.ok) return null;
