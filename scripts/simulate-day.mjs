@@ -38,12 +38,12 @@ const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 function parseArgs() {
   const args = process.argv.slice(2);
   let timeframe = '5m';
-  let indexName = 'NIFTY 50';
+  let indexName = 'NIFTY SMALLCAP 100';
   let date = null;
   let minConfidence = 80;
-  let maxPositions = 3;
-  let maxTotalTrades = 6;
-  let positionSize = 100000;
+  let maxPositions = 1;
+  let maxTotalTrades = 5;
+  let positionSize = 300000;
   let skipFirstBars = 4;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }

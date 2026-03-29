@@ -78,12 +78,12 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
   const [date, setDate] = useState(getLastTradingDay);
   const [startTime, setStartTime] = useState('09:15');
   const [endTime, setEndTime] = useState('10:30');
-  const [nseIndex, setNseIndex] = useState(savedIndex || 'NIFTY 50');
+  const [nseIndex, setNseIndex] = useState('NIFTY SMALLCAP 100');
   const [localEngine, setLocalEngine] = useState(engineVersion || 'v2');
-  const [capital, setCapital] = useState(500000);
-  const [positionSize, setPositionSize] = useState(100000);
-  const [maxConcurrent, setMaxConcurrent] = useState(3);
-  const [maxTotalTrades, setMaxTotalTrades] = useState(6);
+  const [capital, setCapital] = useState(300000);
+  const [positionSize, setPositionSize] = useState(300000);
+  const [maxConcurrent, setMaxConcurrent] = useState(1);
+  const [maxTotalTrades, setMaxTotalTrades] = useState(5);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ phase: '', completed: 0, total: 0, current: '' });
   const [results, setResults] = useState(null); // { trades, summary }
