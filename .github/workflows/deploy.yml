@@ -27,7 +27,13 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm test
       - run: npm run build
+      - name: Smoke check — verify dist contains app
+        run: |
+          test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
+          grep -q "CandleScan" dist/index.html || { echo "index.html does not contain CandleScan"; exit 1; }
+          echo "Smoke check passed"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

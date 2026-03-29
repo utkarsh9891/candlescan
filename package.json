@@ -9,8 +9,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "pages": "bash scripts/deploy-to-pages.sh",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:batch": "node scripts/batch-test.mjs",
-    "cache:charts": "node scripts/warm-chart-cache.mjs"
+    "cache:charts": "node scripts/warm-chart-cache.mjs",
+    "prepare": "git config core.hooksPath .git-hooks"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -19,6 +22,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^6.0.3",
-    "vite-plugin-pwa": "^1.2.0"
+    "vite-plugin-pwa": "^1.2.0",
+    "vitest": "^4.1.2"
   }
 }

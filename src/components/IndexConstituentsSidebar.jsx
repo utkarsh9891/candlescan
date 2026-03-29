@@ -75,10 +75,10 @@ export default function IndexConstituentsSidebar({
             flexShrink: 0,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 11, color: '#8892a8', fontWeight: 600, marginBottom: 4 }}>
-                Universe
+                Index
               </div>
               {showIndexSelect ? (
                 <select
