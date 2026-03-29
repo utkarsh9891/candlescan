@@ -201,7 +201,11 @@ async function tryFetchAllOriginsGet(yahooUrl) {
 async function fetchWithFallbacks(symbol, interval, range, options) {
   const yahooUrl = buildYahooUrl(symbol, interval, range);
   const enc = encodeURIComponent(yahooUrl);
-  const batchToken = options?.batchToken;
+  // Auto-read auth token from localStorage if not explicitly passed
+  let batchToken = options?.batchToken;
+  if (!batchToken && typeof localStorage !== 'undefined') {
+    try { batchToken = localStorage.getItem('candlescan_batch_key') || ''; } catch { /* ignore */ }
+  }
 
   const attempts = [];
 
