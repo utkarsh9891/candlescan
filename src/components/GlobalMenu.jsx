@@ -18,7 +18,7 @@ const CATEGORIES = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, customIndices, onAddCustomIndex, onRemoveCustomIndex }) {
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -273,6 +273,40 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
               )}
               <div style={{ padding: '4px 10px 6px' }}>
                 <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
+              </div>
+            </>
+          )}
+
+          {/* Engine version toggle */}
+          {onEngineVersionChange && (
+            <>
+              <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6 }} />
+              <div style={{
+                padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8',
+                textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4,
+              }}>
+                Engine
+              </div>
+              <div style={{ display: 'flex', gap: 6, padding: '4px 10px 8px' }}>
+                {[
+                  { key: 'v1', label: 'Classic' },
+                  { key: 'v2', label: 'Enhanced' },
+                ].map((v) => (
+                  <button
+                    key={v.key}
+                    type="button"
+                    onClick={() => onEngineVersionChange(v.key)}
+                    style={{
+                      flex: 1, fontSize: 12, fontWeight: 600, padding: '8px 0',
+                      border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb',
+                      borderRadius: 6, cursor: 'pointer',
+                      background: engineVersion === v.key ? '#2563eb' : '#fff',
+                      color: engineVersion === v.key ? '#fff' : '#4a5068',
+                    }}
+                  >
+                    {v.label}
+                  </button>
+                ))}
               </div>
             </>
           )}

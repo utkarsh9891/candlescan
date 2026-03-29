@@ -1,8 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { fetchOHLCV } from './engine/fetcher.js';
-import { detectPatterns } from './engine/patterns.js';
-import { detectLiquidityBox } from './engine/liquidityBox.js';
-import { computeRiskScore } from './engine/risk.js';
+import { detectPatterns as detectPatternsV1 } from './engine/patterns.js';
+import { detectLiquidityBox as detectLiquidityBoxV1 } from './engine/liquidityBox.js';
+import { computeRiskScore as computeRiskScoreV1 } from './engine/risk.js';
+import { detectPatterns as detectPatternsV2 } from './engine/patterns-v2.js';
+import { detectLiquidityBox as detectLiquidityBoxV2 } from './engine/liquidityBox-v2.js';
+import { computeRiskScore as computeRiskScoreV2 } from './engine/risk-v2.js';
 import Header from './components/Header.jsx';
 import TimeframePills from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
@@ -60,6 +63,13 @@ export default function App() {
   const [mode, setMode] = useState(() => {
     try { return localStorage.getItem('candlescan_mode') || 'simple'; } catch { return 'simple'; }
   });
+  const [engineVersion, setEngineVersion] = useState(() => {
+    try { return localStorage.getItem('candlescan_engine') || 'v2'; } catch { return 'v2'; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('candlescan_engine', engineVersion); } catch { /* quota */ }
+  }, [engineVersion]);
   const [timeframe, setTimeframe] = useState('5m');
   const [inputVal, setInputVal] = useState('');
   const [sym, setSym] = useState('');
@@ -210,9 +220,12 @@ export default function App() {
       }
 
       setCandles(cd);
-      const pat = detectPatterns(cd);
-      const bx = detectLiquidityBox(cd);
-      const rk = computeRiskScore({ candles: cd, patterns: pat, box: bx });
+      const detectPat = engineVersion === 'v2' ? detectPatternsV2 : detectPatternsV1;
+      const detectBox = engineVersion === 'v2' ? detectLiquidityBoxV2 : detectLiquidityBoxV1;
+      const scoreRisk = engineVersion === 'v2' ? computeRiskScoreV2 : computeRiskScoreV1;
+      const pat = detectPat(cd);
+      const bx = detectBox(cd);
+      const rk = scoreRisk({ candles: cd, patterns: pat, box: bx });
       setPatterns(pat);
       setBox(bx);
       setRisk(rk);
@@ -227,7 +240,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [timeframe]);
+  }, [timeframe, engineVersion]);
 
   useEffect(() => {
     if (mode !== 'advanced' || simulated || !yahooSym || !risk) {
@@ -332,6 +345,8 @@ export default function App() {
           customIndices={customIndices}
           onAddCustomIndex={handleAddCustomIndex}
           onRemoveCustomIndex={handleRemoveCustomIndex}
+          engineVersion={engineVersion}
+          onEngineVersionChange={setEngineVersion}
         />
       </Header>
 
