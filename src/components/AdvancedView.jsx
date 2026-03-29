@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import SimpleView from './SimpleView.jsx';
+import SimpleView, { ScoreDetailsToggle } from './SimpleView.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -77,13 +77,43 @@ export default function AdvancedView(props) {
   const [durationMin, setDurationMin] = useState(null);
   const [leftSec, setLeftSec] = useState(null);
 
+  // Request notification permission on first timer start
+  const [notifGranted, setNotifGranted] = useState(
+    typeof Notification !== 'undefined' && Notification.permission === 'granted'
+  );
+
   useEffect(() => {
     if (leftSec == null || leftSec <= 0) return undefined;
     const t = setTimeout(() => setLeftSec((s) => (s <= 1 ? 0 : s - 1)), 1000);
     return () => clearTimeout(t);
   }, [leftSec]);
 
-  const startTimer = (m) => { setDurationMin(m); setLeftSec(m * 60); };
+  // Fire notification when timer reaches 0
+  useEffect(() => {
+    if (leftSec !== 0 || !durationMin) return;
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+
+    const action = risk?.action || 'TRADE';
+    const price = last?.c ? last.c.toFixed(2) : '—';
+    const sl = risk?.sl ? risk.sl.toFixed(2) : '—';
+    const target = risk?.target ? risk.target.toFixed(2) : '—';
+
+    new Notification(`EXIT NOW — ${sym}`, {
+      body: `${action} | Price: ${price} | SL: ${sl} | Target: ${target} | ${durationMin}m timer expired`,
+      icon: '/candlescan/icons/icon-192.svg',
+      tag: 'candlescan-exit-timer',
+      requireInteraction: true,
+    });
+  }, [leftSec, durationMin, sym, risk, last]);
+
+  const startTimer = (m) => {
+    setDurationMin(m);
+    setLeftSec(m * 60);
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().then((p) => setNotifGranted(p === 'granted'));
+    }
+  };
   const stopTimer = () => { setDurationMin(null); setLeftSec(null); };
 
   const showTimer = leftSec != null;
@@ -93,17 +123,30 @@ export default function AdvancedView(props) {
   if (leftSec < 60) timerColor = '#dc2626';
   else if (leftSec < 180) timerColor = '#d97706';
 
-  return (
-    <div>
-      <SimpleView {...props} />
+  const timerSlot = (
+    <>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 5, marginTop: 8, marginBottom: showTimer ? 0 : 8,
+        flexWrap: 'wrap', padding: '0 2px',
+      }}>
+        <span style={{ fontSize: 11, color: '#8892a8', fontWeight: 600 }}>Exit timer:</span>
+        {[4, 5, 8, 10, 15].map((m) => (
+          <button key={m} type="button" style={timerBtn(durationMin === m)} onClick={() => startTimer(m)}>
+            {m}m
+          </button>
+        ))}
+        {!notifGranted && typeof Notification !== 'undefined' && Notification.permission !== 'denied' && (
+          <span style={{ fontSize: 10, color: '#d97706', marginLeft: 4 }}>
+            (tap to enable alerts)
+          </span>
+        )}
+      </div>
 
-      <QuoteMicroCard quote={quote} last={last} sym={sym} />
-
-      {/* Exit timer */}
       {showTimer && (
         <div
           style={{
-            marginBottom: 12,
+            marginTop: 6,
+            marginBottom: 8,
             padding: 12,
             borderRadius: 10,
             border: `2px solid ${timerColor}`,
@@ -111,40 +154,43 @@ export default function AdvancedView(props) {
             textAlign: 'center',
           }}
         >
-          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 2 }}>Exit timer</div>
-          <div
-            style={{
-              fontSize: 24,
-              fontWeight: 800,
-              color: timerColor,
-              fontFamily: mono,
-              animation: leftSec < 60 ? 'pulse 1s infinite' : undefined,
-            }}
-          >
-            {String(mm).padStart(2, '0')}:{String(ss).padStart(2, '0')}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <div style={{ fontSize: 11, color: '#8892a8' }}>{sym}</div>
+            <div
+              style={{
+                fontSize: 28,
+                fontWeight: 800,
+                color: timerColor,
+                fontFamily: mono,
+                animation: leftSec < 60 ? 'pulse 1s infinite' : undefined,
+              }}
+            >
+              {String(mm).padStart(2, '0')}:{String(ss).padStart(2, '0')}
+            </div>
+            <button type="button" onClick={stopTimer} style={timerBtn(false)}>Stop</button>
           </div>
           {leftSec === 0 && (
-            <div style={{ marginTop: 4, fontWeight: 800, color: '#dc2626', fontSize: 14 }}>EXIT NOW!</div>
+            <div style={{ marginTop: 6, fontWeight: 800, color: '#dc2626', fontSize: 15 }}>
+              EXIT NOW — {risk?.action} @ {last?.c?.toFixed(2)}
+            </div>
           )}
-          <button type="button" onClick={stopTimer} style={{ ...timerBtn(false), marginTop: 6 }}>Stop</button>
         </div>
       )}
+    </>
+  );
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, color: '#8892a8', fontWeight: 600 }}>Exit timer:</span>
-        {[4, 5, 8, 10, 15].map((m) => (
-          <button key={m} type="button" style={timerBtn(durationMin === m)} onClick={() => startTimer(m)}>
-            {m}m
-          </button>
-        ))}
-      </div>
+  return (
+    <div>
+      <SimpleView {...props} beforeScoreDetails={timerSlot} />
+
+      <QuoteMicroCard quote={quote} last={last} sym={sym} />
 
       {/* Symbol + change */}
       <div style={{ ...card, fontSize: 13, color: '#4a5068' }}>
         <strong style={{ color: '#1a1d26' }}>{sym}</strong>
         {companyName && companyName !== sym ? ` — ${companyName}` : ''}
         <span style={{ fontFamily: mono, marginLeft: 8, color: changePct >= 0 ? '#16a34a' : '#dc2626' }}>
-          Δ {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%
+          {changePct >= 0 ? '▲' : '▼'} {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%
         </span>
       </div>
 
@@ -194,6 +240,8 @@ export default function AdvancedView(props) {
         ))}
       </div>
 
+      {/* Score details — at the very end (informational only) */}
+      <ScoreDetailsToggle risk={risk} />
 
       <style>{`
         @keyframes pulse {
