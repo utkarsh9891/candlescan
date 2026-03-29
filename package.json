@@ -11,6 +11,7 @@
     "pages": "bash scripts/deploy-to-pages.sh",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:batch": "node scripts/batch-test.mjs",
     "cache:charts": "node scripts/warm-chart-cache.mjs",
     "prepare": "git config core.hooksPath .git-hooks"

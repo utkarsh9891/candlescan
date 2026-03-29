@@ -36,6 +36,17 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.js'],
     environment: 'node',
+    coverage: {
+      provider: 'v8',
+      include: ['src/engine/**', 'src/config/**', 'src/utils/**', 'src/data/**'],
+      exclude: ['src/**/__fixtures__/**', 'src/**/*.test.js'],
+      thresholds: {
+        statements: 65,
+        branches: 55,
+        functions: 70,
+        lines: 65,
+      },
+    },
   },
   base: '/candlescan/',
   server: {
