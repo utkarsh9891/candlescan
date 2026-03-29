@@ -198,6 +198,87 @@ Recreate it (Section 3, Steps 2-3).
 
 ---
 
+## 6. PWA Auto-Updates
+
+The CandleScan PWA uses Workbox with `registerType: 'autoUpdate'`. This means:
+
+- When you deploy a new version (push to `main` → GitHub Actions → Pages), a new
+  service worker is generated with updated asset hashes.
+- On the user's next visit, the browser detects the new SW in the background.
+- The new SW activates and replaces the old one **automatically** — no user action needed.
+- Cached assets are refreshed to match the new build.
+
+**You don't need to do anything** — the PWA updates itself whenever the frontend is redeployed.
+
+### Force update on your device
+If the auto-update hasn't kicked in:
+1. Open the app
+2. Pull down to refresh (or reload the page)
+3. Close and reopen the app
+
+### Check current version
+Open browser DevTools → Application → Service Workers. The "Source" column shows
+the current SW file hash — a new hash means a new version was loaded.
+
+---
+
+## 7. Rate Limit Configuration
+
+The daily request limit for unauthenticated users is set to **20** in `worker/index.js`:
+
+```javascript
+const DAILY_LIMIT = 20;
+```
+
+To change it:
+1. Edit the number in `worker/index.js`
+2. Redeploy: `cd worker && npx wrangler deploy`
+
+KV entries auto-expire after 24 hours (TTL 86400s). No cleanup needed.
+
+### View current rate limit data
+```bash
+cd worker
+npx wrangler kv key list --binding RATE_LIMIT
+```
+
+### Unblock a specific IP early
+```bash
+# Find the key from the list above (format: rl:<hash>:<date>)
+npx wrangler kv key delete --binding RATE_LIMIT "rl:abc123:2026-03-29"
+```
+
+---
+
+## 8. Worker Allowed Origins
+
+The worker only accepts requests from these origins:
+
+```javascript
+'https://utkarsh9891.github.io'  // GitHub Pages
+'http://localhost'                // Dev server
+'http://127.0.0.1'               // Dev server (IP)
+'https://localhost'               // Capacitor (Android PWA)
+'capacitor://localhost'           // Capacitor native
+```
+
+To add a new origin, edit `ALLOWED_ORIGINS` in `worker/index.js` and redeploy.
+
+---
+
+## 9. Worker URL
+
+The worker is deployed at:
+```
+https://candlescan-proxy.utkarsh-dev.workers.dev
+```
+
+This URL is hardcoded in `src/engine/fetcher.js` as `CF_WORKER_URL`. If you ever
+change the worker name or Cloudflare account, update this constant and redeploy
+both the worker and the frontend.
+
+---
+
 ## Security Notes
 
 - **Secrets are safe.** `BATCH_AUTH_HASH` is stored in Cloudflare's encrypted
