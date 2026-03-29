@@ -31,12 +31,7 @@ const TIMEFRAME_MAP = {
   '15m': { interval: '15m', range: '5d' },
 };
 
-const CAPITAL = 300000;
-const MAX_POSITIONS = 5;
-const POSITION_SIZE = CAPITAL / MAX_POSITIONS; // 60,000
 const TX_COST_PCT = 0.0005; // 0.05% per side
-const MIN_CONFIDENCE = 65;
-const SKIP_FIRST_BARS = 3; // skip first 15 min on 5m
 const MIN_AVG_VOLUME = 50000;
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
@@ -44,11 +39,24 @@ function parseArgs() {
   const args = process.argv.slice(2);
   let timeframe = '5m';
   let indexName = 'NIFTY 50';
+  let date = null;
+  let minConfidence = 80;
+  let maxPositions = 3;
+  let maxTotalTrades = 6;
+  let positionSize = 100000;
+  let skipFirstBars = 4;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
+    if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
+    if (args[i] === '--confidence' && args[i + 1]) { minConfidence = +args[++i]; continue; }
+    if (args[i] === '--max-positions' && args[i + 1]) { maxPositions = +args[++i]; continue; }
+    if (args[i] === '--max-trades' && args[i + 1]) { maxTotalTrades = +args[++i]; continue; }
+    if (args[i] === '--position-size' && args[i + 1]) { positionSize = +args[++i]; continue; }
+    if (args[i] === '--skip-bars' && args[i + 1]) { skipFirstBars = +args[++i]; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
-  return { timeframe, indexName };
+  const capital = positionSize * maxPositions;
+  return { timeframe, indexName, date, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital };
 }
 
 function parseChartJson(data) {
@@ -91,26 +99,21 @@ async function getCandles(symbol, interval, range) {
   return trimTrailingFlatCandles(parsed.candles);
 }
 
-/** Filter candles to only include last Friday's trading session */
-function filterLastFriday(candles) {
+const IST_OFFSET = 19800; // +5:30 in seconds
+
+function istDateStr(t) {
+  return new Date((t + IST_OFFSET) * 1000).toISOString().slice(0, 10);
+}
+
+/** Filter candles to a specific date, or last trading day if not specified */
+function filterByDate(candles, targetDate) {
   if (!candles?.length) return [];
-
-  // Find the last Friday in the data
-  const dates = candles.map(c => {
-    const d = new Date(c.t * 1000);
-    return { date: d.toISOString().slice(0, 10), day: d.getDay(), candle: c };
-  });
-
-  // Find unique dates that are Friday (day=5)
-  const fridays = [...new Set(dates.filter(d => d.day === 5).map(d => d.date))];
-  if (!fridays.length) {
-    // Fallback: use last trading day
-    const lastDate = dates[dates.length - 1].date;
-    return candles.filter(c => new Date(c.t * 1000).toISOString().slice(0, 10) === lastDate);
+  if (targetDate) {
+    return candles.filter(c => istDateStr(c.t) === targetDate);
   }
-
-  const lastFriday = fridays[fridays.length - 1];
-  return candles.filter(c => new Date(c.t * 1000).toISOString().slice(0, 10) === lastFriday);
+  // Fallback: last available date
+  const lastDate = istDateStr(candles[candles.length - 1].t);
+  return candles.filter(c => istDateStr(c.t) === lastDate);
 }
 
 function formatTime(ts) {
@@ -118,13 +121,19 @@ function formatTime(ts) {
 }
 
 async function main() {
-  const { timeframe, indexName } = parseArgs();
+  const { timeframe, indexName, date: targetDate, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital } = parseArgs();
+  const MIN_CONFIDENCE = minConfidence;
+  const MAX_POSITIONS = maxPositions;
+  const POSITION_SIZE = positionSize;
+  const CAPITAL = capital;
+  const SKIP_FIRST_BARS = skipFirstBars;
+  const MAX_TOTAL_TRADES = maxTotalTrades;
   const tf = TIMEFRAME_MAP[timeframe];
   if (!tf) { console.error(`Unknown timeframe: ${timeframe}`); process.exit(1); }
 
   console.log(`\n=== CandleScan v2 Simulation ===`);
-  console.log(`Index: ${indexName} | Timeframe: ${timeframe}`);
-  console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max positions: ${MAX_POSITIONS} | Per trade: Rs.${POSITION_SIZE.toLocaleString()}`);
+  console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'}`);
+  console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${MAX_POSITIONS} | Per trade: Rs.${POSITION_SIZE.toLocaleString()} | Max trades: ${MAX_TOTAL_TRADES}`);
   console.log(`Min confidence: ${MIN_CONFIDENCE} | Skip first ${SKIP_FIRST_BARS} bars | Min avg volume: ${MIN_AVG_VOLUME.toLocaleString()}`);
   console.log('');
 
@@ -142,19 +151,19 @@ async function main() {
     try {
       const allCandles = await getCandles(yahooSym, tf.interval, tf.range);
       if (!allCandles?.length) continue;
-      const fridayCandles = filterLastFriday(allCandles);
-      if (fridayCandles.length < 10) continue;
+      const dayCandles = filterByDate(allCandles, targetDate);
+      if (dayCandles.length < 10) continue;
 
       // Check avg volume
-      const avgVol = fridayCandles.reduce((s, c) => s + c.v, 0) / fridayCandles.length;
+      const avgVol = dayCandles.reduce((s, c) => s + c.v, 0) / dayCandles.length;
       if (avgVol < MIN_AVG_VOLUME) continue;
 
       // We also need prior candles for pattern lookback
       // Find where Friday starts in allCandles
-      const fridayStart = allCandles.indexOf(fridayCandles[0]);
+      const fridayStart = allCandles.indexOf(dayCandles[0]);
       const priorCandles = allCandles.slice(Math.max(0, fridayStart - 20), fridayStart);
 
-      stockData[sym] = { fridayCandles, priorCandles, avgVol };
+      stockData[sym] = { dayCandles, priorCandles, avgVol };
       loaded++;
     } catch (e) {
       // Skip on error
@@ -171,27 +180,28 @@ async function main() {
 
   // Get Friday date from first stock
   const firstStock = Object.values(stockData)[0];
-  const fridayDate = new Date(firstStock.fridayCandles[0].t * 1000).toISOString().slice(0, 10);
-  console.log(`Simulation date: ${fridayDate}`);
+  const simDate = istDateStr(firstStock.dayCandles[0].t);
+  console.log(`Simulation date: ${simDate}`);
   console.log('─'.repeat(100));
 
   // 3. Bar-by-bar simulation
   const trades = [];
   const openPositions = []; // { sym, direction, entry, sl, target, entryBar, shares }
-  let capital = CAPITAL;
+  let currentCapital = CAPITAL;
   let peakCapital = CAPITAL;
   let maxDrawdown = 0;
+  let totalTradesOpened = 0;
 
   // Find max bars across all stocks
-  const maxBars = Math.max(...Object.values(stockData).map(d => d.fridayCandles.length));
+  const maxBars = Math.max(...Object.values(stockData).map(d => d.dayCandles.length));
 
   for (let barIdx = 0; barIdx < maxBars; barIdx++) {
     // --- Check existing positions for SL/target hit ---
     for (let p = openPositions.length - 1; p >= 0; p--) {
       const pos = openPositions[p];
       const sd = stockData[pos.sym];
-      if (barIdx >= sd.fridayCandles.length) continue;
-      const bar = sd.fridayCandles[barIdx];
+      if (barIdx >= sd.dayCandles.length) continue;
+      const bar = sd.dayCandles[barIdx];
 
       let exitPrice = null;
       let exitReason = null;
@@ -205,7 +215,7 @@ async function main() {
       }
 
       // EOD exit on last bar
-      if (!exitPrice && barIdx === sd.fridayCandles.length - 1) {
+      if (!exitPrice && barIdx === sd.dayCandles.length - 1) {
         exitPrice = bar.c;
         exitReason = 'EOD';
       }
@@ -217,9 +227,9 @@ async function main() {
         const txCost = (pos.entry * pos.shares + exitPrice * pos.shares) * TX_COST_PCT;
         const netPnl = grossPnl - txCost;
 
-        capital += netPnl;
-        peakCapital = Math.max(peakCapital, capital);
-        maxDrawdown = Math.max(maxDrawdown, peakCapital - capital);
+        currentCapital += netPnl;
+        peakCapital = Math.max(peakCapital, currentCapital);
+        maxDrawdown = Math.max(maxDrawdown, peakCapital - currentCapital);
 
         trades.push({
           sym: pos.sym,
@@ -231,7 +241,7 @@ async function main() {
           txCost,
           netPnl,
           reason: exitReason,
-          entryTime: formatTime(sd.fridayCandles[pos.entryBar].t),
+          entryTime: formatTime(sd.dayCandles[pos.entryBar].t),
           exitTime: formatTime(bar.t),
           confidence: pos.confidence,
           action: pos.action,
@@ -245,16 +255,18 @@ async function main() {
     // --- Generate new signals (skip first N bars) ---
     if (barIdx < SKIP_FIRST_BARS) continue;
     if (openPositions.length >= MAX_POSITIONS) continue;
+    if (totalTradesOpened >= MAX_TOTAL_TRADES) continue;
 
     for (const sym of Object.keys(stockData)) {
       if (openPositions.length >= MAX_POSITIONS) break;
+      if (totalTradesOpened >= MAX_TOTAL_TRADES) break;
       if (openPositions.some(p => p.sym === sym)) continue; // already in this stock
 
       const sd = stockData[sym];
-      if (barIdx >= sd.fridayCandles.length) continue;
+      if (barIdx >= sd.dayCandles.length) continue;
 
       // Build candle array: prior context + Friday candles up to current bar (NO LOOKAHEAD)
-      const candlesSoFar = [...sd.priorCandles, ...sd.fridayCandles.slice(0, barIdx + 1)];
+      const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, barIdx + 1)];
       if (candlesSoFar.length < 10) continue;
 
       // Run v2 engine
@@ -281,6 +293,7 @@ async function main() {
         action: risk.action,
         pattern: patterns[0]?.name || 'None',
       });
+      totalTradesOpened++;
     }
   }
 
@@ -325,16 +338,16 @@ async function main() {
 
   console.log('\n' + '═'.repeat(100));
   console.log('=== SIMULATION SUMMARY ===\n');
-  console.log(`Date:            ${fridayDate}`);
+  console.log(`Date:            ${simDate}`);
   console.log(`Stocks scanned:  ${loaded}`);
   console.log(`Total trades:    ${trades.length}`);
   console.log(`Wins / Losses:   ${wins} / ${losses} (${winRate}% win rate)`);
   console.log(`Total P&L:       Rs.${totalPnl.toFixed(0)} (${(totalPnl / CAPITAL * 100).toFixed(2)}%)`);
   console.log(`Transaction cost: Rs.${totalTxCost.toFixed(0)}`);
   console.log(`Starting capital: Rs.${CAPITAL.toLocaleString()}`);
-  console.log(`Final capital:   Rs.${capital.toFixed(0)}`);
+  console.log(`Final capital:   Rs.${currentCapital.toFixed(0)}`);
   console.log(`Max drawdown:    Rs.${maxDrawdown.toFixed(0)} (${(maxDrawdown / CAPITAL * 100).toFixed(2)}%)`);
-  console.log(`Return:          ${((capital - CAPITAL) / CAPITAL * 100).toFixed(2)}%`);
+  console.log(`Return:          ${((currentCapital - CAPITAL) / CAPITAL * 100).toFixed(2)}%`);
   console.log('');
 }
 
