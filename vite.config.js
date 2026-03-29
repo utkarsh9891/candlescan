@@ -41,10 +41,10 @@ export default defineConfig({
       include: ['src/engine/**', 'src/config/**', 'src/utils/**', 'src/data/**'],
       exclude: ['src/**/__fixtures__/**', 'src/**/*.test.js'],
       thresholds: {
-        statements: 65,
+        statements: 70,
         branches: 55,
-        functions: 70,
-        lines: 65,
+        functions: 75,
+        lines: 75,
       },
     },
   },

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { trimTrailingFlatCandles, TIMEFRAME_MAP, _normalizeSymbol, _parseChartJson } from './fetcher.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { trimTrailingFlatCandles, TIMEFRAME_MAP, _normalizeSymbol, _parseChartJson, fetchOHLCV, generateSimulatedCandles } from './fetcher.js';
 import { withTrailingFlats, yahooChartJson } from './__fixtures__/candles.js';
 
 describe('trimTrailingFlatCandles', () => {
@@ -180,5 +180,161 @@ describe('parseChartJson', () => {
       },
     };
     expect(_parseChartJson(json).companyName).toBe('TCS Ltd');
+  });
+});
+
+describe('fetchOHLCV (with mocked fetch)', () => {
+  const mockFetch = vi.fn();
+  let originalFetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch;
+    mockFetch.mockReset();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('returns candles on successful fetch', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => yahooChartJson,
+      text: async () => JSON.stringify(yahooChartJson),
+    });
+
+    const result = await fetchOHLCV('RELIANCE', '5m');
+    expect(result.candles.length).toBeGreaterThan(0);
+    expect(result.live).toBe(true);
+    expect(result.simulated).toBe(false);
+    expect(result.yahooSymbol).toBe('RELIANCE.NS');
+    expect(result.displaySymbol).toBe('RELIANCE');
+    expect(result.companyName).toBe('Reliance Industries');
+  });
+
+  it('returns error when all fetches fail', async () => {
+    mockFetch.mockRejectedValue(new Error('network error'));
+
+    const result = await fetchOHLCV('RELIANCE', '5m');
+    expect(result.candles).toEqual([]);
+    expect(result.error).toBeTruthy();
+    expect(result.live).toBe(false);
+  });
+
+  it('normalizes display symbol to uppercase', async () => {
+    mockFetch.mockRejectedValue(new Error('fail'));
+    const result = await fetchOHLCV('reliance', '5m');
+    expect(result.displaySymbol).toBe('RELIANCE');
+    expect(result.yahooSymbol).toBe('RELIANCE.NS');
+  });
+
+  it('uses default timeframe when invalid key given', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => yahooChartJson,
+    });
+
+    const result = await fetchOHLCV('TCS', 'invalid_tf');
+    expect(result.candles.length).toBeGreaterThan(0);
+    // Should still work using default 5m timeframe
+  });
+
+  it('tries fallback after first proxy fails', async () => {
+    let callCount = 0;
+    mockFetch.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('proxy down');
+      return { ok: true, json: async () => yahooChartJson };
+    });
+
+    const result = await fetchOHLCV('INFY', '5m');
+    expect(result.candles.length).toBeGreaterThan(0);
+    expect(callCount).toBeGreaterThan(1); // fell through to fallback
+  });
+
+  it('handles fetch returning non-ok status', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 429 });
+
+    const result = await fetchOHLCV('SBIN', '5m');
+    expect(result.candles).toEqual([]);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('handles fetch returning invalid JSON structure', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ invalid: 'structure' }),
+    });
+
+    const result = await fetchOHLCV('TCS', '5m');
+    expect(result.candles).toEqual([]);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('trims trailing flat candles from results', async () => {
+    const jsonWithFlats = {
+      chart: {
+        result: [{
+          meta: { longName: 'Test' },
+          timestamp: [1, 2, 3, 4, 5, 6, 7, 8],
+          indicators: {
+            quote: [{
+              open:   [100, 101, 102, 103, 104, 105, 105.5, 105.5],
+              high:   [102, 103, 104, 105, 106, 106, 105.5, 105.5],
+              low:    [99,  100, 101, 102, 103, 104, 105.5, 105.5],
+              close:  [101, 102, 103, 104, 105, 105.5, 105.5, 105.5],
+              volume: [1e5, 1e5, 1e5, 1e5, 1e5, 1e5, 0, 0],
+            }],
+          },
+        }],
+      },
+    };
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => jsonWithFlats,
+    });
+
+    const result = await fetchOHLCV('TEST', '5m');
+    // Should trim the 2 flat trailing candles
+    expect(result.candles.length).toBe(6);
+  });
+});
+
+describe('generateSimulatedCandles', () => {
+  it('generates the requested number of candles', () => {
+    const candles = generateSimulatedCandles('RELIANCE', 50);
+    expect(candles.length).toBe(50);
+  });
+
+  it('each candle has OHLCV fields', () => {
+    const candles = generateSimulatedCandles('TCS', 10);
+    for (const c of candles) {
+      expect(c).toHaveProperty('t');
+      expect(c).toHaveProperty('o');
+      expect(c).toHaveProperty('h');
+      expect(c).toHaveProperty('l');
+      expect(c).toHaveProperty('c');
+      expect(c).toHaveProperty('v');
+      expect(c.h).toBeGreaterThanOrEqual(c.l);
+    }
+  });
+
+  it('is deterministic for the same symbol', () => {
+    const a = generateSimulatedCandles('RELIANCE', 20);
+    const b = generateSimulatedCandles('RELIANCE', 20);
+    expect(a).toEqual(b);
+  });
+
+  it('produces different data for different symbols', () => {
+    const a = generateSimulatedCandles('RELIANCE', 20);
+    const b = generateSimulatedCandles('TCS', 20);
+    expect(a[0].o).not.toBe(b[0].o);
+  });
+
+  it('defaults to 80 candles', () => {
+    const candles = generateSimulatedCandles('X');
+    expect(candles.length).toBe(80);
   });
 });
