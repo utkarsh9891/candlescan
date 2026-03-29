@@ -394,3 +394,6 @@ export async function fetchOHLCV(inputSymbol, timeframeKey, options) {
     companyName: displaySymbol,
   };
 }
+
+/** @internal — exported for unit tests only */
+export { normalizeSymbol as _normalizeSymbol, parseChartJson as _parseChartJson };
