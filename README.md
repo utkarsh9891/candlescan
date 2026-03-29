@@ -134,8 +134,7 @@ candlescan/
 │   │   ├── IndexConstituentsSidebar.jsx  # Slide-out stock list
 │   │   ├── RiskRing.jsx         # Circular confidence gauge
 │   │   ├── RiskScoreSignals.jsx # 5-component breakdown display
-│   │   ├── EmptyState.jsx       # Placeholder before first scan
-│   │   └── SignalFilters.jsx    # Category filter dropdown
+│   │   └── EmptyState.jsx       # Placeholder before first scan
 │   ├── engine/
 │   │   ├── fetcher.js           # Yahoo Finance fetch + fallback chain
 │   │   ├── patterns.js          # 46-rule pattern detection (8 categories)
@@ -148,8 +147,7 @@ candlescan/
 │   ├── config/
 │   │   └── nseIndices.js        # Index list + defaults
 │   ├── data/
-│   │   ├── signalCategories.js  # Category labels + rule counts
-│   │   └── niftyStocks.js       # Deprecated stub
+│   │   └── signalCategories.js  # Category labels + rule counts
 │   └── utils/
 │       └── batchAuth.js         # Passphrase localStorage helpers
 ├── worker/
