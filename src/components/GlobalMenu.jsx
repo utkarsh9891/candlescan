@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import CustomIndexInput from './CustomIndexInput.jsx';
 
 const CATEGORIES = [
   { key: 'engulfing', label: 'Engulfing' },
@@ -17,7 +18,7 @@ const CATEGORIES = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction }) {
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, customIndices, onAddCustomIndex, onRemoveCustomIndex }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -218,6 +219,63 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction }
               None
             </button>
           </div>
+
+          {/* Custom indices section */}
+          {onAddCustomIndex && (
+            <>
+              <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6 }} />
+              <div
+                style={{
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: '#8892a8',
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
+                  marginTop: 4,
+                }}
+              >
+                Custom Indices
+              </div>
+              {customIndices?.length > 0 ? (
+                customIndices.map((ci) => (
+                  <div
+                    key={ci.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '6px 10px',
+                    }}
+                  >
+                    <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#1a1d26' }}>
+                      {ci.id}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveCustomIndex(ci.id)}
+                      title={`Remove ${ci.id}`}
+                      style={{
+                        width: 22, height: 22, borderRadius: 4, border: '1px solid #fecaca',
+                        background: '#fef2f2', color: '#dc2626', fontSize: 14, fontWeight: 700,
+                        cursor: 'pointer', display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', lineHeight: 1, padding: 0,
+                      }}
+                    >
+                      −
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding: '4px 10px', fontSize: 11, color: '#8892a8' }}>
+                  None added yet
+                </div>
+              )}
+              <div style={{ padding: '4px 10px 6px' }}>
+                <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

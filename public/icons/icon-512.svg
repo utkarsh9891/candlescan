@@ -1,19 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="32" fill="#1a1d26"/>
-  <g stroke-linecap="round" stroke-width="6">
-    <!-- Candle 1: bearish (red) -->
-    <line x1="52" y1="50" x2="52" y2="142" stroke="#dc2626" opacity="0.4"/>
-    <rect x="42" y="65" width="20" height="50" rx="2" fill="#dc2626"/>
-    <!-- Candle 2: bullish (green) -->
-    <line x1="82" y1="55" x2="82" y2="148" stroke="#16a34a" opacity="0.4"/>
-    <rect x="72" y="80" width="20" height="45" rx="2" fill="#16a34a"/>
-    <!-- Candle 3: strong bullish (green) -->
-    <line x1="112" y1="40" x2="112" y2="130" stroke="#16a34a" opacity="0.4"/>
-    <rect x="102" y="50" width="20" height="55" rx="2" fill="#16a34a"/>
-    <!-- Candle 4: bullish (green) -->
-    <line x1="142" y1="35" x2="142" y2="110" stroke="#16a34a" opacity="0.4"/>
-    <rect x="132" y="42" width="20" height="40" rx="2" fill="#16a34a"/>
+  <rect width="192" height="192" fill="none"/>
+  <g transform="translate(28, 28) scale(0.71)">
+    <rect width="192" height="192" rx="32" fill="#1a1d26"/>
+    <g stroke-linecap="round" stroke-width="6">
+      <line x1="52" y1="50" x2="52" y2="142" stroke="#dc2626" opacity="0.4"/>
+      <rect x="42" y="65" width="20" height="50" rx="2" fill="#dc2626"/>
+      <line x1="82" y1="55" x2="82" y2="148" stroke="#16a34a" opacity="0.4"/>
+      <rect x="72" y="80" width="20" height="45" rx="2" fill="#16a34a"/>
+      <line x1="112" y1="40" x2="112" y2="130" stroke="#16a34a" opacity="0.4"/>
+      <rect x="102" y="50" width="20" height="55" rx="2" fill="#16a34a"/>
+      <line x1="142" y1="35" x2="142" y2="110" stroke="#16a34a" opacity="0.4"/>
+      <rect x="132" y="42" width="20" height="40" rx="2" fill="#16a34a"/>
+    </g>
+    <line x1="30" y1="155" x2="162" y2="155" stroke="#2563eb" stroke-width="3" stroke-dasharray="6 4" opacity="0.7"/>
   </g>
-  <!-- Scan line -->
-  <line x1="30" y1="155" x2="162" y2="155" stroke="#2563eb" stroke-width="3" stroke-dasharray="6 4" opacity="0.7"/>
 </svg>

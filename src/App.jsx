@@ -329,6 +329,9 @@ export default function App() {
             ? { label: 'Index Scanner', onClick: () => setView('batch') }
             : { label: 'Stock Scanner', onClick: () => setView('main') }
           }
+          customIndices={customIndices}
+          onAddCustomIndex={handleAddCustomIndex}
+          onRemoveCustomIndex={handleRemoveCustomIndex}
         />
       </Header>
 
@@ -343,8 +346,6 @@ export default function App() {
           }}
           savedIndex={nseIndex}
           indexOptions={allIndexOptions}
-          onAddCustomIndex={handleAddCustomIndex}
-          onRemoveCustomIndex={handleRemoveCustomIndex}
         />
       </div>
 
@@ -487,8 +488,6 @@ export default function App() {
         nseIndexOptions={allIndexOptions}
         selectedNseIndex={nseIndex}
         onNseIndexChange={setNseIndex}
-        onAddCustomIndex={handleAddCustomIndex}
-        onRemoveCustomIndex={handleRemoveCustomIndex}
         symbols={constituents}
         loading={constituentsLoading}
         error={constituentsError}
