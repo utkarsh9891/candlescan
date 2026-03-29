@@ -22,3 +22,41 @@ export const NSE_INDEX_OPTIONS = [
 ];
 
 export const DEFAULT_NSE_INDEX_ID = 'NIFTY 200';
+
+const CUSTOM_INDICES_KEY = 'candlescan_custom_indices';
+
+/** Read custom indices from localStorage. */
+export function getCustomIndices() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_INDICES_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Add a custom index (id = exact NSE API name). Returns updated list. */
+export function addCustomIndex(id) {
+  const existing = getCustomIndices();
+  const normalized = id.trim().toUpperCase();
+  // Skip if already in built-in or custom list
+  if (NSE_INDEX_OPTIONS.some((o) => o.id === normalized)) return existing;
+  if (existing.some((o) => o.id === normalized)) return existing;
+  const updated = [...existing, { id: normalized, label: `${normalized} (custom)` }];
+  try { localStorage.setItem(CUSTOM_INDICES_KEY, JSON.stringify(updated)); } catch { /* quota */ }
+  return updated;
+}
+
+/** Remove a custom index by id. Returns updated list. */
+export function removeCustomIndex(id) {
+  const updated = getCustomIndices().filter((o) => o.id !== id);
+  try { localStorage.setItem(CUSTOM_INDICES_KEY, JSON.stringify(updated)); } catch { /* quota */ }
+  return updated;
+}
+
+/** Built-in + custom indices merged. */
+export function getAllIndexOptions() {
+  return [...NSE_INDEX_OPTIONS, ...getCustomIndices()];
+}
