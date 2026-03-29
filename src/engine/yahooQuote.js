@@ -17,7 +17,12 @@ export async function fetchYahooQuote(yahooSymbol) {
   try {
     const target = quoteUrl(yahooSymbol);
     const proxy = `${CF_WORKER_URL}?url=${encodeURIComponent(target)}`;
-    const res = await fetch(proxy, { cache: 'no-store' });
+    const headers = {};
+    try {
+      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('candlescan_batch_key') : '';
+      if (token) headers['X-Batch-Token'] = token;
+    } catch { /* ignore */ }
+    const res = await fetch(proxy, { cache: 'no-store', headers });
     if (!res.ok) return null;
     const j = await res.json();
     const q = j?.quoteResponse?.result?.[0];
