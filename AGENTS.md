@@ -215,7 +215,8 @@ Navigation via shared GlobalMenu:
 ## Deployment
 
 ### Frontend (GitHub Actions)
-Push to `main` → `npm ci && npm run build` → deploy `dist/` to GitHub Pages
+Push to `main` → `npm ci` → `npm test` → `npm run build` → smoke check → deploy to GitHub Pages
+Tests and build must pass; smoke check verifies `dist/index.html` contains "CandleScan".
 
 ### Cloudflare Worker
 ```bash
@@ -239,9 +240,38 @@ Full guide: `worker/OPS.md`
 - **Error handling**: try-catch around localStorage, fetch, JSON.parse
 
 ## Testing
-No test framework. Verify manually:
+
+### Framework: Vitest
+Configured in `vite.config.js` (`test` block). Tests live alongside source files as `*.test.js`.
+
 ```bash
-npm run build                    # Must succeed
-curl -s http://127.0.0.1:5173/candlescan/ | grep -q "CandleScan" && echo "ok"
-node scripts/batch-test.mjs 5m --index "NIFTY 50"  # CLI batch scan
+npm test            # Run all tests once (vitest run)
+npm run test:watch  # Watch mode
 ```
+
+### Test files
+| File | Tests |
+|------|-------|
+| `src/engine/patterns.test.js` | Pattern detection: bullish/bearish engulfing, hammer, field validation, sorting, edge cases |
+| `src/engine/risk.test.js` | Risk scoring: confidence range, direction, action labels, entry/SL/target, context detection |
+| `src/engine/liquidityBox.test.js` | Box detection: consolidation, breakout, quality score, index bounds, empty input |
+| `src/engine/fetcher.test.js` | `trimTrailingFlatCandles`, `TIMEFRAME_MAP` validation |
+| `src/config/nseIndices.test.js` | Custom index CRUD, dedup, merge with built-in, localStorage mock |
+| `src/utils/batchAuth.test.js` | Token get/set/has/clear with localStorage mock |
+
+### Test fixtures
+`src/engine/__fixtures__/candles.js` — reusable candle data sets:
+- `bullishEngulfing`, `bearishEngulfing`, `hammerPattern` — pattern triggers
+- `consolidation`, `consolidationBreakout` — box detection data
+- `withTrailingFlats` — flat candle trimming
+- `sideways` — no-pattern data
+- `yahooChartJson` — mock API response
+
+### Pre-push hook
+`.git-hooks/pre-push` runs `npm test && npm run build` before every push. Auto-configured via `npm install` (`prepare` script sets `core.hooksPath`). Bypass: `git push --no-verify`.
+
+### Adding new tests
+- Create `*.test.js` next to the source file
+- Import from `vitest` (`describe`, `it`, `expect`, `vi`)
+- For localStorage-dependent code, use `vi.stubGlobal('localStorage', mock)`
+- Add test candle data to `__fixtures__/candles.js` if needed

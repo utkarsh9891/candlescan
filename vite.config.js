@@ -33,6 +33,10 @@ export default defineConfig({
       },
     }),
   ],
+  test: {
+    include: ['src/**/*.test.js'],
+    environment: 'node',
+  },
   base: '/candlescan/',
   server: {
     host: '127.0.0.1',

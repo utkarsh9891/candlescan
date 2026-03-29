@@ -41,6 +41,12 @@ Mobile-first NSE candlestick pattern scanner with liquidity box analysis, risk s
 - Service worker caches app shell for fast loads
 - **Auto-update**: When a new version is deployed, the service worker detects the change and updates automatically on next visit (Workbox `autoUpdate` strategy)
 
+### Custom Indices
+- Add any NSE index via hamburger menu → "Custom Indices" section
+- Validates against live NSE API before adding
+- Persists in localStorage, appears in all dropdowns with "(custom)" label
+- Remove via minus button in the menu
+
 ### Two View Modes
 - **Simple**: Compact decision card — price, action, score ring, top patterns, entry/SL/target
 - **Advanced**: Adds bid/ask quote, exit timer, full score breakdown, R:R display
@@ -92,6 +98,8 @@ npm start
 | Script | Purpose |
 |--------|---------|
 | `npm start` / `npm run dev` | Vite dev server at `127.0.0.1:5173` with Yahoo + NSE proxy |
+| `npm test` | Run all unit tests (Vitest) |
+| `npm run test:watch` | Run tests in watch mode |
 | `npm run build` | Production build → `dist/` (base: `/candlescan/`) |
 | `npm run preview` | Serve built `dist/` locally (no dev proxy, uses CORS fallbacks) |
 | `npm run pages` | Build + copy to sibling `../utkarsh9891.github.io/candlescan/` (legacy) |
@@ -235,6 +243,41 @@ Dev-only disk cache at `cache/charts/`. See [cache/charts/README.md](cache/chart
 - 7-day TTL (configurable via `CANDLESCAN_CHART_CACHE_MAX_AGE_MS`)
 - Disable: `CANDLESCAN_CHART_CACHE=0 npm start`
 - Warm all: `npm run cache:charts`
+
+---
+
+## Testing
+
+### Unit Tests (Vitest)
+```bash
+npm test          # Run all tests once
+npm run test:watch  # Watch mode (re-runs on file change)
+```
+
+**47 tests** across 6 test files covering:
+- `src/engine/patterns.test.js` — pattern detection (bullish/bearish engulfing, hammer, edge cases)
+- `src/engine/risk.test.js` — risk scoring (confidence range, direction, action labels, context detection)
+- `src/engine/liquidityBox.test.js` — box detection (consolidation, breakout, empty input)
+- `src/engine/fetcher.test.js` — utility functions (trimTrailingFlatCandles, timeframe map)
+- `src/config/nseIndices.test.js` — custom index add/remove/dedup/merge
+- `src/utils/batchAuth.test.js` — token get/set/clear/has
+
+Test fixtures at `src/engine/__fixtures__/candles.js` — reusable candle data sets.
+
+### Pre-push Hook
+Tests + build run automatically before every `git push`. If either fails, the push is blocked.
+- Auto-configured via `npm install` (uses `.git-hooks/pre-push`)
+- Bypass in emergencies: `git push --no-verify`
+
+### CI Pipeline
+GitHub Actions runs on every push to `main`:
+1. `npm ci` — clean install
+2. `npm test` — all unit tests must pass
+3. `npm run build` — production build
+4. **Smoke check** — verifies `dist/index.html` exists and contains "CandleScan"
+5. Deploy to GitHub Pages
+
+If tests or build fail, deployment is blocked.
 
 ---
 
