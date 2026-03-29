@@ -141,7 +141,9 @@ export async function runSimulation({
   }
 
   const stockCount = Object.keys(stockData).length;
-  if (!stockCount) return empty();
+  if (!stockCount) {
+    throw new Error(`No trading data found for ${date}. This date may be a market holiday, or the data is older than 5 trading days. Try a more recent trading day.`);
+  }
 
   // Phase 3: Bar-by-bar simulation
   const trades = [];

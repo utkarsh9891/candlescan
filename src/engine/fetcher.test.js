@@ -321,10 +321,16 @@ describe('generateSimulatedCandles', () => {
     }
   });
 
-  it('is deterministic for the same symbol', () => {
+  it('is deterministic for the same symbol (prices match)', () => {
     const a = generateSimulatedCandles('RELIANCE', 20);
     const b = generateSimulatedCandles('RELIANCE', 20);
-    expect(a).toEqual(b);
+    // Prices are seeded-random (deterministic), timestamps use Date.now() (may differ by ms)
+    for (let i = 0; i < a.length; i++) {
+      expect(a[i].o).toBe(b[i].o);
+      expect(a[i].h).toBe(b[i].h);
+      expect(a[i].l).toBe(b[i].l);
+      expect(a[i].c).toBe(b[i].c);
+    }
   });
 
   it('produces different data for different symbols', () => {
