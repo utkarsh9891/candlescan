@@ -42,14 +42,15 @@ async function sha256(text) {
 
 /**
  * Validate batch token against stored hash.
+ * Client sends SHA-256 hash of passphrase (never plaintext).
+ * Worker compares directly to env.BATCH_AUTH_HASH.
  * Returns true if token is valid, false if invalid, null if no token provided.
  */
 async function validateBatchToken(request, env) {
   const token = request.headers.get('X-Batch-Token');
   if (!token) return null; // no token = regular request
   if (!env.BATCH_AUTH_HASH) return false; // secret not configured
-  const hash = await sha256(token);
-  return hash === env.BATCH_AUTH_HASH;
+  return token === env.BATCH_AUTH_HASH;
 }
 
 /**
