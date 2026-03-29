@@ -13,6 +13,7 @@ import AdvancedView from './components/AdvancedView.jsx';
 import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
+import BatchScanPage from './components/BatchScanPage.jsx';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID } from './config/nseIndices.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList } from './engine/nseIndexFetch.js';
@@ -95,6 +96,11 @@ export default function App() {
 
   // Signal highlight toggle
   const [highlightSignals, setHighlightSignals] = useState(true);
+
+  // View state: 'main' | 'batch'
+  const [view, setView] = useState('main');
+  // Track if user navigated to main from batch (for back-to-batch button)
+  const [cameFromBatch, setCameFromBatch] = useState(false);
 
   // Drawing tool state
   const [drawingMode, setDrawingMode] = useState(null);
@@ -233,7 +239,7 @@ export default function App() {
     runScan(t);
   };
 
-  const onScanClick = () => runScan(inputVal);
+  const onScanClick = () => { setCameFromBatch(false); runScan(inputVal); };
 
   const changePct =
     candles.length >= 2
@@ -300,9 +306,47 @@ export default function App() {
 
   return (
     <div style={shell}>
+      {/* Shared header — single instance, nav action changes per view */}
       <Header badge={headerBadge} lastScan={lastScan} mode={mode} onModeChange={setMode}>
-        <GlobalMenu activeFilters={activeFilters} onFiltersChange={setActiveFilters} />
+        <GlobalMenu
+          activeFilters={activeFilters}
+          onFiltersChange={setActiveFilters}
+          navAction={view === 'main'
+            ? { label: 'Index Scanner', onClick: () => setView('batch') }
+            : { label: 'Stock Scanner', onClick: () => setView('main') }
+          }
+        />
       </Header>
+
+      {/* Batch scan page — always mounted, hidden when not active */}
+      <div style={{ display: view === 'batch' ? 'block' : 'none' }}>
+        <BatchScanPage
+          onSelectSymbol={(s) => {
+            setInputVal(s);
+            onQuick(s);
+            setView('main');
+            setCameFromBatch(true);
+          }}
+          savedIndex={nseIndex}
+        />
+      </div>
+
+      {/* Main view — hidden when batch is active */}
+      <div style={{ display: view === 'main' ? 'block' : 'none' }}>
+      {cameFromBatch && (
+        <button
+          type="button"
+          onClick={() => { setView('batch'); setCameFromBatch(false); }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+            padding: '8px 12px', marginBottom: 10, borderRadius: 8,
+            border: '1px solid #e2e5eb', background: '#eff6ff',
+            color: '#2563eb', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+          }}
+        >
+          ← Back to scan results
+        </button>
+      )}
       <SearchBar
         inputVal={inputVal}
         setInputVal={setInputVal}
@@ -455,6 +499,7 @@ export default function App() {
           Educational tool only — not financial advice. You are responsible for your trades.
         </p>
       </footer>
+      </div>{/* end main view */}
 
       <style>{`
         @keyframes csload {

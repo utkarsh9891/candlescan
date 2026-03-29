@@ -1,9 +1,38 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
 import { chartCacheDevPlugin } from './vite-plugin-chart-cache.mjs';
 
 export default defineConfig({
-  plugins: [react(), chartCacheDevPlugin()],
+  plugins: [
+    react(),
+    chartCacheDevPlugin(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      manifest: {
+        name: 'CandleScan',
+        short_name: 'CandleScan',
+        description: 'NSE candlestick pattern scanner & risk scorer',
+        display: 'standalone',
+        orientation: 'portrait',
+        theme_color: '#1a1d26',
+        background_color: '#f5f6f8',
+        icons: [
+          { src: 'icons/icon-192.svg', sizes: '192x192', type: 'image/svg+xml' },
+          { src: 'icons/icon-512.svg', sizes: '512x512', type: 'image/svg+xml' },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,png}'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/candlescan-proxy\.utkarsh-dev\.workers\.dev/,
+            handler: 'NetworkOnly',
+          },
+        ],
+      },
+    }),
+  ],
   base: '/candlescan/',
   server: {
     host: '127.0.0.1',
