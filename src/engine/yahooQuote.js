@@ -1,11 +1,10 @@
 /**
- * Yahoo v7 quote (bid/ask where available) — same Cloudflare proxy as chart fetcher.
+ * Yahoo v7 quote (bid/ask where available) — uses centralized CF proxy.
  */
 import { CF_WORKER_URL } from './fetcher.js';
 
 function quoteUrl(symbols) {
-  const q = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;
-  return q;
+  return `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;
 }
 
 /**
@@ -15,14 +14,8 @@ function quoteUrl(symbols) {
 export async function fetchYahooQuote(yahooSymbol) {
   if (!yahooSymbol || !CF_WORKER_URL) return null;
   try {
-    const target = quoteUrl(yahooSymbol);
-    const proxy = `${CF_WORKER_URL}?url=${encodeURIComponent(target)}`;
-    const headers = {};
-    try {
-      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('candlescan_batch_key') : '';
-      if (token && /^[a-f0-9]{64}$/.test(token)) headers['X-Batch-Token'] = token;
-    } catch { /* ignore */ }
-    const res = await fetch(proxy, { cache: 'no-store', headers });
+    const { cfFetch } = await import('../utils/cfProxy.js');
+    const res = await cfFetch(quoteUrl(yahooSymbol));
     if (!res.ok) return null;
     const j = await res.json();
     const q = j?.quoteResponse?.result?.[0];

@@ -18,7 +18,7 @@ const CATEGORIES = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange }) {
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -115,6 +115,27 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
                   <rect x="14" y="14" width="7" height="7" rx="1" />
                 </svg>
                 {navAction.label}
+              </button>
+              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
+            </>
+          )}
+
+          {simulationAction && (
+            <>
+              <button
+                type="button"
+                onClick={() => { setOpen(false); simulationAction.onClick(); }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26',
+                  background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer',
+                  WebkitTapHighlightColor: 'transparent',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                </svg>
+                {simulationAction.label}
               </button>
               <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
             </>
