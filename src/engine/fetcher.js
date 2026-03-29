@@ -201,11 +201,13 @@ async function tryFetchAllOriginsGet(yahooUrl) {
 async function fetchWithFallbacks(symbol, interval, range, options) {
   const yahooUrl = buildYahooUrl(symbol, interval, range);
   const enc = encodeURIComponent(yahooUrl);
-  // Auto-read auth token from localStorage if not explicitly passed
-  let batchToken = options?.batchToken;
+  // Auto-read auth token from localStorage if not explicitly passed.
+  // Only send if it looks like a valid SHA-256 hash (64 hex chars).
+  let batchToken = options?.batchToken || '';
   if (!batchToken && typeof localStorage !== 'undefined') {
     try { batchToken = localStorage.getItem('candlescan_batch_key') || ''; } catch { /* ignore */ }
   }
+  if (batchToken && !/^[a-f0-9]{64}$/.test(batchToken)) batchToken = ''; // reject non-hash tokens
 
   const attempts = [];
 

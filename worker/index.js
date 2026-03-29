@@ -49,7 +49,9 @@ async function sha256(text) {
 async function validateBatchToken(request, env) {
   const token = request.headers.get('X-Batch-Token');
   if (!token) return null; // no token = regular request
-  if (!env.BATCH_AUTH_HASH) return false; // secret not configured
+  // Ignore tokens that don't look like SHA-256 hashes (stale plaintext tokens)
+  if (!/^[a-f0-9]{64}$/.test(token)) return null; // treat as no token, not invalid
+  if (!env.BATCH_AUTH_HASH) return null; // secret not configured = skip auth
   return token === env.BATCH_AUTH_HASH;
 }
 
