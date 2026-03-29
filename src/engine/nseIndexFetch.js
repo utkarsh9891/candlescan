@@ -65,17 +65,9 @@ export async function fetchNseIndexSymbolList(indexName) {
   }
 
   if (typeof window !== 'undefined' && CF_WORKER_URL) {
-    attempts.push(() => {
-      const proxied = `${CF_WORKER_URL}?url=${encodeURIComponent(target)}`;
-      const headers = {};
-      try {
-        const token = localStorage.getItem('candlescan_batch_key') || '';
-        if (token && /^[a-f0-9]{64}$/.test(token)) headers['X-Batch-Token'] = token;
-      } catch { /* ignore */ }
-      return fetch(proxied, { cache: 'no-store', headers }).then(r => {
-        if (!r.ok) throw new Error(String(r.status));
-        return r.json();
-      });
+    attempts.push(async () => {
+      const { cfFetchJson } = await import('../utils/cfProxy.js');
+      return cfFetchJson(target);
     });
   }
 

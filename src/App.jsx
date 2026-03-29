@@ -17,7 +17,9 @@ import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
 import BatchScanPage from './components/BatchScanPage.jsx';
+import SimulationPage from './components/SimulationPage.jsx';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
+import { hasBatchToken } from './utils/batchAuth.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
@@ -121,10 +123,10 @@ export default function App() {
   // Signal highlight toggle
   const [highlightSignals, setHighlightSignals] = useState(true);
 
-  // View state: 'main' | 'batch'
+  // View state: 'main' | 'batch' | 'simulate'
   const [view, setView] = useState('main');
-  // Track if user navigated to main from batch (for back-to-batch button)
   const [cameFromBatch, setCameFromBatch] = useState(false);
+  const [cameFromSimulation, setCameFromSimulation] = useState(false);
 
   // Drawing tool state
   const [drawingMode, setDrawingMode] = useState(null);
@@ -266,7 +268,7 @@ export default function App() {
     runScan(t);
   };
 
-  const onScanClick = () => { setCameFromBatch(false); runScan(inputVal); };
+  const onScanClick = () => { setCameFromBatch(false); setCameFromSimulation(false); runScan(inputVal); };
 
   const changePct =
     candles.length >= 2
@@ -340,8 +342,14 @@ export default function App() {
           onFiltersChange={setActiveFilters}
           navAction={view === 'main'
             ? { label: 'Index Scanner', onClick: () => setView('batch') }
+            : view === 'batch'
+            ? { label: 'Stock Scanner', onClick: () => setView('main') }
             : { label: 'Stock Scanner', onClick: () => setView('main') }
           }
+          simulationAction={hasBatchToken() ? {
+            label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
+            onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
+          } : null}
           customIndices={customIndices}
           onAddCustomIndex={handleAddCustomIndex}
           onRemoveCustomIndex={handleRemoveCustomIndex}
@@ -364,7 +372,22 @@ export default function App() {
         />
       </div>
 
-      {/* Main view — hidden when batch is active */}
+      {/* Simulation page — always mounted, hidden when not active */}
+      <div style={{ display: view === 'simulate' ? 'block' : 'none' }}>
+        <SimulationPage
+          onSelectSymbol={(s) => {
+            setInputVal(s);
+            onQuick(s);
+            setView('main');
+            setCameFromSimulation(true);
+          }}
+          savedIndex={nseIndex}
+          indexOptions={allIndexOptions}
+          engineVersion={engineVersion}
+        />
+      </div>
+
+      {/* Main view — hidden when not active */}
       <div style={{ display: view === 'main' ? 'block' : 'none' }}>
       {cameFromBatch && (
         <button
@@ -378,6 +401,20 @@ export default function App() {
           }}
         >
           ← Back to scan results
+        </button>
+      )}
+      {cameFromSimulation && (
+        <button
+          type="button"
+          onClick={() => { setView('simulate'); setCameFromSimulation(false); }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+            padding: '8px 12px', marginBottom: 10, borderRadius: 8,
+            border: '1px solid #e2e5eb', background: '#eff6ff',
+            color: '#2563eb', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+          }}
+        >
+          ← Back to simulation results
         </button>
       )}
       <SearchBar

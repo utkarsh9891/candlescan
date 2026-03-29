@@ -145,13 +145,9 @@ async function tryFetch(url) {
  * @param {string} [batchToken] — optional passphrase for authenticated batch scans
  */
 async function tryFetchCfWorker(yahooUrl, batchToken) {
-  if (!CF_WORKER_URL) throw new Error('CF_WORKER_URL not set');
-  const url = `${CF_WORKER_URL}?url=${encodeURIComponent(yahooUrl)}`;
-  const headers = {};
-  if (batchToken) headers['X-Batch-Token'] = batchToken;
-  const res = await fetch(url, { cache: 'no-store', headers });
-  if (!res.ok) throw new Error(String(res.status));
-  return res.json();
+  // Use centralized CF proxy with auto-auth
+  const { cfFetchJson } = await import('../utils/cfProxy.js');
+  return cfFetchJson(yahooUrl, batchToken);
 }
 
 /**
@@ -201,13 +197,8 @@ async function tryFetchAllOriginsGet(yahooUrl) {
 async function fetchWithFallbacks(symbol, interval, range, options) {
   const yahooUrl = buildYahooUrl(symbol, interval, range);
   const enc = encodeURIComponent(yahooUrl);
-  // Auto-read auth token from localStorage if not explicitly passed.
-  // Only send if it looks like a valid SHA-256 hash (64 hex chars).
-  let batchToken = options?.batchToken || '';
-  if (!batchToken && typeof localStorage !== 'undefined') {
-    try { batchToken = localStorage.getItem('candlescan_batch_key') || ''; } catch { /* ignore */ }
-  }
-  if (batchToken && !/^[a-f0-9]{64}$/.test(batchToken)) batchToken = ''; // reject non-hash tokens
+  // Token is auto-read from localStorage by cfProxy.js if not explicitly passed
+  const batchToken = options?.batchToken || '';
 
   const attempts = [];
 
