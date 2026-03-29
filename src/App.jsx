@@ -14,7 +14,7 @@ import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
 import BatchScanPage from './components/BatchScanPage.jsx';
-import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID } from './config/nseIndices.js';
+import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
@@ -80,12 +80,26 @@ export default function App() {
   const [nseIndex, setNseIndex] = useState(() => {
     try {
       const s = localStorage.getItem('candlescan_nse_index');
-      if (s && NSE_INDEX_OPTIONS.some((o) => o.id === s)) return s;
+      if (s && getAllIndexOptions().some((o) => o.id === s)) return s;
     } catch {
       /* ignore */
     }
     return DEFAULT_NSE_INDEX_ID;
   });
+  const [customIndices, setCustomIndices] = useState(() => getCustomIndices());
+  const allIndexOptions = [...NSE_INDEX_OPTIONS, ...customIndices];
+
+  const handleAddCustomIndex = useCallback((id) => {
+    const updated = addCustomIndex(id);
+    setCustomIndices(updated);
+  }, []);
+
+  const handleRemoveCustomIndex = useCallback((id) => {
+    const updated = removeCustomIndex(id);
+    setCustomIndices(updated);
+    if (nseIndex === id) setNseIndex(DEFAULT_NSE_INDEX_ID);
+  }, [nseIndex]);
+
   const [constituents, setConstituents] = useState([]);
   const [constituentsLoading, setConstituentsLoading] = useState(false);
   const [constituentsError, setConstituentsError] = useState('');
@@ -328,6 +342,9 @@ export default function App() {
             setCameFromBatch(true);
           }}
           savedIndex={nseIndex}
+          indexOptions={allIndexOptions}
+          onAddCustomIndex={handleAddCustomIndex}
+          onRemoveCustomIndex={handleRemoveCustomIndex}
         />
       </div>
 
@@ -354,7 +371,7 @@ export default function App() {
         loading={loading}
         onOpenStockList={() => setSidebarOpen(true)}
         universeLabel={
-          NSE_INDEX_OPTIONS.find((o) => o.id === nseIndex)?.label ?? nseIndex
+          allIndexOptions.find((o) => o.id === nseIndex)?.label ?? nseIndex
         }
       />
 
@@ -467,9 +484,11 @@ export default function App() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         indexLabel={nseIndex}
-        nseIndexOptions={NSE_INDEX_OPTIONS}
+        nseIndexOptions={allIndexOptions}
         selectedNseIndex={nseIndex}
         onNseIndexChange={setNseIndex}
+        onAddCustomIndex={handleAddCustomIndex}
+        onRemoveCustomIndex={handleRemoveCustomIndex}
         symbols={constituents}
         loading={constituentsLoading}
         error={constituentsError}

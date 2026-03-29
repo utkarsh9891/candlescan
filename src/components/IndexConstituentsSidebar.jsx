@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import CustomIndexInput from './CustomIndexInput.jsx';
+import { NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -9,11 +11,14 @@ export default function IndexConstituentsSidebar({
   nseIndexOptions = [],
   selectedNseIndex,
   onNseIndexChange,
+  onAddCustomIndex,
+  onRemoveCustomIndex,
   symbols,
   loading,
   error,
   onSelectSymbol,
 }) {
+  const builtInIds = useMemo(() => new Set(NSE_INDEX_OPTIONS.map((o) => o.id)), []);
   const [q, setQ] = useState('');
 
   const filtered = useMemo(() => {
@@ -80,28 +85,50 @@ export default function IndexConstituentsSidebar({
                 Universe
               </div>
               {showIndexSelect ? (
-                <select
-                  value={selectedNseIndex}
-                  onChange={(e) => onNseIndexChange(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #e2e5eb',
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: '#1a1d26',
-                    background: '#fafbfc',
-                    boxSizing: 'border-box',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {nseIndexOptions.map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                <>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <select
+                      value={selectedNseIndex}
+                      onChange={(e) => onNseIndexChange(e.target.value)}
+                      style={{
+                        flex: 1,
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #e2e5eb',
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: '#1a1d26',
+                        background: '#fafbfc',
+                        boxSizing: 'border-box',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {nseIndexOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    {!builtInIds.has(selectedNseIndex) && onRemoveCustomIndex && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveCustomIndex(selectedNseIndex)}
+                        title="Remove custom index"
+                        style={{
+                          width: 32, height: 32, borderRadius: 6, border: '1px solid #fecaca',
+                          background: '#fef2f2', color: '#dc2626', fontSize: 16, fontWeight: 700,
+                          cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center',
+                          justifyContent: 'center', lineHeight: 1,
+                        }}
+                      >
+                        −
+                      </button>
+                    )}
+                  </div>
+                  {onAddCustomIndex && (
+                    <CustomIndexInput onAdd={onAddCustomIndex} />
+                  )}
+                </>
               ) : (
                 <div style={{ fontSize: 16, fontWeight: 800, color: '#1a1d26' }}>{indexLabel}</div>
               )}

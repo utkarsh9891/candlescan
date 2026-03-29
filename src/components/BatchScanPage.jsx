@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useMemo } from 'react';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan } from '../engine/batchScan.js';
 import { getBatchToken, setBatchToken, hasBatchToken, clearBatchToken } from '../utils/batchAuth.js';
+import CustomIndexInput from './CustomIndexInput.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 const ALL_TFS = ['1m', '5m', '15m', '30m', '1h', '1d'];
@@ -130,7 +131,9 @@ function ResultCard({ r, onTap }) {
   );
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, onAddCustomIndex, onRemoveCustomIndex }) {
+  const allOptions = indexOptions || NSE_INDEX_OPTIONS;
+  const builtInIds = useMemo(() => new Set(NSE_INDEX_OPTIONS.map((o) => o.id)), []);
   const [nseIndex, setNseIndex] = useState(savedIndex || DEFAULT_NSE_INDEX_ID);
   const [timeframe, setTimeframe] = useState('5m');
   const [scanning, setScanning] = useState(false);
@@ -234,20 +237,47 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex }) {
 
       {/* Index selector */}
       <div style={{ marginBottom: 10 }}>
-        <select
-          value={nseIndex}
-          onChange={(e) => setNseIndex(e.target.value)}
-          disabled={scanning}
-          style={{
-            width: '100%', padding: '10px 12px', fontSize: 13, fontWeight: 600,
-            borderRadius: 8, border: '1px solid #e2e5eb', background: '#fff',
-            color: '#1a1d26', cursor: 'pointer',
-          }}
-        >
-          {NSE_INDEX_OPTIONS.map((o) => (
-            <option key={o.id} value={o.id}>{o.label}</option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <select
+            value={nseIndex}
+            onChange={(e) => setNseIndex(e.target.value)}
+            disabled={scanning}
+            style={{
+              flex: 1, padding: '10px 12px', fontSize: 13, fontWeight: 600,
+              borderRadius: 8, border: '1px solid #e2e5eb', background: '#fff',
+              color: '#1a1d26', cursor: scanning ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {allOptions.map((o) => (
+              <option key={o.id} value={o.id}>{o.label}</option>
+            ))}
+          </select>
+          {!builtInIds.has(nseIndex) && onRemoveCustomIndex && (
+            <button
+              type="button"
+              onClick={() => {
+                onRemoveCustomIndex(nseIndex);
+                setNseIndex(DEFAULT_NSE_INDEX_ID);
+              }}
+              title="Remove custom index"
+              disabled={scanning}
+              style={{
+                width: 32, height: 32, borderRadius: 6, border: '1px solid #fecaca',
+                background: '#fef2f2', color: '#dc2626', fontSize: 16, fontWeight: 700,
+                cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', lineHeight: 1,
+              }}
+            >
+              −
+            </button>
+          )}
+        </div>
+        {onAddCustomIndex && !scanning && (
+          <CustomIndexInput onAdd={(id) => {
+            onAddCustomIndex(id);
+            setNseIndex(id);
+          }} />
+        )}
       </div>
 
       {/* Timeframe pills */}
