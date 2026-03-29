@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
 
 const mono = "'SF Mono', Menlo, monospace";
