@@ -159,9 +159,9 @@ async function main() {
       if (avgVol < MIN_AVG_VOLUME) continue;
 
       // We also need prior candles for pattern lookback
-      // Find where Friday starts in allCandles
-      const fridayStart = allCandles.indexOf(dayCandles[0]);
-      const priorCandles = allCandles.slice(Math.max(0, fridayStart - 20), fridayStart);
+      // Find where target date starts in allCandles
+      const dayStart = allCandles.indexOf(dayCandles[0]);
+      const priorCandles = allCandles.slice(Math.max(0, dayStart - 20), dayStart);
 
       stockData[sym] = { dayCandles, priorCandles, avgVol };
       loaded++;
@@ -171,14 +171,14 @@ async function main() {
     // Throttle
     if (loaded % 10 === 0) await new Promise(r => setTimeout(r, 200));
   }
-  console.log(`Loaded ${loaded} stocks with valid Friday data\n`);
+  console.log(`Loaded ${loaded} stocks with valid target date data\n`);
 
   if (!loaded) {
     console.log('No data available. Try warming the cache: npm run cache:charts');
     process.exit(0);
   }
 
-  // Get Friday date from first stock
+  // Get target date date from first stock
   const firstStock = Object.values(stockData)[0];
   const simDate = istDateStr(firstStock.dayCandles[0].t);
   console.log(`Simulation date: ${simDate}`);
@@ -265,7 +265,7 @@ async function main() {
       const sd = stockData[sym];
       if (barIdx >= sd.dayCandles.length) continue;
 
-      // Build candle array: prior context + Friday candles up to current bar (NO LOOKAHEAD)
+      // Build candle array: prior context + target date candles up to current bar (NO LOOKAHEAD)
       const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, barIdx + 1)];
       if (candlesSoFar.length < 10) continue;
 
