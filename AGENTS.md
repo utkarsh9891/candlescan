@@ -1,111 +1,247 @@
 # AGENTS.md — Coding Agent Guide for CandleScan
 
-> This file helps AI coding agents (Claude, Cursor, Copilot, Aider, etc.) understand the project quickly.
+> This file helps AI coding agents (Claude, Cursor, Copilot, Aider, etc.) understand the project quickly and make correct changes.
 
 ## What is this project?
-CandleScan is a React + Vite mobile-first web app for NSE (National Stock Exchange of India) candlestick pattern detection, liquidity box analysis, and risk scoring. It fetches OHLCV data from Yahoo Finance and renders interactive SVG charts.
+CandleScan is a React 18 + Vite 6 mobile-first PWA for NSE (National Stock Exchange of India) candlestick pattern detection, liquidity box analysis, and risk scoring (0-100). It fetches OHLCV data from Yahoo Finance, renders interactive SVG charts, and includes a batch index scanner with auth-gated access.
 
 ## Quick commands
 ```bash
 npm install          # Install dependencies
 npm start            # Dev server at http://127.0.0.1:5173/candlescan/
 npm run build        # Production build → dist/
-npm run preview      # Serve built files locally
+npm run preview      # Serve built files locally (no dev proxy)
+npm run test:batch   # CLI batch scan using cache/charts/
+npm run cache:charts # Pre-warm chart cache from Yahoo
 ```
 
 ## Dev server with simulated data (no network needed)
 ```bash
-# Open http://127.0.0.1:5173/candlescan/?simulate=1
 npm start
+# Open http://127.0.0.1:5173/candlescan/?simulate=1
 ```
+Only works when `import.meta.env.DEV === true`. Production builds ignore this flag.
+
+---
 
 ## Architecture
+
 - **Framework**: React 18, Vite 6, no external charting library
 - **Entry**: `src/main.jsx` → `src/App.jsx`
-- **State management**: React useState/useEffect (no Redux/Context)
-- **Chart**: Custom SVG in `src/components/Chart.jsx`
-- **Analysis engine**: `src/engine/` (fetcher, patterns, liquidityBox, risk)
+- **State management**: React useState/useEffect only (no Redux/Context)
+- **Chart**: Custom SVG in `src/components/Chart.jsx` (zoom, pan, crosshair, drawings)
+- **Analysis engine**: `src/engine/` — fetcher, patterns (46 rules), liquidityBox, risk (5-component scoring)
+- **Batch scanner**: `src/engine/batchScan.js` — throttled multi-stock scan with concurrency control
+- **PWA**: `vite-plugin-pwa` with Workbox `autoUpdate` — service worker + manifest
 - **Deployment**: GitHub Actions → GitHub Pages at `utkarsh9891.github.io/candlescan/`
 - **CORS proxy**: Cloudflare Worker at `worker/` for Yahoo Finance + NSE India `/api/*`
-- **Index constituents**: NSE `equity-stockIndices` at runtime (`src/engine/nseIndexFetch.js`); dev uses Vite proxy `/candlescan/__candlescan-nse`
-- **Local chart cache**: `cache/charts/` (gitignored) — `vite-plugin-chart-cache.mjs` + `scripts/lib/chart-cache-fs.mjs`; `npm run cache:charts` / `test:batch`
+- **Auth**: SHA-256 passphrase validation at Worker level; `src/utils/batchAuth.js` for localStorage
+- **Rate limiting**: Cloudflare KV — 20 req/day per IP (unauthenticated); batch token bypasses
+- **Index constituents**: NSE `equity-stockIndices` at runtime; dev uses Vite proxy; prod uses CF Worker
+- **Local chart cache**: `cache/charts/` (gitignored) — `vite-plugin-chart-cache.mjs` serves from disk in dev
 
-## Key files
+---
+
+## Key Files
+
 | File | Purpose |
 |------|---------|
-| `src/App.jsx` | Root component, state orchestration, scan logic |
-| `src/components/Chart.jsx` | SVG chart: candles, zoom, pan, crosshair, drawings, highlights |
-| `src/engine/fetcher.js` | Yahoo Finance data fetching with proxy fallback chain |
-| `src/engine/patterns.js` | Candlestick pattern detection (8 categories, returns candleIndices) |
-| `src/engine/liquidityBox.js` | Consolidation box detection |
-| `src/engine/risk.js` | 5-component risk scoring (0-100), action determination |
-| `src/config/nseIndices.js` | NSE index catalog + default index id |
-| `src/engine/nseIndexFetch.js` | Fetch & parse index constituents (browser) |
-| `src/data/niftyStocks.js` | Deprecated stub; re-exports config only |
-| `src/components/SimpleView.jsx` | Main decision display (Action → Score → Details) |
-| `src/components/SignalFilters.jsx` | Dropdown signal filter popover |
-| `vite.config.js` | Build config, base path `/candlescan/`, dev proxy |
-| `worker/index.js` | Cloudflare Worker CORS proxy (Yahoo chart + NSE API) |
+| `src/App.jsx` | Root component: 15+ state vars, scan logic, view routing (`main`/`batch`), history, drawings |
+| `src/components/Chart.jsx` | SVG chart: candles, zoom (ctrl+wheel/pinch), pan, crosshair, H-Line/Box drawings, pattern highlights, liquidity box overlay |
+| `src/components/SimpleView.jsx` | Compact result card: price, change%, action label, risk ring, top 2 patterns, entry/SL/target |
+| `src/components/AdvancedView.jsx` | Extended view: adds bid/ask quote, exit timer, full 5-component breakdown, R:R |
+| `src/components/BatchScanPage.jsx` | Index scanner: index selector, timeframe pills, progress bar, result cards with filter pills (Actionable/All + Buy/Short), search, passphrase modal |
+| `src/components/GlobalMenu.jsx` | Hamburger menu: nav action (Stock Scanner ↔ Index Scanner) + signal category filters (8 checkboxes) |
+| `src/components/Header.jsx` | Brand, status badge (LIVE/DEMO/NO DATA/READY), Simple/Advanced toggle, last scan time |
+| `src/components/IndexConstituentsSidebar.jsx` | Slide-out modal: index dropdown + searchable symbol list |
+| `src/engine/fetcher.js` | Yahoo Finance v8 fetch with fallback chain: Vite proxy → CF Worker → Jina Reader → allorigins. Optional `batchToken` header. Simulated data in dev. |
+| `src/engine/patterns.js` | 46-rule pattern detection across 8 categories. Returns `{ name, direction, strength, reliability, category, candleIndices }` |
+| `src/engine/liquidityBox.js` | Consolidation box detection (last 25 candles, segments 5-12 bars). ATR-relative thresholds, volume-aware scoring, breakout strength + trap depth |
+| `src/engine/risk.js` | 5-component scoring: signal clarity (0-25), low noise (0-20), risk:reward (0-25), pattern reliability (0-15), confluence (0-15). Rescaled 40-100. Action thresholds: ≥72 STRONG, ≥58 BUY/SHORT, ≥50 WAIT |
+| `src/engine/batchScan.js` | Throttled batch scanner: concurrency=5, delayMs=200, AbortSignal support. Reuses fetchOHLCV + patterns + box + risk per stock. Sorts by action rank then confidence |
+| `src/engine/nseIndexFetch.js` | Fetch NSE index constituents: dev proxy → CF Worker → allorigins fallback |
+| `src/engine/nseIndexParse.js` | Parse NSE JSON: filter series='EQ', deduplicate symbols |
+| `src/engine/yahooQuote.js` | Yahoo v7 quote API for bid/ask (Advanced mode only) |
+| `src/utils/batchAuth.js` | `getBatchToken()`, `setBatchToken()`, `hasBatchToken()`, `clearBatchToken()` — localStorage key `candlescan_batch_key` |
+| `src/config/nseIndices.js` | `NSE_INDEX_OPTIONS` array (NIFTY 50 through NIFTY SMALLCAP 250), `DEFAULT_NSE_INDEX_ID` = 'NIFTY 200' |
+| `src/data/signalCategories.js` | Category labels + `APPROX_PATTERN_RULES` count |
+| `vite.config.js` | Base `/candlescan/`, dev proxies (`__candlescan-yahoo`, `__candlescan-nse`), VitePWA plugin config |
+| `vite-plugin-chart-cache.mjs` | Vite middleware: intercepts chart requests, serves from/writes to `cache/charts/` |
+| `worker/index.js` | Cloudflare Worker: CORS proxy (Yahoo + NSE), `X-Batch-Token` SHA-256 validation, IP rate limiting via KV |
+| `worker/wrangler.toml` | Worker config + `RATE_LIMIT` KV namespace binding |
+| `worker/OPS.md` | Operations guide: passphrase reset, deploy, troubleshooting |
 
-## Chart interactions (Chart.jsx)
-- **Zoom**: ctrl+wheel (trackpad pinch) or +/- buttons
-- **Pan**: scroll/swipe left-right, panOffset state
-- **Crosshair**: always-on hover with price + time pills
-- **Drawing tools**: H-Line (draggable), Box (directional +/- display)
-- **Highlights**: pattern candle annotations when toggle enabled
+---
 
-## Data flow
-1. User enters symbol → `fetchOHLCV(symbol, timeframe)`
-2. Yahoo Finance API → candle array `[{t, o, h, l, c, v}]`
-3. `detectPatterns(candles)` → pattern array with candleIndices
-4. `detectLiquidityBox(candles)` → consolidation box
-5. `computeRiskScore({candles, patterns, box})` → action, confidence, entry/sl/target
+## Data Flow
 
-## PWA
-The app is a Progressive Web App — installable on Android via "Add to Home Screen" (Chrome).
-- **Plugin**: `vite-plugin-pwa` in `vite.config.js` (auto-generates service worker + manifest)
-- **Icons**: `public/icons/icon-192.svg`, `public/icons/icon-512.svg`
-- **Meta tags**: `index.html` has manifest link, theme-color, apple-mobile-web-app-capable
+### Single Stock Scan
+```
+SearchBar input → App.runScan(symbol)
+  → fetchOHLCV(symbol, timeframe, {batchToken?})
+    → normalizeSymbol: RELIANCE → RELIANCE.NS, NIFTY50 → ^NSEI
+    → Fallback chain: Vite proxy → CF Worker → Jina → allorigins
+    → parseChartJson → trimTrailingFlatCandles
+  → detectPatterns(candles)         # 46 rules, sorted by strength
+  → detectLiquidityBox(candles)     # box detection + breakout/trap
+  → computeRiskScore({candles, patterns, box})
+    → 5 components summed → rescale 40-100 → action determination
+  → setState: candles, patterns, box, risk → re-render Chart + View
+```
 
-## Batch scan (Index Scanner)
-Full-index scan: scans every stock in a selected NSE index and ranks by signal strength.
+### Batch Index Scan
+```
+BatchScanPage → Scan All → fetchNseIndexSymbolList(index)
+  → batchScan({symbols, timeframe, batchToken, concurrency:5, delayMs:200})
+    → Per stock: fetchOHLCV → detectPatterns → detectLiquidityBox → computeRiskScore
+    → onProgress callback updates progress bar
+  → Sort results: action rank desc → confidence desc
+  → Display cards with filters (actionable/all, buy/short, search)
+  → Tap card → App.onSelectSymbol → switch to main view + scan that stock
+```
 
-### Auth gating
-- **Passphrase**: Stored in `localStorage` (`candlescan_batch_key`) via `src/utils/batchAuth.js`
-- **Worker validation**: `X-Batch-Token` header → SHA-256 hashed → compared to `env.BATCH_AUTH_HASH`
-- **Rate limiting**: Unauthenticated users limited to 20 req/day per IP via Cloudflare KV (`RATE_LIMIT` namespace)
+---
 
-### Engine
-- **File**: `src/engine/batchScan.js`
-- Reuses `fetchOHLCV`, `detectPatterns`, `detectLiquidityBox`, `computeRiskScore`
-- Throttled: 5 concurrent, 200ms inter-batch delay, AbortSignal support
-- Results sorted by action rank (STRONG BUY/SHORT first), then confidence desc
+## View Routing (App.jsx)
 
-### UI
-- **File**: `src/components/BatchScanPage.jsx`
-- Entry: FAB button (grid icon, bottom-right) on main view
-- View toggle via `view` state in `App.jsx` (`'main'` | `'batch'`)
-- Passphrase modal on first use, cached in localStorage
-- Progress bar, cancel button, actionable/all filter, tappable result cards
+The app has two parallel views managed by `view` state (`'main'` | `'batch'`):
 
-### Worker secrets & KV
+```jsx
+// Both views always mounted (display: none toggling)
+// BatchScanPage keeps running in background when viewing a stock
+<div style={{ display: view === 'batch' ? 'block' : 'none' }}>
+  <BatchScanPage ... />
+</div>
+<div style={{ display: view === 'main' ? 'block' : 'none' }}>
+  {/* SearchBar, Chart, SimpleView/AdvancedView */}
+</div>
+```
+
+Navigation via shared GlobalMenu:
+- On main view: menu shows "Index Scanner" → switches to batch
+- On batch view: menu shows "Stock Scanner" → switches to main
+- `cameFromBatch` flag shows "← Back to scan results" banner when drilling into a stock from batch results
+
+---
+
+## Chart Interactions (Chart.jsx)
+
+- **Zoom**: Ctrl+wheel (desktop), pinch (mobile), or +/- buttons. Range: 30-300 visible candles
+- **Pan**: Horizontal scroll/swipe. `panOffset` state
+- **Crosshair**: Always-on hover with price pill + time pill
+- **Drawing tools** (per-symbol, memory-only):
+  - H-Line: horizontal line, draggable vertically
+  - Box: rectangle with directional label (+X.X / -X.X / =0.0)
+  - Clear: removes all drawings for current symbol
+- **Pattern highlights**: Small colored circles on candles where patterns detected (toggle via checkbox)
+- **Liquidity box overlay**: Dashed blue rectangle at box high/low with orange manipulation zones above/below
+- **Touch**: Two-finger pinch zoom, single-finger pan
+- **Responsive**: ResizeObserver for container width
+
+---
+
+## Risk Score Algorithm
+
+### 5 Components (sum = 0-100 raw)
+
+| Component | Max | Formula |
+|-----------|-----|---------|
+| Signal clarity | 25 | `topPattern.strength * 25` |
+| Low noise | 20 | ATR / avgBody ratio — clean trends score higher |
+| Risk:Reward | 25 | Entry=close, SL=5-bar swing low, Target=median(resistance, ATR*1.8, SL*1.5). R:R ≥ 3 → 25pts |
+| Pattern reliability | 15 | `topPattern.reliability * 15` |
+| Confluence | 15 | Volume spike(+5) + SMA alignment(+5) + context(+4) + box quality(+5), capped at 15 |
+
+### Action Thresholds
+- `confidence ≥ 72 + directional` → STRONG BUY / STRONG SHORT
+- `confidence ≥ 58 + directional` → BUY / SHORT
+- `confidence ≥ 50 + any pattern` → WAIT
+- Below 50 or no pattern → NO TRADE
+
+### Context Detection
+- **at_support**: price within ATR of 15-bar low
+- **at_resistance**: price within ATR of 15-bar high
+- **breakout**: price beyond box high/low + ATR
+- **mid_range**: otherwise
+
+---
+
+## Caching Layers
+
+| Layer | Storage | TTL | Scope |
+|-------|---------|-----|-------|
+| Chart cache | Disk (`cache/charts/`) | 7 days | Dev only (Vite plugin) |
+| NSE symbols | sessionStorage | 45 min | Browser tab |
+| Mode + history | localStorage | Permanent | Browser |
+| Batch token | localStorage | Permanent | Browser |
+| HTTP cache | None (`no-store`) | N/A | All fetches |
+| PWA assets | Service worker | Until new deploy | Browser |
+
+---
+
+## Auth & Rate Limiting
+
+### Batch Auth Flow
+1. User enters passphrase → stored in localStorage (`candlescan_batch_key`)
+2. `fetchOHLCV` sends `X-Batch-Token: <passphrase>` header to CF Worker
+3. Worker computes `SHA256(passphrase)`, compares to `env.BATCH_AUTH_HASH`
+4. Match → process request (no rate limit). Mismatch → 403
+
+### Rate Limiting (unauthenticated)
+- KV key: `rl:{SHA256(IP)}:{YYYY-MM-DD}`
+- Limit: 20 requests/day per IP
+- TTL: 86400s (auto-expires)
+- Authenticated requests bypass entirely
+
+### Worker Allowed Origins
+```javascript
+['https://utkarsh9891.github.io', 'http://localhost', 'http://127.0.0.1',
+ 'https://localhost', 'capacitor://localhost']
+```
+
+---
+
+## PWA Details
+
+- **Plugin**: `vite-plugin-pwa` with `registerType: 'autoUpdate'`
+- **Manifest**: name "CandleScan", standalone display, portrait orientation
+- **Icons**: SVG at `public/icons/icon-192.svg` and `icon-512.svg`
+- **Service worker**: Workbox-generated, caches `**/*.{js,css,html,svg,png}`
+- **Runtime caching**: `NetworkOnly` for CF Worker URLs (always fresh data)
+- **Auto-update**: On new deploy, SW detects change and updates on next visit
+
+---
+
+## Deployment
+
+### Frontend (GitHub Actions)
+Push to `main` → `npm ci && npm run build` → deploy `dist/` to GitHub Pages
+
+### Cloudflare Worker
 ```bash
 cd worker
-wrangler secret put BATCH_AUTH_HASH    # SHA-256 hex of your passphrase
-wrangler kv namespace create RATE_LIMIT # then update id in wrangler.toml
-npx wrangler deploy
+npx wrangler deploy                    # Deploy code
+npx wrangler secret put BATCH_AUTH_HASH  # Set/rotate passphrase hash
 ```
+Full guide: `worker/OPS.md`
 
-## Testing
-No test framework configured. Verify manually:
-```bash
-npm run build                    # Must succeed with no errors
-curl -s http://127.0.0.1:5173/candlescan/ | grep -q "CandleScan" && echo "ok"
-```
+---
 
 ## Conventions
-- Inline styles (no CSS files/modules)
-- No TypeScript — plain JSX
-- No external state library
-- Monospace font for prices: `'SF Mono', Menlo, monospace`
-- Color palette: blue (#2563eb), green (#16a34a), red (#dc2626), orange (#d97706), gray (#8892a8)
+
+- **No TypeScript** — plain JavaScript + JSX
+- **No CSS files** — inline styles everywhere
+- **No state library** — useState/useEffect only
+- **No external charting** — custom SVG
+- **Monospace**: `'SF Mono', Menlo, monospace` for prices
+- **Colors**: blue `#2563eb`, green `#16a34a`, red `#dc2626`, orange `#d97706`, gray `#8892a8`
+- **Container**: max-width 620px, centered, mobile-first
+- **Error handling**: try-catch around localStorage, fetch, JSON.parse
+
+## Testing
+No test framework. Verify manually:
+```bash
+npm run build                    # Must succeed
+curl -s http://127.0.0.1:5173/candlescan/ | grep -q "CandleScan" && echo "ok"
+node scripts/batch-test.mjs 5m --index "NIFTY 50"  # CLI batch scan
+```
