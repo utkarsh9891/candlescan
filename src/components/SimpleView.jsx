@@ -30,6 +30,7 @@ export default function SimpleView({
   allPatterns,
   viewMode = 'simple',
   signalMeta = { categoryCount: SIGNAL_CATEGORIES.length, rulesApprox: 46 },
+  beforeScoreDetails,
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const isAdvanced = viewMode === 'advanced';
@@ -212,6 +213,38 @@ export default function SimpleView({
         )}
       </div>
 
+      {beforeScoreDetails}
+      {!isAdvanced && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowDetails((v) => !v)}
+            style={{
+              width: '100%',
+              padding: '8px 0',
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#8892a8',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              marginBottom: 4,
+            }}
+          >
+            {showDetails ? '▾ Hide score details' : '▸ Show score details'}
+          </button>
+          {showDetails && <RiskScoreSignals breakdown={risk.breakdown} total={risk.total} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Score details toggle — used at the end of AdvancedView */
+export function ScoreDetailsToggle({ risk }) {
+  const [showDetails, setShowDetails] = useState(false);
+  return (
+    <>
       <button
         type="button"
         onClick={() => setShowDetails((v) => !v)}
@@ -227,9 +260,9 @@ export default function SimpleView({
           marginBottom: 4,
         }}
       >
-        {showDetails ? '▾ Hide score details' : isAdvanced ? '▸ Show score details' : '▸ Score breakdown'}
+        {showDetails ? '▾ Hide score details' : '▸ Show score details'}
       </button>
       {showDetails && <RiskScoreSignals breakdown={risk.breakdown} total={risk.total} />}
-    </div>
+    </>
   );
 }
