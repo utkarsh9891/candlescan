@@ -61,6 +61,41 @@ npm start
 4. `detectLiquidityBox(candles)` → consolidation box
 5. `computeRiskScore({candles, patterns, box})` → action, confidence, entry/sl/target
 
+## PWA
+The app is a Progressive Web App — installable on Android via "Add to Home Screen" (Chrome).
+- **Plugin**: `vite-plugin-pwa` in `vite.config.js` (auto-generates service worker + manifest)
+- **Icons**: `public/icons/icon-192.svg`, `public/icons/icon-512.svg`
+- **Meta tags**: `index.html` has manifest link, theme-color, apple-mobile-web-app-capable
+
+## Batch scan (Index Scanner)
+Full-index scan: scans every stock in a selected NSE index and ranks by signal strength.
+
+### Auth gating
+- **Passphrase**: Stored in `localStorage` (`candlescan_batch_key`) via `src/utils/batchAuth.js`
+- **Worker validation**: `X-Batch-Token` header → SHA-256 hashed → compared to `env.BATCH_AUTH_HASH`
+- **Rate limiting**: Unauthenticated users limited to 20 req/day per IP via Cloudflare KV (`RATE_LIMIT` namespace)
+
+### Engine
+- **File**: `src/engine/batchScan.js`
+- Reuses `fetchOHLCV`, `detectPatterns`, `detectLiquidityBox`, `computeRiskScore`
+- Throttled: 5 concurrent, 200ms inter-batch delay, AbortSignal support
+- Results sorted by action rank (STRONG BUY/SHORT first), then confidence desc
+
+### UI
+- **File**: `src/components/BatchScanPage.jsx`
+- Entry: FAB button (grid icon, bottom-right) on main view
+- View toggle via `view` state in `App.jsx` (`'main'` | `'batch'`)
+- Passphrase modal on first use, cached in localStorage
+- Progress bar, cancel button, actionable/all filter, tappable result cards
+
+### Worker secrets & KV
+```bash
+cd worker
+wrangler secret put BATCH_AUTH_HASH    # SHA-256 hex of your passphrase
+wrangler kv namespace create RATE_LIMIT # then update id in wrangler.toml
+npx wrangler deploy
+```
+
 ## Testing
 No test framework configured. Verify manually:
 ```bash

@@ -4,3 +4,13 @@ compatibility_date = "2024-12-01"
 
 # Free plan: 100 000 requests / day — plenty for personal use.
 # Deploy: cd worker && npx wrangler deploy
+#
+# Secrets (set via CLI, not here):
+#   wrangler secret put BATCH_AUTH_HASH
+#
+# KV namespace — create with:
+#   wrangler kv namespace create RATE_LIMIT
+# Then paste the id below.
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "527c95317e0141a3adf0b9a7cf384836"

@@ -11,7 +11,13 @@ const CATEGORIES = [
   { key: 'indecision', label: 'Indecision' },
 ];
 
-export default function GlobalMenu({ activeFilters, onFiltersChange }) {
+/**
+ * @param {Object} props
+ * @param {Set} props.activeFilters
+ * @param {(filters: Set) => void} props.onFiltersChange
+ * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
+ */
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -77,6 +83,42 @@ export default function GlobalMenu({ activeFilters, onFiltersChange }) {
             boxSizing: 'border-box',
           }}
         >
+          {navAction && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  navAction.onClick();
+                }}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '10px 10px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: '#1a1d26',
+                  background: 'none',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  WebkitTapHighlightColor: 'transparent',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round">
+                  <rect x="3" y="3" width="7" height="7" rx="1" />
+                  <rect x="14" y="3" width="7" height="7" rx="1" />
+                  <rect x="3" y="14" width="7" height="7" rx="1" />
+                  <rect x="14" y="14" width="7" height="7" rx="1" />
+                </svg>
+                {navAction.label}
+              </button>
+              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
+            </>
+          )}
+
           <div
             style={{
               padding: '6px 10px',

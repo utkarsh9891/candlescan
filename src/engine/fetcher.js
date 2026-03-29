@@ -141,11 +141,17 @@ async function tryFetch(url) {
 
 /**
  * Cloudflare Worker proxy — most reliable path for production.
+ * @param {string} yahooUrl
+ * @param {string} [batchToken] — optional passphrase for authenticated batch scans
  */
-async function tryFetchCfWorker(yahooUrl) {
+async function tryFetchCfWorker(yahooUrl, batchToken) {
   if (!CF_WORKER_URL) throw new Error('CF_WORKER_URL not set');
   const url = `${CF_WORKER_URL}?url=${encodeURIComponent(yahooUrl)}`;
-  return tryFetch(url);
+  const headers = {};
+  if (batchToken) headers['X-Batch-Token'] = batchToken;
+  const res = await fetch(url, { cache: 'no-store', headers });
+  if (!res.ok) throw new Error(String(res.status));
+  return res.json();
 }
 
 /**
@@ -192,9 +198,10 @@ async function tryFetchAllOriginsGet(yahooUrl) {
   return JSON.parse(typeof wrap.contents === 'string' ? wrap.contents : String(wrap.contents));
 }
 
-async function fetchWithFallbacks(symbol, interval, range) {
+async function fetchWithFallbacks(symbol, interval, range, options) {
   const yahooUrl = buildYahooUrl(symbol, interval, range);
   const enc = encodeURIComponent(yahooUrl);
+  const batchToken = options?.batchToken;
 
   const attempts = [];
 
@@ -208,7 +215,7 @@ async function fetchWithFallbacks(symbol, interval, range) {
   }
 
   /* Cloudflare Worker — primary production proxy */
-  attempts.push(() => tryFetchCfWorker(yahooUrl));
+  attempts.push(() => tryFetchCfWorker(yahooUrl, batchToken));
 
   /* Optional env-var proxy */
   const envProxy = tryFetchFromEnvProxy(yahooUrl);
@@ -335,9 +342,12 @@ export function generateSimulatedCandles(symbol, count = 80) {
 }
 
 /**
+ * @param {string} inputSymbol
+ * @param {string} timeframeKey
+ * @param {{ batchToken?: string }} [options]
  * @returns {{ candles: Array, live: boolean, simulated: boolean, error?: string, yahooSymbol: string, displaySymbol: string, companyName: string }}
  */
-export async function fetchOHLCV(inputSymbol, timeframeKey) {
+export async function fetchOHLCV(inputSymbol, timeframeKey, options) {
   const tf = TIMEFRAME_MAP[timeframeKey] || TIMEFRAME_MAP['5m'];
   const yahooSymbol = normalizeSymbol(inputSymbol);
   const displaySymbol = inputSymbol.trim().toUpperCase() || yahooSymbol;
@@ -357,7 +367,8 @@ export async function fetchOHLCV(inputSymbol, timeframeKey) {
   const { candles, live, companyName: cn } = await fetchWithFallbacks(
     yahooSymbol,
     tf.interval,
-    tf.range
+    tf.range,
+    options
   );
 
   if (candles?.length) {
