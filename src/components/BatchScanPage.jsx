@@ -207,10 +207,10 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
     startScan(getBatchToken());
   }, [scanning, startScan]);
 
-  const handlePassphraseSubmit = useCallback((passphrase) => {
-    setBatchToken(passphrase);
+  const handlePassphraseSubmit = useCallback(async (passphrase) => {
+    await setBatchToken(passphrase);
     setShowPassphrase(false);
-    startScan(passphrase);
+    startScan(getBatchToken()); // read the stored hash, not the plaintext
   }, [startScan]);
 
   const sq = searchQuery.trim().toUpperCase();
