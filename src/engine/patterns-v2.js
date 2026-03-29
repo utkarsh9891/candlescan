@@ -165,11 +165,13 @@ export function detectPatterns(candles, opts) {
   if (n >= 9) {
     const recentLow = Math.min(...candles.slice(-9, -1).map(c => c.l));
     const recentHigh = Math.max(...candles.slice(-9, -1).map(c => c.h));
-    if (cur.l < recentLow && cur.c > recentLow && lowerWick(cur) > body(cur) * 1.2) {
-      patterns.push({ name: 'Liquidity Sweep Bullish', direction: 'bullish', strength: 0.7, category: 'liquidity', emoji: '💧', tip: 'Stops run under lows, close reclaimed', description: 'Wick below recent lows then close back above — stop-hunt reversal up.', reliability: 0.6, candleIndices: [n - 1] });
+    if (cur.l < recentLow && cur.c > recentLow && lowerWick(cur) > body(cur) * 1.5) {
+      // Reduced strength (0.50 from 0.70) — high false positive rate on NSE
+      patterns.push({ name: 'Liquidity Sweep Bullish', direction: 'bullish', strength: 0.50, category: 'liquidity', emoji: '💧', tip: 'Stops run under lows, close reclaimed', description: 'Wick below recent lows then close back above — stop-hunt reversal up.', reliability: 0.45, candleIndices: [n - 1] });
     }
-    if (cur.h > recentHigh && cur.c < recentHigh && upperWick(cur) > body(cur) * 1.2) {
-      patterns.push({ name: 'Liquidity Sweep Bearish', direction: 'bearish', strength: 0.69, category: 'liquidity', emoji: '💧', tip: 'Stops above highs, failed breakout', description: 'Wick above recent highs then close back inside range.', reliability: 0.59, candleIndices: [n - 1] });
+    if (cur.h > recentHigh && cur.c < recentHigh && upperWick(cur) > body(cur) * 1.5) {
+      // Reduced strength (0.48 from 0.69) — high false positive rate on NSE
+      patterns.push({ name: 'Liquidity Sweep Bearish', direction: 'bearish', strength: 0.48, category: 'liquidity', emoji: '💧', tip: 'Stops above highs, failed breakout', description: 'Wick above recent highs then close back inside range.', reliability: 0.44, candleIndices: [n - 1] });
     }
   }
 

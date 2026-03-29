@@ -116,8 +116,8 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.001 : rawEntry * 0.999;
 
-  // FIX: SL is ATR-based only (removed swing + 0.3% minimum)
-  const slDist = atrVal * 1.5;
+  // SL: ATR-based, widened to 2.0x to avoid stop-hunting
+  const slDist = atrVal * 2.0;
   let sl, target, targetDist;
 
   if (direction === 'long') {
@@ -125,13 +125,13 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     const resistance = Math.max(...candles.slice(-20).map(c => c.h));
     const resistanceDist = resistance - entry;
     // FIX: use resistance if valid, otherwise ATR fallback (no median hack)
-    targetDist = resistanceDist > slDist * 0.5 ? resistanceDist : atrVal * 1.8;
+    targetDist = resistanceDist > slDist * 0.5 ? resistanceDist : atrVal * 3.0;
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-20).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? supportDist : atrVal * 1.8;
+    targetDist = supportDist > slDist * 0.5 ? supportDist : atrVal * 3.0;
     target = entry - targetDist;
   }
 
@@ -141,8 +141,13 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   // FIX: continuous exponential scoring (no more discrete buckets)
   const rrScore = Math.round(25 * (1 - Math.exp(-0.7 * rrClamped)));
 
-  // FIX: transaction cost filter — if target < 0.2% of entry, not worth trading
+  // Transaction cost filter — if target < 0.2% of entry, not worth trading
   if (targetDist < entry * 0.002) {
+    return noTrade(cur, candles, box);
+  }
+
+  // Minimum R:R filter — don't take trades below 1.5:1
+  if (rr < 1.5) {
     return noTrade(cur, candles, box);
   }
 
@@ -167,7 +172,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     if (volDown && ((direction === 'long' && priceDown) || (direction === 'short' && priceUp))) confluence -= 2;
   }
 
-  // SMA alignment
+  // SMA alignment — strong trend-direction filter
   const closes = candles.map(c => c.c);
   const s10 = sma(closes, 10);
   const s20 = sma(closes, 20);
