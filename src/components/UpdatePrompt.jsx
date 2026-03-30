@@ -36,19 +36,16 @@ export default function UpdatePrompt() {
       });
     };
 
-    // Check on launch
+    // Check on app launch
     handleSWUpdate();
 
-    // Also check when page becomes visible (Cmd+R, pull-to-refresh, tab switch, app foreground)
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        // Ask the SW to check for updates from the server
-        navigator.serviceWorker.getRegistration().then(r => r?.update()).catch(() => {});
-        handleSWUpdate();
-      }
+    // Also check when debug mode is toggled (deliberate user action)
+    const onManualCheck = () => {
+      navigator.serviceWorker.getRegistration().then(r => r?.update()).catch(() => {});
+      setTimeout(handleSWUpdate, 1000); // give SW time to fetch
     };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    window.addEventListener('candlescan:check-update', onManualCheck);
+    return () => window.removeEventListener('candlescan:check-update', onManualCheck);
   }, []);
 
   const handleUpdate = () => {

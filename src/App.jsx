@@ -381,7 +381,10 @@ export default function App() {
           engineVersion={engineVersion}
           onEngineVersionChange={setEngineVersion}
           debugMode={debugMode}
-          onDebugModeChange={setDebugMode}
+          onDebugModeChange={(v) => {
+            setDebugMode(v);
+            window.dispatchEvent(new Event('candlescan:check-update'));
+          }}
         />
       </Header>
 
