@@ -220,24 +220,24 @@ Push to `main` → auto-tag patch version → `npm ci` → `npm test` → `npm r
 ### Auto-versioning
 Every merge to `main` automatically creates the next patch tag (v3.0.3 → v3.0.4 → ...) before building. Version is injected via `git describe --tags` in `vite.config.js`. No manual version bumps needed for patches.
 
-### When to bump major/minor (for coding agents)
-Before merging a PR, create a manual tag if the change warrants it:
+### Version bump rules (for coding agents)
 
-| Change type | Tag | Examples |
+| Change type | How | Examples |
 |-------------|-----|----------|
-| **Major** (vX.0.0) | `git tag v4.0.0` | New engine mode (e.g., scalping), breaking API change, fundamental architecture change |
-| **Minor** (vX.Y.0) | `git tag v3.1.0` | New feature (simulation page, debug panel, batch scanner), new pattern category, new UI page |
-| **Patch** (auto) | Automatic | Bug fixes, threshold tuning, UI tweaks, docs, dependency updates |
+| **Patch** (auto) | Merge to main → CI auto-tags v3.0.X+1 | Bug fixes, tuning, UI tweaks, docs |
+| **Minor** | Manual: `git tag v3.1.0 && git push origin v3.1.0` | New feature, page, pattern category |
+| **Major** | Manual: `git tag v4.0.0 && git push origin v4.0.0` | New engine mode, breaking change |
 
-**How to manually tag:**
-```bash
-git checkout main && git pull
-git tag v3.1.0
-git push origin v3.1.0
-# Then merge the PR — auto-tag step sees HEAD is already tagged, skips
-```
+**How it works:**
+- Every merge to `main` → CI auto-creates next patch tag on the merge commit → builds → deploys
+- Manual tag push → triggers a second deploy with the correct major/minor version
+- `cancel-in-progress: true` → manual tag deploy replaces any in-flight patch deploy
 
-If HEAD is already tagged, the auto-tag step is skipped. This prevents conflicts between manual and auto tags.
+**When to manually tag (for coding agents):**
+- New engine (scalping, options, etc.) → major
+- New UI page (simulation, batch scanner) → minor
+- New signal category → minor
+- Everything else → let auto-patch handle it
 
 ### Cloudflare Worker
 ```bash

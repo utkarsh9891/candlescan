@@ -3,6 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -12,7 +13,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-and-deploy:
@@ -23,28 +24,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0  # full history for git describe --tags
 
-      # Auto-tag: bump patch version on every deploy
+      # Auto-tag patch on branch push only (not on tag push)
       - name: Auto-tag patch version
+        if: startsWith(github.ref, 'refs/heads/')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Skip if HEAD is already tagged
+          if [ "$(git tag --points-at HEAD)" != "" ]; then
+            echo "HEAD already tagged: $(git tag --points-at HEAD)"
+            exit 0
+          fi
+
           LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          # Parse major.minor.patch
           MAJOR=$(echo $LATEST | sed 's/v//' | cut -d. -f1)
           MINOR=$(echo $LATEST | sed 's/v//' | cut -d. -f2)
           PATCH=$(echo $LATEST | sed 's/v//' | cut -d. -f3)
-          NEW_PATCH=$((PATCH + 1))
-          NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-          # Only tag if HEAD isn't already tagged
-          if [ "$(git tag --points-at HEAD)" = "" ]; then
-            git tag "$NEW_TAG"
-            git push origin "$NEW_TAG"
-            echo "Tagged: $NEW_TAG"
-          else
-            echo "HEAD already tagged: $(git tag --points-at HEAD)"
-          fi
+          NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+          echo "Auto-tagged: $NEW_TAG"
 
       - uses: actions/setup-node@v4
         with:
