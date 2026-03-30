@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import CustomIndexInput from './CustomIndexInput.jsx';
 
-const CATEGORIES = [
+const INTRADAY_CATEGORIES = [
   { key: 'engulfing', label: 'Engulfing' },
   { key: 'piercing', label: 'Piercing' },
   { key: 'hammer', label: 'Hammer' },
@@ -10,6 +10,16 @@ const CATEGORIES = [
   { key: 'liquidity', label: 'Liquidity' },
   { key: 'momentum', label: 'Momentum' },
   { key: 'indecision', label: 'Indecision' },
+];
+
+const SCALP_CATEGORIES_UI = [
+  { key: 'vwap', label: 'VWAP' },
+  { key: 'orb', label: 'ORB' },
+  { key: 'micro-momentum', label: 'Momentum' },
+  { key: 'ema-cross', label: 'EMA Cross' },
+  { key: 'volume-climax', label: 'Vol Climax' },
+  { key: 'prev-day', label: 'Prev Day' },
+  { key: 'micro-double', label: 'Double B/T' },
 ];
 
 /**
@@ -30,6 +40,8 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
     document.addEventListener('pointerdown', handler);
     return () => document.removeEventListener('pointerdown', handler);
   }, [open]);
+
+  const CATEGORIES = engineVersion === 'scalp' ? SCALP_CATEGORIES_UI : INTRADAY_CATEGORIES;
 
   const toggleFilter = (key) => {
     const next = new Set(activeFilters);
@@ -308,20 +320,21 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
               }}>
                 Engine
               </div>
-              <div style={{ display: 'flex', gap: 6, padding: '4px 10px 8px' }}>
+              <div style={{ display: 'flex', gap: 4, padding: '4px 10px 8px' }}>
                 {[
-                  { key: 'v1', label: 'Classic' },
-                  { key: 'v2', label: 'Enhanced' },
+                  { key: 'scalp', label: 'Scalp', color: '#d97706' },
+                  { key: 'v2', label: 'Intraday', color: '#2563eb' },
+                  { key: 'v1', label: 'Classic', color: '#2563eb' },
                 ].map((v) => (
                   <button
                     key={v.key}
                     type="button"
                     onClick={() => onEngineVersionChange(v.key)}
                     style={{
-                      flex: 1, fontSize: 12, fontWeight: 600, padding: '8px 0',
+                      flex: 1, fontSize: 11, fontWeight: 600, padding: '8px 0',
                       border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb',
                       borderRadius: 6, cursor: 'pointer',
-                      background: engineVersion === v.key ? '#2563eb' : '#fff',
+                      background: engineVersion === v.key ? v.color : '#fff',
                       color: engineVersion === v.key ? '#fff' : '#4a5068',
                     }}
                   >

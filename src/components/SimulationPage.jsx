@@ -6,6 +6,9 @@ import { computeRiskScore as computeRiskScoreV1 } from '../engine/risk.js';
 import { detectPatterns as detectPatternsV2 } from '../engine/patterns-v2.js';
 import { detectLiquidityBox as detectLiquidityBoxV2 } from '../engine/liquidityBox-v2.js';
 import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
+import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
+import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
+import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
 import { getBatchToken } from '../utils/batchAuth.js';
 
@@ -79,7 +82,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
   const [startTime, setStartTime] = useState('09:15');
   const [endTime, setEndTime] = useState('10:30');
   const [nseIndex, setNseIndex] = useState('NIFTY SMALLCAP 100');
-  const [localEngine, setLocalEngine] = useState(engineVersion || 'v2');
+  const [localEngine, setLocalEngine] = useState(engineVersion || 'scalp');
   const [capital, setCapital] = useState(300000);
   const [positionSize, setPositionSize] = useState(300000);
   const [maxConcurrent, setMaxConcurrent] = useState(1);
@@ -106,7 +109,9 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const engineFns = localEngine === 'v2'
+    const engineFns = localEngine === 'scalp'
+      ? { detectPatterns: detectPatternsScalp, detectLiquidityBox: detectLiquidityBoxScalp, computeRiskScore: computeRiskScoreScalp }
+      : localEngine === 'v2'
       ? { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 }
       : { detectPatterns: detectPatternsV1, detectLiquidityBox: detectLiquidityBoxV1, computeRiskScore: computeRiskScoreV1 };
 
@@ -175,7 +180,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
         <div style={{ flex: '0 0 150px' }}>
           <div style={labelStyle}>Engine</div>
           <div style={{ display: 'flex', gap: 4 }}>
-            {[{ k: 'v1', l: 'Classic' }, { k: 'v2', l: 'Enhanced' }].map(v => (
+            {[{ k: 'scalp', l: 'Scalp' }, { k: 'v2', l: 'Intraday' }, { k: 'v1', l: 'Classic' }].map(v => (
               <button key={v.k} type="button" disabled={running} onClick={() => setLocalEngine(v.k)}
                 style={{
                   flex: 1, padding: '8px 0', fontSize: 11, fontWeight: 600, borderRadius: 6,

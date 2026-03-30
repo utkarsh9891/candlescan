@@ -177,6 +177,12 @@ export async function runSimulation({
         else if (bar.l <= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
       }
 
+      // Time-based exit: maxHoldBars exceeded (scalping mode)
+      if (!exitPrice && pos.maxHoldBars && (barIdx - pos.entryBar) >= pos.maxHoldBars) {
+        exitPrice = bar.c;
+        exitReason = 'TIME';
+      }
+
       // EOD exit on last bar of window
       if (!exitPrice && barIdx === sd.windowCandles.length - 1) {
         exitPrice = bar.c;
@@ -243,6 +249,7 @@ export async function runSimulation({
         entryBar: barIdx, shares,
         confidence: risk.confidence, action: risk.action,
         pattern: patterns[0]?.name || 'None',
+        maxHoldBars: risk.maxHoldBars || null,
       });
       totalTradesOpened++;
     }
