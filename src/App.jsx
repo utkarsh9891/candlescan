@@ -18,6 +18,7 @@ import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
 import BatchScanPage from './components/BatchScanPage.jsx';
 import SimulationPage from './components/SimulationPage.jsx';
+import DebugPanel from './components/DebugPanel.jsx';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
 import { hasBatchToken } from './utils/batchAuth.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES } from './data/signalCategories.js';
@@ -127,6 +128,7 @@ export default function App() {
   const [view, setView] = useState('main');
   const [cameFromBatch, setCameFromBatch] = useState(false);
   const [cameFromSimulation, setCameFromSimulation] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
 
   // Drawing tool state
   const [drawingMode, setDrawingMode] = useState(null);
@@ -355,6 +357,8 @@ export default function App() {
           onRemoveCustomIndex={handleRemoveCustomIndex}
           engineVersion={engineVersion}
           onEngineVersionChange={setEngineVersion}
+          debugMode={debugMode}
+          onDebugModeChange={setDebugMode}
         />
       </Header>
 
@@ -580,6 +584,8 @@ export default function App() {
         body { margin: 0; overflow-x: hidden; }
         html { overflow-x: hidden; }
       `}</style>
+
+      <DebugPanel open={debugMode} onClose={() => setDebugMode(false)} />
     </div>
   );
 }

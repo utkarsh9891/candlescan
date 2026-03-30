@@ -1,5 +1,7 @@
 # CandleScan
 
+[![Deploy](https://github.com/utkarsh9891/candlescan/actions/workflows/deploy.yml/badge.svg)](https://github.com/utkarsh9891/candlescan/actions/workflows/deploy.yml)
+
 Mobile-first NSE candlestick pattern scanner with liquidity box analysis, risk scoring (0-100), and batch index scanning. Built with React 18 + Vite 6, deployed as a PWA to GitHub Pages.
 
 **Educational only — not financial advice.**
@@ -157,7 +159,7 @@ candlescan/
 ├── scripts/
 │   ├── start.sh                 # Dev server wrapper
 │   ├── deploy-to-pages.sh       # Legacy manual deploy
-│   ├── batch-test.mjs           # CLI batch scanner
+│   ├── simulate-day.mjs         # CLI trading simulation
 │   ├── warm-chart-cache.mjs     # Pre-warm chart cache
 │   └── lib/
 │       ├── chart-cache-fs.mjs   # Disk-based chart cache read/write
@@ -276,6 +278,29 @@ GitHub Actions runs on every push to `main`:
 5. Deploy to GitHub Pages
 
 If tests or build fail, deployment is blocked.
+
+---
+
+## Versioning
+
+- Version is defined in `package.json` (`version` field)
+- Injected at build time via Vite `define` → `__APP_VERSION__` and `__BUILD_TIME__`
+- Visible in hamburger menu (bottom): `v2.1.0 30 Mar`
+- To bump: update `package.json` version, push to main → auto-deployed with new version
+
+## Debug Mode
+
+In-app API call inspector — toggle via hamburger menu → "Debug mode" checkbox.
+
+When enabled:
+- Bottom panel shows all `fetch()` calls in real-time
+- Each entry: timestamp, HTTP status (color-coded), response time, URL
+- 🔑 icon indicates requests with auth token
+- Shows CF Worker proxy destinations (chart data, NSE index, quotes)
+- "Clear" button to reset log
+- Last 50 requests retained
+
+Use to verify: auth token is being sent, requests aren't 429/403, response times are reasonable.
 
 ---
 
