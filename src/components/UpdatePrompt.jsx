@@ -36,8 +36,19 @@ export default function UpdatePrompt() {
       });
     };
 
-    // Check once on launch only — no background polling
+    // Check on launch
     handleSWUpdate();
+
+    // Also check when page becomes visible (Cmd+R, pull-to-refresh, tab switch, app foreground)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        // Ask the SW to check for updates from the server
+        navigator.serviceWorker.getRegistration().then(r => r?.update()).catch(() => {});
+        handleSWUpdate();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   const handleUpdate = () => {
