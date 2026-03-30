@@ -108,9 +108,9 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.0015 : rawEntry * 0.9985;
 
-  // Tight SL for scalping (ATR × 0.8)
-  const slDist = atrVal * 0.8;
-  // Modest target (ATR × 1.2)
+  // SL for scalping (ATR × 2.0) — survive 1m noise
+  const slDist = atrVal * 2.0;
+  // Target (ATR × 2.5) — slightly wider than SL for positive edge
   let targetDist;
   let sl, target;
 
@@ -118,13 +118,13 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-15).map(c => c.h));
     const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 1.2) : atrVal * 1.2;
+    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 2.5) : atrVal * 2.5;
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-15).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 1.2) : atrVal * 1.2;
+    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 2.5) : atrVal * 2.5;
     target = entry - targetDist;
   }
 
@@ -192,8 +192,8 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   if (idxDir) {
     if (direction === 'long' && idxDir.direction === 'bullish') confidence += 5;
     else if (direction === 'short' && idxDir.direction === 'bearish') confidence += 5;
-    else if (direction === 'long' && idxDir.direction === 'bearish') confidence -= 20;
-    else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 20;
+    else if (direction === 'long' && idxDir.direction === 'bearish') confidence -= 30;
+    else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 30;
   }
 
   // Time-of-day filter: first 10 bars (9:15-9:25) = skip
@@ -230,7 +230,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 8, // 8 minutes on 1m = forced exit
+    maxHoldBars: 15, // 8 minutes on 1m = forced exit
   };
 }
 
@@ -240,6 +240,6 @@ function noTrade(cur, candles, box) {
     total: 0, confidence: 20, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
-    maxHoldBars: 8,
+    maxHoldBars: 15,
   };
 }

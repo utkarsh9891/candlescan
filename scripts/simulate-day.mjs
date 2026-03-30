@@ -17,9 +17,12 @@
  *   - Only act on confidence >= 65 and actionable signals
  */
 
-import { detectPatterns } from '../src/engine/patterns-v2.js';
-import { detectLiquidityBox } from '../src/engine/liquidityBox-v2.js';
-import { computeRiskScore } from '../src/engine/risk-v2.js';
+import { detectPatterns as detectPatternsV2 } from '../src/engine/patterns-v2.js';
+import { detectLiquidityBox as detectLiquidityBoxV2 } from '../src/engine/liquidityBox-v2.js';
+import { computeRiskScore as computeRiskScoreV2 } from '../src/engine/risk-v2.js';
+import { detectPatterns as detectPatternsScalp } from '../src/engine/patterns-scalp.js';
+import { detectLiquidityBox as detectLiquidityBoxScalp } from '../src/engine/liquidityBox-scalp.js';
+import { computeRiskScore as computeRiskScoreScalp } from '../src/engine/risk-scalp.js';
 import { trimTrailingFlatCandles } from '../src/engine/fetcher.js';
 import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
 import { readCachedChartJson, writeCachedChartJson } from './lib/chart-cache-fs.mjs';
@@ -37,17 +40,19 @@ const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  let timeframe = '5m';
-  let indexName = 'NIFTY SMALLCAP 100';
+  let timeframe = '1m';
+  let indexName = 'NIFTY 200';
   let date = null;
-  let minConfidence = 80;
+  let engine = 'scalp';
+  let minConfidence = 75;
   let maxPositions = 1;
   let maxTotalTrades = 5;
   let positionSize = 300000;
-  let skipFirstBars = 4;
+  let skipFirstBars = 10;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
+    if (args[i] === '--engine' && args[i + 1]) { engine = args[++i]; continue; }
     if (args[i] === '--confidence' && args[i + 1]) { minConfidence = +args[++i]; continue; }
     if (args[i] === '--max-positions' && args[i + 1]) { maxPositions = +args[++i]; continue; }
     if (args[i] === '--max-trades' && args[i + 1]) { maxTotalTrades = +args[++i]; continue; }
@@ -56,7 +61,7 @@ function parseArgs() {
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital };
 }
 
 function parseChartJson(data) {
@@ -116,12 +121,30 @@ function filterByDate(candles, targetDate) {
   return candles.filter(c => istDateStr(c.t) === lastDate);
 }
 
+function istTimeStr(t) {
+  const d = new Date((t + IST_OFFSET) * 1000);
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
 function formatTime(ts) {
   return new Date(ts * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** Filter candles to a time window (HH:MM - HH:MM) */
+function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
+  return candles.filter(c => {
+    const t = istTimeStr(c.t);
+    return t >= startTime && t <= endTime;
+  });
+}
+
 async function main() {
-  const { timeframe, indexName, date: targetDate, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital } = parseArgs();
+
+  // Select engine functions
+  const detectPatterns = engine === 'scalp' ? detectPatternsScalp : detectPatternsV2;
+  const detectLiquidityBox = engine === 'scalp' ? detectLiquidityBoxScalp : detectLiquidityBoxV2;
+  const computeRiskScore = engine === 'scalp' ? computeRiskScoreScalp : computeRiskScoreV2;
   const MIN_CONFIDENCE = minConfidence;
   const MAX_POSITIONS = maxPositions;
   const POSITION_SIZE = positionSize;
@@ -131,8 +154,8 @@ async function main() {
   const tf = TIMEFRAME_MAP[timeframe];
   if (!tf) { console.error(`Unknown timeframe: ${timeframe}`); process.exit(1); }
 
-  console.log(`\n=== CandleScan v2 Simulation ===`);
-  console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'}`);
+  console.log(`\n=== CandleScan ${engine} Simulation ===`);
+  console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
   console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${MAX_POSITIONS} | Per trade: Rs.${POSITION_SIZE.toLocaleString()} | Max trades: ${MAX_TOTAL_TRADES}`);
   console.log(`Min confidence: ${MIN_CONFIDENCE} | Skip first ${SKIP_FIRST_BARS} bars | Min avg volume: ${MIN_AVG_VOLUME.toLocaleString()}`);
   console.log('');
@@ -142,36 +165,45 @@ async function main() {
   const symbols = await fetchNseIndexSymbolsNode(indexName);
   console.log(`Got ${symbols.length} symbols\n`);
 
-  // 2. Load all candle data
-  console.log('Loading candle data (cache + Yahoo)...');
+  // 2. Load candle data (cache only — no network)
+  console.log('Loading candle data from cache...');
   const stockData = {};
   let loaded = 0;
+  let skippedNoCache = 0;
   for (const sym of symbols) {
     const yahooSym = `${sym}.NS`;
     try {
-      const allCandles = await getCandles(yahooSym, tf.interval, tf.range);
+      // Cache-only: read from disk, skip if not cached
+      const cached = readCachedChartJson(yahooSym, tf.interval, tf.range, 0);
+      if (!cached) { skippedNoCache++; continue; }
+      const parsed = parseChartJson(cached);
+      if (!parsed?.candles?.length) continue;
+      const allCandles = trimTrailingFlatCandles(parsed.candles);
       if (!allCandles?.length) continue;
+
       const dayCandles = filterByDate(allCandles, targetDate);
-      if (dayCandles.length < 10) continue;
+      if (dayCandles.length < 5) continue;
+
+      // Filter to time window (9:30-11:00)
+      const windowCandles = filterByTimeWindow(dayCandles, '09:30', '11:00');
+      if (windowCandles.length < 3) continue;
 
       // Check avg volume
-      const avgVol = dayCandles.reduce((s, c) => s + c.v, 0) / dayCandles.length;
+      const avgVol = windowCandles.reduce((s, c) => s + c.v, 0) / windowCandles.length;
       if (avgVol < MIN_AVG_VOLUME) continue;
 
-      // We also need prior candles for pattern lookback
-      // Find where target date starts in allCandles
+      // Prior candles for pattern lookback
       const dayStart = allCandles.indexOf(dayCandles[0]);
       const priorCandles = allCandles.slice(Math.max(0, dayStart - 20), dayStart);
 
-      stockData[sym] = { dayCandles, priorCandles, avgVol };
+      const firstWindowIdx = dayCandles.indexOf(windowCandles[0]);
+      stockData[sym] = { dayCandles, priorCandles, windowCandles, firstWindowIdx, avgVol };
       loaded++;
     } catch (e) {
       // Skip on error
     }
-    // Throttle
-    if (loaded % 10 === 0) await new Promise(r => setTimeout(r, 200));
   }
-  console.log(`Loaded ${loaded} stocks with valid target date data\n`);
+  console.log(`Loaded ${loaded} stocks (${skippedNoCache} not cached)\n`);
 
   if (!loaded) {
     console.log('No data available. Try warming the cache: npm run cache:charts');
@@ -184,6 +216,29 @@ async function main() {
   console.log(`Simulation date: ${simDate}`);
   console.log('─'.repeat(100));
 
+  // Compute index direction from NIFTY data (for scalp mode)
+  let indexDirection = { direction: 'neutral', strength: 0 };
+  if (engine === 'scalp') {
+    const niftySym = '^NSEI';
+    const niftyJson = readCachedChartJson(niftySym, tf.interval, tf.range, 0);
+    if (niftyJson) {
+      const niftyParsed = parseChartJson(niftyJson);
+      if (niftyParsed?.candles?.length >= 20) {
+        const nc = niftyParsed.candles;
+        const closes = nc.map(c => c.c);
+        const sma10 = closes.slice(-10).reduce((a, b) => a + b, 0) / 10;
+        const sma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+        const last5 = nc.slice(-5);
+        const momentum = (last5[last5.length - 1].c - last5[0].c) / last5[0].c;
+        if (sma10 > sma20 && momentum > 0) indexDirection = { direction: 'bullish', strength: Math.min(1, Math.abs(momentum) * 100) };
+        else if (sma10 < sma20 && momentum < 0) indexDirection = { direction: 'bearish', strength: Math.min(1, Math.abs(momentum) * 100) };
+        console.log(`Index direction: ${indexDirection.direction} (strength: ${indexDirection.strength.toFixed(2)})`);
+      }
+    } else {
+      console.log('Warning: NIFTY cache not found — index direction filter disabled');
+    }
+  }
+
   // 3. Bar-by-bar simulation
   const trades = [];
   const openPositions = []; // { sym, direction, entry, sl, target, entryBar, shares }
@@ -193,15 +248,15 @@ async function main() {
   let totalTradesOpened = 0;
 
   // Find max bars across all stocks
-  const maxBars = Math.max(...Object.values(stockData).map(d => d.dayCandles.length));
+  const maxBars = Math.max(...Object.values(stockData).map(d => d.windowCandles.length));
 
   for (let barIdx = 0; barIdx < maxBars; barIdx++) {
     // --- Check existing positions for SL/target hit ---
     for (let p = openPositions.length - 1; p >= 0; p--) {
       const pos = openPositions[p];
       const sd = stockData[pos.sym];
-      if (barIdx >= sd.dayCandles.length) continue;
-      const bar = sd.dayCandles[barIdx];
+      if (barIdx >= sd.windowCandles.length) continue;
+      const bar = sd.windowCandles[barIdx];
 
       let exitPrice = null;
       let exitReason = null;
@@ -214,8 +269,14 @@ async function main() {
         else if (bar.l <= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
       }
 
+      // Time-based exit (scalp mode)
+      if (!exitPrice && pos.maxHoldBars && (barIdx - pos.entryBar) >= pos.maxHoldBars) {
+        exitPrice = bar.c;
+        exitReason = 'TIME';
+      }
+
       // EOD exit on last bar
-      if (!exitPrice && barIdx === sd.dayCandles.length - 1) {
+      if (!exitPrice && barIdx === sd.windowCandles.length - 1) {
         exitPrice = bar.c;
         exitReason = 'EOD';
       }
@@ -241,7 +302,7 @@ async function main() {
           txCost,
           netPnl,
           reason: exitReason,
-          entryTime: formatTime(sd.dayCandles[pos.entryBar].t),
+          entryTime: formatTime(sd.windowCandles[pos.entryBar].t),
           exitTime: formatTime(bar.t),
           confidence: pos.confidence,
           action: pos.action,
@@ -263,16 +324,18 @@ async function main() {
       if (openPositions.some(p => p.sym === sym)) continue; // already in this stock
 
       const sd = stockData[sym];
-      if (barIdx >= sd.dayCandles.length) continue;
+      if (barIdx >= sd.windowCandles.length) continue;
 
       // Build candle array: prior context + target date candles up to current bar (NO LOOKAHEAD)
-      const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, barIdx + 1)];
+      // Include prior days + all day candles up to current window bar (full context, no lookahead)
+      const dayBarIdx = sd.firstWindowIdx + barIdx;
+      const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
       if (candlesSoFar.length < 10) continue;
 
       // Run v2 engine
       const patterns = detectPatterns(candlesSoFar, { barIndex: barIdx });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection } });
 
       if (risk.confidence < MIN_CONFIDENCE) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
@@ -292,6 +355,7 @@ async function main() {
         confidence: risk.confidence,
         action: risk.action,
         pattern: patterns[0]?.name || 'None',
+        maxHoldBars: risk.maxHoldBars || null,
       });
       totalTradesOpened++;
     }
