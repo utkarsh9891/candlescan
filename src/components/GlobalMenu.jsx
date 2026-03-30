@@ -96,54 +96,23 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
             boxSizing: 'border-box',
           }}
         >
+          {/* Navigation */}
           {navAction && (
             <>
-              <button
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  navAction.onClick();
-                }}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '10px 10px',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: '#1a1d26',
-                  background: 'none',
-                  border: 'none',
-                  borderRadius: 6,
-                  cursor: 'pointer',
-                  WebkitTapHighlightColor: 'transparent',
-                }}
-              >
+              <button type="button" onClick={() => { setOpen(false); navAction.onClick(); }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round">
-                  <rect x="3" y="3" width="7" height="7" rx="1" />
-                  <rect x="14" y="3" width="7" height="7" rx="1" />
-                  <rect x="3" y="14" width="7" height="7" rx="1" />
-                  <rect x="14" y="14" width="7" height="7" rx="1" />
+                  <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
                 </svg>
                 {navAction.label}
               </button>
               <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
             </>
           )}
-
           {simulationAction && (
             <>
-              <button
-                type="button"
-                onClick={() => { setOpen(false); simulationAction.onClick(); }}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26',
-                  background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer',
-                  WebkitTapHighlightColor: 'transparent',
-                }}
-              >
+              <button type="button" onClick={() => { setOpen(false); simulationAction.onClick(); }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round">
                   <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </svg>
@@ -153,191 +122,18 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
             </>
           )}
 
-          <div
-            style={{
-              padding: '6px 10px',
-              fontSize: 11,
-              fontWeight: 700,
-              color: '#8892a8',
-              textTransform: 'uppercase',
-              letterSpacing: 0.5,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
-            Signal filters
-            <span
-              style={{
-                fontSize: 10,
-                background: filterCount === CATEGORIES.length ? '#e2e5eb' : '#2563eb',
-                color: filterCount === CATEGORIES.length ? '#4a5068' : '#fff',
-                borderRadius: 10,
-                padding: '1px 6px',
-                fontWeight: 700,
-              }}
-            >
-              {filterCount}/{CATEGORIES.length}
-            </span>
-          </div>
-
-          {CATEGORIES.map(({ key, label }) => (
-            <label
-              key={key}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 10px',
-                cursor: 'pointer',
-                fontSize: 13,
-                fontWeight: 600,
-                color: activeFilters.has(key) ? '#1a1d26' : '#8892a8',
-                borderRadius: 4,
-                WebkitTapHighlightColor: 'transparent',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={activeFilters.has(key)}
-                onChange={() => toggleFilter(key)}
-                style={{ accentColor: '#2563eb', margin: 0, width: 18, height: 18 }}
-              />
-              {label}
-            </label>
-          ))}
-
-          <div
-            style={{
-              borderTop: '1px solid #eef0f4',
-              marginTop: 6,
-              paddingTop: 8,
-              padding: '6px 10px 4px',
-              display: 'flex',
-              gap: 6,
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => onFiltersChange(new Set(CATEGORIES.map((c) => c.key)))}
-              style={{
-                flex: 1,
-                fontSize: 12,
-                fontWeight: 600,
-                padding: '8px 0',
-                border: '1px solid #e2e5eb',
-                borderRadius: 6,
-                background: '#fff',
-                color: '#2563eb',
-                cursor: 'pointer',
-              }}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              onClick={() => onFiltersChange(new Set())}
-              style={{
-                flex: 1,
-                fontSize: 12,
-                fontWeight: 600,
-                padding: '8px 0',
-                border: '1px solid #e2e5eb',
-                borderRadius: 6,
-                background: '#fff',
-                color: '#8892a8',
-                cursor: 'pointer',
-              }}
-            >
-              None
-            </button>
-          </div>
-
-          {/* Custom indices section */}
-          {onAddCustomIndex && (
-            <>
-              <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6 }} />
-              <div
-                style={{
-                  padding: '6px 10px',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: '#8892a8',
-                  textTransform: 'uppercase',
-                  letterSpacing: 0.5,
-                  marginTop: 4,
-                }}
-              >
-                Custom Indices
-              </div>
-              {customIndices?.length > 0 ? (
-                customIndices.map((ci) => (
-                  <div
-                    key={ci.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '6px 10px',
-                    }}
-                  >
-                    <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#1a1d26' }}>
-                      {ci.id}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveCustomIndex(ci.id)}
-                      title={`Remove ${ci.id}`}
-                      style={{
-                        width: 22, height: 22, borderRadius: 4, border: '1px solid #fecaca',
-                        background: '#fef2f2', color: '#dc2626', fontSize: 14, fontWeight: 700,
-                        cursor: 'pointer', display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', lineHeight: 1, padding: 0,
-                      }}
-                    >
-                      −
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <div style={{ padding: '4px 10px', fontSize: 11, color: '#8892a8' }}>
-                  None added yet
-                </div>
-              )}
-              <div style={{ padding: '4px 10px 6px' }}>
-                <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
-              </div>
-            </>
-          )}
-
-          {/* Engine version toggle */}
+          {/* 1. Engine */}
           {onEngineVersionChange && (
             <>
-              <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6 }} />
-              <div style={{
-                padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8',
-                textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4,
-              }}>
-                Engine
-              </div>
+              <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Engine</div>
               <div style={{ display: 'flex', gap: 4, padding: '4px 10px 8px' }}>
                 {[
                   { key: 'scalp', label: 'Scalp', color: '#d97706' },
                   { key: 'v2', label: 'Intraday', color: '#2563eb' },
                   { key: 'v1', label: 'Classic', color: '#2563eb' },
                 ].map((v) => (
-                  <button
-                    key={v.key}
-                    type="button"
-                    onClick={() => onEngineVersionChange(v.key)}
-                    style={{
-                      flex: 1, fontSize: 11, fontWeight: 600, padding: '8px 0',
-                      border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb',
-                      borderRadius: 6, cursor: 'pointer',
-                      background: engineVersion === v.key ? v.color : '#fff',
-                      color: engineVersion === v.key ? '#fff' : '#4a5068',
-                    }}
-                  >
+                  <button key={v.key} type="button" onClick={() => onEngineVersionChange(v.key)}
+                    style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '8px 0', border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 6, cursor: 'pointer', background: engineVersion === v.key ? v.color : '#fff', color: engineVersion === v.key ? '#fff' : '#4a5068' }}>
                     {v.label}
                   </button>
                 ))}
@@ -345,7 +141,48 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
             </>
           )}
 
-          {/* Debug + Version */}
+          {/* 2. Signal filters */}
+          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 2 }} />
+          <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            Signal filters
+            <span style={{ fontSize: 10, background: filterCount === CATEGORIES.length ? '#e2e5eb' : '#2563eb', color: filterCount === CATEGORIES.length ? '#4a5068' : '#fff', borderRadius: 10, padding: '1px 6px', fontWeight: 700 }}>
+              {filterCount}/{CATEGORIES.length}
+            </span>
+          </div>
+          {CATEGORIES.map(({ key, label }) => (
+            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: activeFilters.has(key) ? '#1a1d26' : '#8892a8', borderRadius: 4, WebkitTapHighlightColor: 'transparent' }}>
+              <input type="checkbox" checked={activeFilters.has(key)} onChange={() => toggleFilter(key)} style={{ accentColor: '#2563eb', margin: 0, width: 18, height: 18 }} />
+              {label}
+            </label>
+          ))}
+          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, paddingTop: 8, padding: '6px 10px 4px', display: 'flex', gap: 6 }}>
+            <button type="button" onClick={() => onFiltersChange(new Set(CATEGORIES.map(c => c.key)))} style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '8px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>
+            <button type="button" onClick={() => onFiltersChange(new Set())} style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '8px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#8892a8', cursor: 'pointer' }}>None</button>
+          </div>
+
+          {/* 3. Custom indices */}
+          {onAddCustomIndex && (
+            <>
+              <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6 }} />
+              <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Custom Indices</div>
+              {customIndices?.length > 0 ? (
+                customIndices.map(ci => (
+                  <div key={ci.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px' }}>
+                    <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#1a1d26' }}>{ci.id}</span>
+                    <button type="button" onClick={() => onRemoveCustomIndex(ci.id)} title={`Remove ${ci.id}`}
+                      style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, padding: 0 }}>−</button>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding: '4px 10px', fontSize: 11, color: '#8892a8' }}>None added yet</div>
+              )}
+              <div style={{ padding: '4px 10px 6px' }}>
+                <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
+              </div>
+            </>
+          )}
+
+          {/* 4. Debug + Version */}
           <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '8px 10px 6px' }}>
             {onDebugModeChange && (
               <label style={{
