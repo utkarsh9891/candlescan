@@ -23,6 +23,7 @@ import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx'
 import BatchScanPage from './components/BatchScanPage.jsx';
 import SimulationPage from './components/SimulationPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
+import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
 import { hasBatchToken } from './utils/batchAuth.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
@@ -358,6 +359,7 @@ export default function App() {
 
   return (
     <div style={shell}>
+      <UpdatePrompt />
       {/* Shared header — single instance, nav action changes per view */}
       <Header badge={headerBadge} lastScan={lastScan} mode={mode} onModeChange={setMode}>
         <GlobalMenu
