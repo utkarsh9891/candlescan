@@ -23,7 +23,7 @@ export default defineConfig({
     react(),
     chartCacheDevPlugin(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       manifest: {
         name: 'CandleScan',
         short_name: 'CandleScan',
