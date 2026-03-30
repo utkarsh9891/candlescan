@@ -76,17 +76,35 @@ function TradeCard({ t, onTap }) {
   );
 }
 
+// Engine-specific defaults
+const ENGINE_PRESETS = {
+  scalp:  { from: '09:30', to: '11:00', maxOpen: 1, maxTrades: 5 },
+  v2:     { from: '09:15', to: '15:30', maxOpen: 1, maxTrades: 3 },
+  v1:     { from: '09:15', to: '15:30', maxOpen: 1, maxTrades: 2 },
+};
+
 export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
-  const [date, setDate] = useState(getLastTradingDay);
-  const [startTime, setStartTime] = useState('09:15');
-  const [endTime, setEndTime] = useState('10:30');
-  const [nseIndex, setNseIndex] = useState('NIFTY SMALLCAP 100');
   const [localEngine, setLocalEngine] = useState(engineVersion || 'scalp');
+  const preset = ENGINE_PRESETS[localEngine] || ENGINE_PRESETS.scalp;
+  const [date, setDate] = useState(getLastTradingDay);
+  const [startTime, setStartTime] = useState(preset.from);
+  const [endTime, setEndTime] = useState(preset.to);
+  const [nseIndex, setNseIndex] = useState('NIFTY SMALLCAP 100');
   const [capital, setCapital] = useState(300000);
   const [positionSize, setPositionSize] = useState(300000);
-  const [maxConcurrent, setMaxConcurrent] = useState(1);
-  const [maxTotalTrades, setMaxTotalTrades] = useState(5);
+  const [maxConcurrent, setMaxConcurrent] = useState(preset.maxOpen);
+  const [maxTotalTrades, setMaxTotalTrades] = useState(preset.maxTrades);
+
+  // Update presets when engine changes
+  const handleEngineChange = (eng) => {
+    setLocalEngine(eng);
+    const p = ENGINE_PRESETS[eng] || ENGINE_PRESETS.scalp;
+    setStartTime(p.from);
+    setEndTime(p.to);
+    setMaxConcurrent(p.maxOpen);
+    setMaxTotalTrades(p.maxTrades);
+  };
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ phase: '', completed: 0, total: 0, current: '' });
   const [results, setResults] = useState(null); // { trades, summary }
@@ -149,7 +167,30 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
 
   return (
     <div>
-      {/* Controls */}
+      {/* 1. Engine selector (primary — determines all other defaults) */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={labelStyle}>Engine</div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[
+            { k: 'scalp', l: 'Scalp', color: '#d97706' },
+            { k: 'v2', l: 'Intraday', color: '#2563eb' },
+            { k: 'v1', l: 'Classic', color: '#2563eb' },
+          ].map(v => (
+            <button key={v.k} type="button" disabled={running} onClick={() => handleEngineChange(v.k)}
+              style={{
+                flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 700, borderRadius: 8,
+                border: localEngine === v.k ? 'none' : '1px solid #e2e5eb',
+                background: localEngine === v.k ? v.color : '#fff',
+                color: localEngine === v.k ? '#fff' : '#4a5068',
+                cursor: running ? 'not-allowed' : 'pointer',
+              }}>
+              {v.l}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 2. Date + Time window */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 120px' }}>
           <div style={labelStyle}>Date</div>
@@ -168,32 +209,13 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
         </div>
       </div>
 
-      {/* Index + Engine */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 150px' }}>
-          <div style={labelStyle}>Index</div>
-          <select value={nseIndex} onChange={e => setNseIndex(e.target.value)}
-            disabled={running} style={{ ...inputStyle, width: '100%', cursor: 'pointer' }}>
-            {allOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-          </select>
-        </div>
-        <div style={{ flex: '0 0 150px' }}>
-          <div style={labelStyle}>Engine</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {[{ k: 'scalp', l: 'Scalp' }, { k: 'v2', l: 'Intraday' }, { k: 'v1', l: 'Classic' }].map(v => (
-              <button key={v.k} type="button" disabled={running} onClick={() => setLocalEngine(v.k)}
-                style={{
-                  flex: 1, padding: '8px 0', fontSize: 11, fontWeight: 600, borderRadius: 6,
-                  border: localEngine === v.k ? 'none' : '1px solid #e2e5eb',
-                  background: localEngine === v.k ? '#2563eb' : '#fff',
-                  color: localEngine === v.k ? '#fff' : '#4a5068',
-                  cursor: running ? 'not-allowed' : 'pointer',
-                }}>
-                {v.l}
-              </button>
-            ))}
-          </div>
-        </div>
+      {/* 3. Index */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={labelStyle}>Index</div>
+        <select value={nseIndex} onChange={e => setNseIndex(e.target.value)}
+          disabled={running} style={{ ...inputStyle, width: '100%', cursor: 'pointer' }}>
+          {allOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+        </select>
       </div>
 
       {/* Trade parameters */}

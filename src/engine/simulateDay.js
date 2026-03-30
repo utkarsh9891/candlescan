@@ -11,19 +11,27 @@ const IST_OFFSET = 19800; // +5:30 in seconds
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
 /** Last IST trading day (skips weekends; before 3:30 PM uses previous day). */
-export function getLastTradingDay() {
+/** Returns today if past 12 noon IST (trading data available), else last trading day. */
+export function getSimulationDate() {
   const now = new Date();
-  // Convert to IST
   const istMs = now.getTime() + (now.getTimezoneOffset() * 60000) + (IST_OFFSET * 1000);
   const d = new Date(istMs);
-  if (d.getHours() < 15 || (d.getHours() === 15 && d.getMinutes() < 30)) {
-    d.setDate(d.getDate() - 1);
+
+  // If past noon on a weekday, use today (morning session data is available)
+  if (d.getHours() >= 12 && d.getDay() !== 0 && d.getDay() !== 6) {
+    return d.toISOString().slice(0, 10);
   }
+
+  // Otherwise go back to last trading day
+  if (d.getHours() < 12) d.setDate(d.getDate() - 1);
   while (d.getDay() === 0 || d.getDay() === 6) {
     d.setDate(d.getDate() - 1);
   }
   return d.toISOString().slice(0, 10);
 }
+
+// Keep old name as alias for backward compat
+export const getLastTradingDay = getSimulationDate;
 
 /** Convert candle timestamp to IST date string. */
 function istDate(t) {
