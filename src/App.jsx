@@ -6,6 +6,10 @@ import { computeRiskScore as computeRiskScoreV1 } from './engine/risk.js';
 import { detectPatterns as detectPatternsV2 } from './engine/patterns-v2.js';
 import { detectLiquidityBox as detectLiquidityBoxV2 } from './engine/liquidityBox-v2.js';
 import { computeRiskScore as computeRiskScoreV2 } from './engine/risk-v2.js';
+import { detectPatterns as detectPatternsScalp } from './engine/patterns-scalp.js';
+import { detectLiquidityBox as detectLiquidityBoxScalp } from './engine/liquidityBox-scalp.js';
+import { computeRiskScore as computeRiskScoreScalp } from './engine/risk-scalp.js';
+import { getIndexDirection } from './engine/indexDirection.js';
 import Header from './components/Header.jsx';
 import TimeframePills from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
@@ -21,11 +25,11 @@ import SimulationPage from './components/SimulationPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
 import { hasBatchToken } from './utils/batchAuth.js';
-import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES } from './data/signalCategories.js';
+import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
 
-const ALL_CATEGORIES = new Set(SIGNAL_CATEGORIES);
+// Categories are engine-dependent — initialized after engineVersion state
 
 const NSE_SYM_CACHE_PREFIX = 'candlescan_nse_syms_v1_';
 const NSE_SYM_CACHE_MS = 45 * 60 * 1000;
@@ -67,13 +71,22 @@ export default function App() {
     try { return localStorage.getItem('candlescan_mode') || 'simple'; } catch { return 'simple'; }
   });
   const [engineVersion, setEngineVersion] = useState(() => {
-    try { return localStorage.getItem('candlescan_engine') || 'v2'; } catch { return 'v2'; }
+    try { return localStorage.getItem('candlescan_engine') || 'scalp'; } catch { return 'scalp'; }
   });
 
   useEffect(() => {
     try { localStorage.setItem('candlescan_engine', engineVersion); } catch { /* quota */ }
+    // Reset signal filters when engine changes (different category sets)
+    setActiveFilters(new Set(getCategoriesForEngine(engineVersion)));
+    // Auto-set timeframe for scalping
+    if (engineVersion === 'scalp') setTimeframe('1m');
   }, [engineVersion]);
-  const [timeframe, setTimeframe] = useState('5m');
+  const [timeframe, setTimeframe] = useState(() => {
+    try {
+      const eng = localStorage.getItem('candlescan_engine') || 'scalp';
+      return eng === 'scalp' ? '1m' : '5m';
+    } catch { return '5m'; }
+  });
   const [inputVal, setInputVal] = useState('');
   const [sym, setSym] = useState('');
   const [companyName, setCompanyName] = useState('');
@@ -119,7 +132,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Signal filter state
-  const [activeFilters, setActiveFilters] = useState(ALL_CATEGORIES);
+  const [activeFilters, setActiveFilters] = useState(() => new Set(getCategoriesForEngine(engineVersion)));
 
   // Signal highlight toggle
   const [highlightSignals, setHighlightSignals] = useState(true);
@@ -224,12 +237,19 @@ export default function App() {
       }
 
       setCandles(cd);
-      const detectPat = engineVersion === 'v2' ? detectPatternsV2 : detectPatternsV1;
-      const detectBox = engineVersion === 'v2' ? detectLiquidityBoxV2 : detectLiquidityBoxV1;
-      const scoreRisk = engineVersion === 'v2' ? computeRiskScoreV2 : computeRiskScoreV1;
+      const detectPat = engineVersion === 'scalp' ? detectPatternsScalp : engineVersion === 'v2' ? detectPatternsV2 : detectPatternsV1;
+      const detectBox = engineVersion === 'scalp' ? detectLiquidityBoxScalp : engineVersion === 'v2' ? detectLiquidityBoxV2 : detectLiquidityBoxV1;
+      const scoreRisk = engineVersion === 'scalp' ? computeRiskScoreScalp : engineVersion === 'v2' ? computeRiskScoreV2 : computeRiskScoreV1;
+
+      // For scalp mode, fetch index direction
+      let idxDir = null;
+      if (engineVersion === 'scalp') {
+        try { idxDir = await getIndexDirection(nseIndex); } catch { /* ignore */ }
+      }
+
       const pat = detectPat(cd);
       const bx = detectBox(cd);
-      const rk = scoreRisk({ candles: cd, patterns: pat, box: bx });
+      const rk = scoreRisk({ candles: cd, patterns: pat, box: bx, opts: { indexDirection: idxDir } });
       setPatterns(pat);
       setBox(bx);
       setRisk(rk);
@@ -244,7 +264,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [timeframe, engineVersion]);
+  }, [timeframe, engineVersion, nseIndex]);
 
   useEffect(() => {
     if (mode !== 'advanced' || simulated || !yahooSym || !risk) {
@@ -290,9 +310,10 @@ export default function App() {
   // Filter patterns for display (score uses all patterns)
   const filteredPatterns = patterns.filter((p) => activeFilters.has(p.category));
 
+  const currentCategories = getCategoriesForEngine(engineVersion);
   const signalMeta = {
-    categoryCount: SIGNAL_CATEGORIES.length,
-    rulesApprox: APPROX_PATTERN_RULES,
+    categoryCount: currentCategories.length,
+    rulesApprox: getRuleCountForEngine(engineVersion),
   };
 
   const viewProps = {
