@@ -214,30 +214,14 @@ Navigation via shared GlobalMenu:
 
 ## Deployment & Versioning
 
-### Frontend (GitHub Actions)
-Push to `main` → auto-tag patch version → `npm ci` → `npm test` → `npm run build` → smoke check → deploy to GitHub Pages.
+> **Full guide: [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md)** — read this before making any commits.
 
-### Auto-versioning
-Every merge to `main` automatically creates the next patch tag (v3.0.3 → v3.0.4 → ...) before building. Version is injected via `git describe --tags` in `vite.config.js`. No manual version bumps needed for patches.
-
-### Version bump rules (for coding agents)
-
-| Change type | How | Examples |
-|-------------|-----|----------|
-| **Patch** (auto) | Merge to main → CI auto-tags v3.0.X+1 | Bug fixes, tuning, UI tweaks, docs |
-| **Minor** | Manual: `git tag v3.1.0 && git push origin v3.1.0` | New feature, page, pattern category |
-| **Major** | Manual: `git tag v4.0.0 && git push origin v4.0.0` | New engine mode, breaking change |
-
-**How it works:**
-- Every merge to `main` → CI auto-creates next patch tag on the merge commit → builds → deploys
-- Manual tag push → triggers a second deploy with the correct major/minor version
-- `cancel-in-progress: true` → manual tag deploy replaces any in-flight patch deploy
-
-**When to manually tag (for coding agents):**
-- New engine (scalping, options, etc.) → major
-- New UI page (simulation, batch scanner) → minor
-- New signal category → minor
-- Everything else → let auto-patch handle it
+**Key rules for coding agents:**
+- Direct push to `main` is **blocked**. Always use a PR (`gh pr create` → `gh pr merge <n> --merge`).
+- Version comes from **git tags only** (no version field in package.json). Do not add one.
+- **Do not create tags manually.** CI auto-tags every merge to `main` with the next patch version.
+- Pre-push hook runs `npm test && npm run build`. Do not skip it.
+- Merge method: `--merge` only (no `--squash`, no `--rebase`).
 
 ### Cloudflare Worker
 ```bash
