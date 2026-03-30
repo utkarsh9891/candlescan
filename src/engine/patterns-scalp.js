@@ -44,7 +44,11 @@ function volFactor(candles, n) {
   if (!vols.length) return 1;
   const avg = vols.reduce((a, b) => a + b, 0) / vols.length;
   if (avg <= 0) return 1;
-  return Math.min(3, (candles[n - 1].v || 0) / avg);
+  // Use max of current vol and recent 3-bar avg (Yahoo 1m last candle often has 0 volume)
+  const recent3 = candles.slice(Math.max(0, n - 4), n - 1).map(c => c.v || 0);
+  const recent3avg = recent3.length ? recent3.reduce((a, b) => a + b, 0) / recent3.length : 0;
+  const effectiveVol = Math.max(candles[n - 1].v || 0, recent3avg);
+  return Math.min(3, effectiveVol / avg);
 }
 
 function avgBody(candles, lookback = 10) {
@@ -67,7 +71,8 @@ export function detectPatterns(candles, opts) {
   const vf = volFactor(candles, n);
 
   // Reject all signals if volume is weak
-  if (vf < 1.3) return [];
+  // Require some volume activity (relaxed from 1.3 — Yahoo 1m last bar often has 0 vol)
+  if (vf < 0.8) return [];
 
   const ab = avgBody(candles, 10);
   const vwap = vwapProxy(candles, 20);
