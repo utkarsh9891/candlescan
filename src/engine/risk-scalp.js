@@ -89,6 +89,15 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const recentAvgVol = recentVols.length ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length : 0;
   if (recentAvgVol < 5000) return noTrade(cur, candles, box);
 
+  // Micro-trend filter: reject signals against the stock's own recent trend (20-bar)
+  if (candles.length >= 20 && top) {
+    const recent = candles.slice(-20);
+    const trendSlope = (recent[recent.length - 1].c - recent[0].c) / recent[0].c;
+    // Counter-trend: reject
+    if (top.direction === 'bullish' && trendSlope < -0.002) return noTrade(cur, candles, box);
+    if (top.direction === 'bearish' && trendSlope > 0.002) return noTrade(cur, candles, box);
+  }
+
   /* ── 1. Signal clarity (max 25) — volume-weighted ──────────── */
   const vols = candles.slice(-11, -1).map(c => c.v || 0);
   const avgV = vols.length ? vols.reduce((a, b) => a + b, 0) / vols.length : 1;
@@ -112,23 +121,28 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.0015 : rawEntry * 0.9985;
 
-  // SL for scalping (ATR × 2.0) — survive 1m noise
-  const slDist = atrVal * 2.0;
-  // Target (ATR × 2.5) — slightly wider than SL for positive edge
+  // SL: volatility-adaptive — must survive at least 3 typical bar ranges
+  const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
+  const slDist = Math.max(atrVal * 2.0, avgBarRange * 3, entry * 0.008);
+  // Target: achievable within 15 bars — 2x SL for good R:R
   let targetDist;
   let sl, target;
+
+  const targetFloor = slDist * 2; // 2x SL for good R:R
 
   if (direction === 'long') {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-15).map(c => c.h));
     const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 2.5) : atrVal * 2.5;
+    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 2.0) : atrVal * 2.0;
+    targetDist = Math.max(targetDist, targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-15).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 2.5) : atrVal * 2.5;
+    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 2.0) : atrVal * 2.0;
+    targetDist = Math.max(targetDist, targetFloor);
     target = entry - targetDist;
   }
 
@@ -136,7 +150,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rrClamped = Math.min(3, Math.max(0.3, rr));
   const rrScore = Math.round(25 * (1 - Math.exp(-0.9 * rrClamped)));
 
-  // Min R:R 1.0 for scalping (relaxed vs v2's 1.5)
+  // Min R:R 1.0 for scalping (trailing stop manages actual R:R)
   if (rr < 1.0) return noTrade(cur, candles, box);
 
   // Transaction cost filter
@@ -191,13 +205,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   // Confidence floor 20 (wider range for scalping discrimination)
   let confidence = Math.round(20 + (rawClamped / 100) * 80);
 
-  // Index direction filter
+  // Index direction filter — small bonus for alignment, no penalty for counter-trend
   const idxDir = opts?.indexDirection;
   if (idxDir) {
-    if (direction === 'long' && idxDir.direction === 'bullish') confidence += 5;
-    else if (direction === 'short' && idxDir.direction === 'bearish') confidence += 5;
-    else if (direction === 'long' && idxDir.direction === 'bearish') confidence -= 30;
-    else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 30;
+    if (direction === 'long' && idxDir.direction === 'bullish') confidence += 3;
+    else if (direction === 'short' && idxDir.direction === 'bearish') confidence += 3;
   }
 
   // Time-of-day filter: first 10 bars (9:15-9:25) = skip
@@ -234,7 +246,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 15, // 8 minutes on 1m = forced exit
+    maxHoldBars: 20, // 8 minutes on 1m = forced exit
   };
 }
 
@@ -244,6 +256,6 @@ function noTrade(cur, candles, box) {
     total: 0, confidence: 20, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
-    maxHoldBars: 15,
+    maxHoldBars: 20,
   };
 }
