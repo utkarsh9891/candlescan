@@ -35,7 +35,7 @@ const TIMEFRAME_MAP = {
 };
 
 const TX_COST_PCT = 0.0005; // 0.05% per side
-const MIN_AVG_VOLUME = 50000;
+const MIN_AVG_VOLUME = 10000;
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
 function parseArgs() {
@@ -44,11 +44,14 @@ function parseArgs() {
   let indexName = 'NIFTY 200';
   let date = null;
   let engine = 'scalp';
-  let minConfidence = 75;
+  let minConfidence = 70;
   let maxPositions = 1;
-  let maxTotalTrades = 5;
+  let maxTotalTrades = 10;
   let positionSize = 300000;
-  let skipFirstBars = 10;
+  let skipFirstBars = 5;
+  let fromTime = '09:30';
+  let toTime = '11:00';
+  let multiWindow = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -58,10 +61,13 @@ function parseArgs() {
     if (args[i] === '--max-trades' && args[i + 1]) { maxTotalTrades = +args[++i]; continue; }
     if (args[i] === '--position-size' && args[i + 1]) { positionSize = +args[++i]; continue; }
     if (args[i] === '--skip-bars' && args[i + 1]) { skipFirstBars = +args[++i]; continue; }
+    if (args[i] === '--from' && args[i + 1]) { fromTime = args[++i]; continue; }
+    if (args[i] === '--to' && args[i + 1]) { toTime = args[++i]; continue; }
+    if (args[i] === '--multi-window') { multiWindow = true; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow };
 }
 
 function parseChartJson(data) {
@@ -138,42 +144,251 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
   });
 }
 
-async function main() {
-  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital } = parseArgs();
+/** Run a single-window bar-by-bar simulation and return results. */
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection }) {
+  const trades = [];
+  const openPositions = [];
+  const cooldownUntil = {}; // sym -> barIdx when cooldown expires (prevent whipsaw)
+  let currentCapital = CAPITAL;
+  let peakCapital = CAPITAL;
+  let maxDrawdown = 0;
+  let totalTradesOpened = 0;
 
-  // Select engine functions
+  const maxBars = Math.max(...Object.values(stockDataForWindow).map(d => d.windowCandles.length));
+
+  for (let barIdx = 0; barIdx < maxBars; barIdx++) {
+    // --- Check existing positions for trailing stop, SL/target hit ---
+    for (let p = openPositions.length - 1; p >= 0; p--) {
+      const pos = openPositions[p];
+      const sd = stockDataForWindow[pos.sym];
+      if (barIdx >= sd.windowCandles.length) continue;
+      const bar = sd.windowCandles[barIdx];
+
+      // --- Trailing stop update (before SL check) ---
+      // Only trail AFTER the entry bar and only when a meaningful move has occurred
+      if (barIdx > pos.entryBar + 1) {
+        const bestPrice = pos.direction === 'long' ? bar.h : bar.l;
+        const unrealized = pos.direction === 'long'
+          ? (bestPrice - pos.entry)
+          : (pos.entry - bestPrice);
+        const movePercent = unrealized / pos.entry;
+
+        // Track maximum favorable excursion
+        if (!pos.maxFavorable || unrealized > pos.maxFavorable) {
+          pos.maxFavorable = unrealized;
+        }
+
+        // Only start trailing after 0.3% favorable move
+        if (pos.maxFavorable > pos.entry * 0.003) {
+          // Move SL to breakeven once we've moved 0.3%+
+          if (pos.direction === 'long') pos.sl = Math.max(pos.sl, pos.entry);
+          else pos.sl = Math.min(pos.sl, pos.entry);
+
+          // After 0.5%+ move, trail at 50% of max favorable
+          if (pos.maxFavorable > pos.entry * 0.005) {
+            const trailLevel = pos.direction === 'long'
+              ? pos.entry + pos.maxFavorable * 0.50
+              : pos.entry - pos.maxFavorable * 0.50;
+            if (pos.direction === 'long') pos.sl = Math.max(pos.sl, trailLevel);
+            else pos.sl = Math.min(pos.sl, trailLevel);
+          }
+        }
+      }
+
+      let exitPrice = null;
+      let exitReason = null;
+
+      if (pos.direction === 'long') {
+        if (bar.l <= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
+        else if (bar.h >= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
+      } else {
+        if (bar.h >= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
+        else if (bar.l <= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
+      }
+
+      // Validation window: if after 3 bars the trade hasn't moved 0.1% favorably, cut it
+      if (!exitPrice && (barIdx - pos.entryBar) === 3) {
+        const bestSoFar = pos.maxFavorable || 0;
+        if (bestSoFar < pos.entry * 0.001) {
+          exitPrice = bar.c;
+          exitReason = 'VALIDATION';
+        }
+      }
+
+      if (!exitPrice && pos.maxHoldBars && (barIdx - pos.entryBar) >= pos.maxHoldBars) {
+        exitPrice = bar.c;
+        exitReason = 'TIME';
+      }
+
+      if (!exitPrice && barIdx === sd.windowCandles.length - 1) {
+        exitPrice = bar.c;
+        exitReason = 'EOD';
+      }
+
+      if (exitPrice) {
+        const grossPnl = pos.direction === 'long'
+          ? (exitPrice - pos.entry) * pos.shares
+          : (pos.entry - exitPrice) * pos.shares;
+        const txCost = (pos.entry * pos.shares + exitPrice * pos.shares) * TX_COST_PCT;
+        const netPnl = grossPnl - txCost;
+
+        currentCapital += netPnl;
+        peakCapital = Math.max(peakCapital, currentCapital);
+        maxDrawdown = Math.max(maxDrawdown, peakCapital - currentCapital);
+
+        trades.push({
+          sym: pos.sym, direction: pos.direction,
+          entry: pos.entry, exit: exitPrice, shares: pos.shares,
+          grossPnl, txCost, netPnl, reason: exitReason,
+          entryTime: formatTime(sd.windowCandles[pos.entryBar].t),
+          exitTime: formatTime(bar.t),
+          confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
+        });
+
+        openPositions.splice(p, 1);
+        // Set cooldown: don't re-enter same stock for 5 bars
+        cooldownUntil[pos.sym] = barIdx + 5;
+      }
+    }
+
+    if (barIdx < SKIP_FIRST_BARS) continue;
+    if (openPositions.length >= MAX_POSITIONS) continue;
+    if (totalTradesOpened >= MAX_TOTAL_TRADES) continue;
+
+    for (const sym of Object.keys(stockDataForWindow)) {
+      if (openPositions.length >= MAX_POSITIONS) break;
+      if (totalTradesOpened >= MAX_TOTAL_TRADES) break;
+      if (openPositions.some(p => p.sym === sym)) continue;
+      if (cooldownUntil[sym] && barIdx < cooldownUntil[sym]) continue;
+
+      const sd = stockDataForWindow[sym];
+      if (barIdx >= sd.windowCandles.length) continue;
+
+      const dayBarIdx = sd.firstWindowIdx + barIdx;
+      const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
+      if (candlesSoFar.length < 10) continue;
+
+      const patterns = detectPatterns(candlesSoFar, {
+        barIndex: barIdx,
+        orbHigh: sd.orbHigh,
+        orbLow: sd.orbLow,
+        prevDayHigh: sd.prevDayHigh,
+        prevDayLow: sd.prevDayLow,
+      });
+      const box = detectLiquidityBox(candlesSoFar);
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection } });
+
+      if (risk.confidence < MIN_CONFIDENCE) continue;
+      if (!ACTIONABLE.has(risk.action)) continue;
+
+      const shares = Math.floor(POSITION_SIZE / risk.entry);
+      if (shares < 1) continue;
+
+      openPositions.push({
+        sym, direction: risk.direction,
+        entry: risk.entry, sl: risk.sl, target: risk.target,
+        entryBar: barIdx, shares,
+        confidence: risk.confidence, action: risk.action,
+        pattern: patterns[0]?.name || 'None',
+        maxHoldBars: risk.maxHoldBars || null,
+      });
+      totalTradesOpened++;
+    }
+  }
+
+  return { trades, currentCapital, peakCapital, maxDrawdown };
+}
+
+function printTrades(trades) {
+  console.log(
+    'Symbol'.padEnd(14) + 'Dir'.padEnd(7) + 'Entry'.padEnd(10) + 'Exit'.padEnd(10) +
+    'Shares'.padEnd(8) + 'P&L'.padEnd(12) + 'Reason'.padEnd(8) + 'Time'.padEnd(16) +
+    'Conf'.padEnd(6) + 'Pattern'
+  );
+  console.log('─'.repeat(100));
+  for (const t of trades) {
+    const pnlStr = (t.netPnl >= 0 ? '+' : '') + t.netPnl.toFixed(0);
+    console.log(
+      t.sym.padEnd(14) + t.direction.padEnd(7) + t.entry.toFixed(2).padEnd(10) +
+      t.exit.toFixed(2).padEnd(10) + String(t.shares).padEnd(8) + pnlStr.padEnd(12) +
+      t.reason.padEnd(8) + `${t.entryTime}-${t.exitTime}`.padEnd(16) +
+      String(t.confidence).padEnd(6) + t.pattern
+    );
+  }
+}
+
+function printSummary(trades, capital, currentCapital, maxDrawdown, label = 'SIMULATION SUMMARY') {
+  const wins = trades.filter(t => t.netPnl > 0).length;
+  const losses = trades.filter(t => t.netPnl <= 0).length;
+  const totalPnl = trades.reduce((s, t) => s + t.netPnl, 0);
+  const totalTxCost = trades.reduce((s, t) => s + t.txCost, 0);
+  const winRate = trades.length ? (wins / trades.length * 100).toFixed(1) : '0.0';
+
+  console.log(`\n=== ${label} ===\n`);
+  console.log(`Total trades:    ${trades.length}`);
+  console.log(`Wins / Losses:   ${wins} / ${losses} (${winRate}% win rate)`);
+  console.log(`Total P&L:       Rs.${totalPnl.toFixed(0)} (${(totalPnl / capital * 100).toFixed(2)}%)`);
+  console.log(`Transaction cost: Rs.${totalTxCost.toFixed(0)}`);
+  console.log(`Starting capital: Rs.${capital.toLocaleString()}`);
+  console.log(`Final capital:   Rs.${currentCapital.toFixed(0)}`);
+  console.log(`Max drawdown:    Rs.${maxDrawdown.toFixed(0)} (${(maxDrawdown / capital * 100).toFixed(2)}%)`);
+  console.log(`Return:          ${((currentCapital - capital) / capital * 100).toFixed(2)}%`);
+}
+
+/** Build window-specific stock data by re-filtering dayCandles for a time window. */
+function buildWindowStockData(allStockBase, wFrom, wTo) {
+  const result = {};
+  for (const [sym, base] of Object.entries(allStockBase)) {
+    const windowCandles = filterByTimeWindow(base.dayCandles, wFrom, wTo);
+    if (windowCandles.length < 3) continue;
+    const avgVol = windowCandles.reduce((s, c) => s + c.v, 0) / windowCandles.length;
+    if (avgVol < MIN_AVG_VOLUME) continue;
+    const firstWindowIdx = base.dayCandles.indexOf(windowCandles[0]);
+    result[sym] = { ...base, windowCandles, firstWindowIdx, avgVol };
+  }
+  return result;
+}
+
+async function main() {
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow } = parseArgs();
+
   const detectPatterns = engine === 'scalp' ? detectPatternsScalp : detectPatternsV2;
   const detectLiquidityBox = engine === 'scalp' ? detectLiquidityBoxScalp : detectLiquidityBoxV2;
   const computeRiskScore = engine === 'scalp' ? computeRiskScoreScalp : computeRiskScoreV2;
-  const MIN_CONFIDENCE = minConfidence;
-  const MAX_POSITIONS = maxPositions;
-  const POSITION_SIZE = positionSize;
   const CAPITAL = capital;
-  const SKIP_FIRST_BARS = skipFirstBars;
-  const MAX_TOTAL_TRADES = maxTotalTrades;
   const tf = TIMEFRAME_MAP[timeframe];
   if (!tf) { console.error(`Unknown timeframe: ${timeframe}`); process.exit(1); }
 
-  console.log(`\n=== CandleScan ${engine} Simulation ===`);
+  console.log(`\n=== CandleScan ${engine} Simulation${multiWindow ? ' (Multi-Window)' : ''} ===`);
   console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
-  console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${MAX_POSITIONS} | Per trade: Rs.${POSITION_SIZE.toLocaleString()} | Max trades: ${MAX_TOTAL_TRADES}`);
-  console.log(`Min confidence: ${MIN_CONFIDENCE} | Skip first ${SKIP_FIRST_BARS} bars | Min avg volume: ${MIN_AVG_VOLUME.toLocaleString()}`);
+  console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${maxPositions} | Per trade: Rs.${positionSize.toLocaleString()} | Max trades: ${maxTotalTrades}`);
+  console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Min avg volume: ${MIN_AVG_VOLUME.toLocaleString()}`);
   console.log('');
 
-  // 1. Fetch index constituents
+  // 1. Fetch index constituents (with cache fallback)
   console.log('Fetching index constituents...');
-  const symbols = await fetchNseIndexSymbolsNode(indexName);
+  let symbols;
+  try {
+    symbols = await fetchNseIndexSymbolsNode(indexName);
+  } catch (e) {
+    console.log(`NSE API failed (${e.message}), falling back to cached symbols...`);
+    // Derive symbols from cached 1m files
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const cacheDir = path.default.resolve(new URL('.', import.meta.url).pathname, '../cache/charts');
+    const files = fs.default.readdirSync(cacheDir).filter(f => f.endsWith(`_${tf.interval}_${tf.range}.json`) && !f.startsWith('^'));
+    symbols = files.map(f => f.replace(`.NS_${tf.interval}_${tf.range}.json`, ''));
+  }
   console.log(`Got ${symbols.length} symbols\n`);
 
-  // 2. Load candle data (cache only — no network)
+  // 2. Load candle data (cache only) — load full day for all stocks
   console.log('Loading candle data from cache...');
-  const stockData = {};
+  const allStockBase = {}; // sym -> { dayCandles, priorCandles, prevDayHigh, prevDayLow, orbHigh, orbLow }
   let loaded = 0;
   let skippedNoCache = 0;
   for (const sym of symbols) {
     const yahooSym = `${sym}.NS`;
     try {
-      // Cache-only: read from disk, skip if not cached
       const cached = readCachedChartJson(yahooSym, tf.interval, tf.range, 0);
       if (!cached) { skippedNoCache++; continue; }
       const parsed = parseChartJson(cached);
@@ -184,24 +399,23 @@ async function main() {
       const dayCandles = filterByDate(allCandles, targetDate);
       if (dayCandles.length < 5) continue;
 
-      // Filter to time window (9:30-11:00)
-      const windowCandles = filterByTimeWindow(dayCandles, '09:30', '11:00');
-      if (windowCandles.length < 3) continue;
-
-      // Check avg volume
-      const avgVol = windowCandles.reduce((s, c) => s + c.v, 0) / windowCandles.length;
-      if (avgVol < MIN_AVG_VOLUME) continue;
-
-      // Prior candles for pattern lookback
       const dayStart = allCandles.indexOf(dayCandles[0]);
       const priorCandles = allCandles.slice(Math.max(0, dayStart - 20), dayStart);
 
-      const firstWindowIdx = dayCandles.indexOf(windowCandles[0]);
-      stockData[sym] = { dayCandles, priorCandles, windowCandles, firstWindowIdx, avgVol };
+      // Previous day high/low
+      const targetDateStr = istDateStr(dayCandles[0].t);
+      const prevDayCandles = allCandles.filter(c => istDateStr(c.t) < targetDateStr);
+      const prevDayHigh = prevDayCandles.length ? Math.max(...prevDayCandles.map(c => c.h)) : null;
+      const prevDayLow = prevDayCandles.length ? Math.min(...prevDayCandles.map(c => c.l)) : null;
+
+      // Opening Range (first 15 bars on 1m)
+      const orbBars = dayCandles.slice(0, 15);
+      const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
+      const orbLow = orbBars.length >= 5 ? Math.min(...orbBars.map(c => c.l)) : null;
+
+      allStockBase[sym] = { dayCandles, priorCandles, prevDayHigh, prevDayLow, orbHigh, orbLow };
       loaded++;
-    } catch (e) {
-      // Skip on error
-    }
+    } catch (e) { /* skip */ }
   }
   console.log(`Loaded ${loaded} stocks (${skippedNoCache} not cached)\n`);
 
@@ -210,13 +424,12 @@ async function main() {
     process.exit(0);
   }
 
-  // Get target date date from first stock
-  const firstStock = Object.values(stockData)[0];
+  const firstStock = Object.values(allStockBase)[0];
   const simDate = istDateStr(firstStock.dayCandles[0].t);
   console.log(`Simulation date: ${simDate}`);
   console.log('─'.repeat(100));
 
-  // Compute index direction from NIFTY data (for scalp mode)
+  // Compute index direction
   let indexDirection = { direction: 'neutral', strength: 0 };
   if (engine === 'scalp') {
     const niftySym = '^NSEI';
@@ -239,180 +452,66 @@ async function main() {
     }
   }
 
-  // 3. Bar-by-bar simulation
-  const trades = [];
-  const openPositions = []; // { sym, direction, entry, sl, target, entryBar, shares }
-  let currentCapital = CAPITAL;
-  let peakCapital = CAPITAL;
-  let maxDrawdown = 0;
-  let totalTradesOpened = 0;
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection };
 
-  // Find max bars across all stocks
-  const maxBars = Math.max(...Object.values(stockData).map(d => d.windowCandles.length));
+  if (multiWindow) {
+    // Multi-window mode: run 3 windows sequentially
+    const windows = [
+      { from: '09:30', to: '11:00', label: 'Window 1 (9:30-11:00)' },
+      { from: '11:00', to: '13:00', label: 'Window 2 (11:00-13:00)' },
+      { from: '13:00', to: '14:30', label: 'Window 3 (13:00-14:30)' },
+    ];
+    let aggregateTrades = [];
+    let aggregateCapital = CAPITAL;
+    let aggregateMaxDD = 0;
 
-  for (let barIdx = 0; barIdx < maxBars; barIdx++) {
-    // --- Check existing positions for SL/target hit ---
-    for (let p = openPositions.length - 1; p >= 0; p--) {
-      const pos = openPositions[p];
-      const sd = stockData[pos.sym];
-      if (barIdx >= sd.windowCandles.length) continue;
-      const bar = sd.windowCandles[barIdx];
+    for (const w of windows) {
+      console.log(`\n${'═'.repeat(100)}`);
+      console.log(`>>> ${w.label}`);
+      console.log('═'.repeat(100));
 
-      let exitPrice = null;
-      let exitReason = null;
+      const windowData = buildWindowStockData(allStockBase, w.from, w.to);
+      const stockCount = Object.keys(windowData).length;
+      console.log(`Stocks with data in window: ${stockCount}`);
 
-      if (pos.direction === 'long') {
-        if (bar.l <= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-        else if (bar.h >= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
-      } else {
-        if (bar.h >= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-        else if (bar.l <= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
+      if (!stockCount) {
+        console.log('No stocks with data in this window.\n');
+        continue;
       }
 
-      // Time-based exit (scalp mode)
-      if (!exitPrice && pos.maxHoldBars && (barIdx - pos.entryBar) >= pos.maxHoldBars) {
-        exitPrice = bar.c;
-        exitReason = 'TIME';
-      }
+      const result = runWindow(windowData, simParams);
+      printTrades(result.trades);
+      printSummary(result.trades, CAPITAL, result.currentCapital, result.maxDrawdown, w.label);
 
-      // EOD exit on last bar
-      if (!exitPrice && barIdx === sd.windowCandles.length - 1) {
-        exitPrice = bar.c;
-        exitReason = 'EOD';
-      }
-
-      if (exitPrice) {
-        const grossPnl = pos.direction === 'long'
-          ? (exitPrice - pos.entry) * pos.shares
-          : (pos.entry - exitPrice) * pos.shares;
-        const txCost = (pos.entry * pos.shares + exitPrice * pos.shares) * TX_COST_PCT;
-        const netPnl = grossPnl - txCost;
-
-        currentCapital += netPnl;
-        peakCapital = Math.max(peakCapital, currentCapital);
-        maxDrawdown = Math.max(maxDrawdown, peakCapital - currentCapital);
-
-        trades.push({
-          sym: pos.sym,
-          direction: pos.direction,
-          entry: pos.entry,
-          exit: exitPrice,
-          shares: pos.shares,
-          grossPnl,
-          txCost,
-          netPnl,
-          reason: exitReason,
-          entryTime: formatTime(sd.windowCandles[pos.entryBar].t),
-          exitTime: formatTime(bar.t),
-          confidence: pos.confidence,
-          action: pos.action,
-          pattern: pos.pattern,
-        });
-
-        openPositions.splice(p, 1);
-      }
+      aggregateTrades = aggregateTrades.concat(result.trades);
+      aggregateCapital += (result.currentCapital - CAPITAL);
+      aggregateMaxDD = Math.max(aggregateMaxDD, result.maxDrawdown);
     }
 
-    // --- Generate new signals (skip first N bars) ---
-    if (barIdx < SKIP_FIRST_BARS) continue;
-    if (openPositions.length >= MAX_POSITIONS) continue;
-    if (totalTradesOpened >= MAX_TOTAL_TRADES) continue;
+    // Aggregate summary
+    console.log(`\n${'═'.repeat(100)}`);
+    console.log('═'.repeat(100));
+    printSummary(aggregateTrades, CAPITAL, aggregateCapital, aggregateMaxDD, `AGGREGATE (All Windows) — ${simDate}`);
+    console.log('');
+  } else {
+    // Single window mode
+    const windowData = buildWindowStockData(allStockBase, fromTime, toTime);
+    const stockCount = Object.keys(windowData).length;
+    console.log(`Stocks with data in window: ${stockCount}`);
 
-    for (const sym of Object.keys(stockData)) {
-      if (openPositions.length >= MAX_POSITIONS) break;
-      if (totalTradesOpened >= MAX_TOTAL_TRADES) break;
-      if (openPositions.some(p => p.sym === sym)) continue; // already in this stock
-
-      const sd = stockData[sym];
-      if (barIdx >= sd.windowCandles.length) continue;
-
-      // Build candle array: prior context + target date candles up to current bar (NO LOOKAHEAD)
-      // Include prior days + all day candles up to current window bar (full context, no lookahead)
-      const dayBarIdx = sd.firstWindowIdx + barIdx;
-      const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
-      if (candlesSoFar.length < 10) continue;
-
-      // Run v2 engine
-      const patterns = detectPatterns(candlesSoFar, { barIndex: barIdx });
-      const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection } });
-
-      if (risk.confidence < MIN_CONFIDENCE) continue;
-      if (!ACTIONABLE.has(risk.action)) continue;
-
-      // Calculate position
-      const shares = Math.floor(POSITION_SIZE / risk.entry);
-      if (shares < 1) continue;
-
-      openPositions.push({
-        sym,
-        direction: risk.direction,
-        entry: risk.entry,
-        sl: risk.sl,
-        target: risk.target,
-        entryBar: barIdx,
-        shares,
-        confidence: risk.confidence,
-        action: risk.action,
-        pattern: patterns[0]?.name || 'None',
-        maxHoldBars: risk.maxHoldBars || null,
-      });
-      totalTradesOpened++;
+    if (!stockCount) {
+      console.log('No stocks with data in this window.');
+      process.exit(0);
     }
+
+    const result = runWindow(windowData, simParams);
+
+    console.log('\n=== TRADE LOG ===\n');
+    printTrades(result.trades);
+    printSummary(result.trades, CAPITAL, result.currentCapital, result.maxDrawdown, `SIMULATION SUMMARY — ${simDate}`);
+    console.log(`Stocks scanned:  ${stockCount}`);
+    console.log('');
   }
-
-  // 4. Print results
-  console.log('\n=== TRADE LOG ===\n');
-  console.log(
-    'Symbol'.padEnd(14) +
-    'Dir'.padEnd(7) +
-    'Entry'.padEnd(10) +
-    'Exit'.padEnd(10) +
-    'Shares'.padEnd(8) +
-    'P&L'.padEnd(12) +
-    'Reason'.padEnd(8) +
-    'Time'.padEnd(16) +
-    'Conf'.padEnd(6) +
-    'Pattern'
-  );
-  console.log('─'.repeat(100));
-
-  for (const t of trades) {
-    const pnlStr = (t.netPnl >= 0 ? '+' : '') + t.netPnl.toFixed(0);
-    console.log(
-      t.sym.padEnd(14) +
-      t.direction.padEnd(7) +
-      t.entry.toFixed(2).padEnd(10) +
-      t.exit.toFixed(2).padEnd(10) +
-      String(t.shares).padEnd(8) +
-      pnlStr.padEnd(12) +
-      t.reason.padEnd(8) +
-      `${t.entryTime}-${t.exitTime}`.padEnd(16) +
-      String(t.confidence).padEnd(6) +
-      t.pattern
-    );
-  }
-
-  // 5. Summary
-  const wins = trades.filter(t => t.netPnl > 0).length;
-  const losses = trades.filter(t => t.netPnl <= 0).length;
-  const totalPnl = trades.reduce((s, t) => s + t.netPnl, 0);
-  const totalTxCost = trades.reduce((s, t) => s + t.txCost, 0);
-  const winRate = trades.length ? (wins / trades.length * 100).toFixed(1) : '0.0';
-
-  console.log('\n' + '═'.repeat(100));
-  console.log('=== SIMULATION SUMMARY ===\n');
-  console.log(`Date:            ${simDate}`);
-  console.log(`Stocks scanned:  ${loaded}`);
-  console.log(`Total trades:    ${trades.length}`);
-  console.log(`Wins / Losses:   ${wins} / ${losses} (${winRate}% win rate)`);
-  console.log(`Total P&L:       Rs.${totalPnl.toFixed(0)} (${(totalPnl / CAPITAL * 100).toFixed(2)}%)`);
-  console.log(`Transaction cost: Rs.${totalTxCost.toFixed(0)}`);
-  console.log(`Starting capital: Rs.${CAPITAL.toLocaleString()}`);
-  console.log(`Final capital:   Rs.${currentCapital.toFixed(0)}`);
-  console.log(`Max drawdown:    Rs.${maxDrawdown.toFixed(0)} (${(maxDrawdown / CAPITAL * 100).toFixed(2)}%)`);
-  console.log(`Return:          ${((currentCapital - CAPITAL) / CAPITAL * 100).toFixed(2)}%`);
-  console.log('');
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
