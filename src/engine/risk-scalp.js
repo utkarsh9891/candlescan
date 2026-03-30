@@ -84,13 +84,17 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const cur = candles[candles.length - 1];
   const barIndex = opts?.barIndex ?? candles.length;
 
-  // Volume gate
-  if ((cur.v || 0) < 5000) return noTrade(cur, candles, box);
+  // Volume gate: use average of recent 5 candles (last candle often has 0 in Yahoo 1m data)
+  const recentVols = candles.slice(-6, -1).map(c => c.v || 0);
+  const recentAvgVol = recentVols.length ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length : 0;
+  if (recentAvgVol < 5000) return noTrade(cur, candles, box);
 
   /* ── 1. Signal clarity (max 25) — volume-weighted ──────────── */
   const vols = candles.slice(-11, -1).map(c => c.v || 0);
   const avgV = vols.length ? vols.reduce((a, b) => a + b, 0) / vols.length : 1;
-  const volFactor = avgV > 0 ? Math.min(2.5, (cur.v || 0) / avgV) : 1;
+  // Use max of current vol and recent avg for volFactor (handles 0-vol last candle)
+  const effectiveVol = Math.max(cur.v || 0, recentAvgVol);
+  const volFactor = avgV > 0 ? Math.min(2.5, effectiveVol / avgV) : 1;
   const signalClarity = top ? Math.min(25, top.strength * volFactor * 25) : 2;
 
   /* ── 2. Low noise (max 20) ─────────────────────────────────── */
