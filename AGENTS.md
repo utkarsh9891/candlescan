@@ -212,11 +212,32 @@ Navigation via shared GlobalMenu:
 
 ---
 
-## Deployment
+## Deployment & Versioning
 
 ### Frontend (GitHub Actions)
-Push to `main` → `npm ci` → `npm test` → `npm run build` → smoke check → deploy to GitHub Pages
-Tests and build must pass; smoke check verifies `dist/index.html` contains "CandleScan".
+Push to `main` → auto-tag patch version → `npm ci` → `npm test` → `npm run build` → smoke check → deploy to GitHub Pages.
+
+### Auto-versioning
+Every merge to `main` automatically creates the next patch tag (v3.0.3 → v3.0.4 → ...) before building. Version is injected via `git describe --tags` in `vite.config.js`. No manual version bumps needed for patches.
+
+### When to bump major/minor (for coding agents)
+Before merging a PR, create a manual tag if the change warrants it:
+
+| Change type | Tag | Examples |
+|-------------|-----|----------|
+| **Major** (vX.0.0) | `git tag v4.0.0` | New engine mode (e.g., scalping), breaking API change, fundamental architecture change |
+| **Minor** (vX.Y.0) | `git tag v3.1.0` | New feature (simulation page, debug panel, batch scanner), new pattern category, new UI page |
+| **Patch** (auto) | Automatic | Bug fixes, threshold tuning, UI tweaks, docs, dependency updates |
+
+**How to manually tag:**
+```bash
+git checkout main && git pull
+git tag v3.1.0
+git push origin v3.1.0
+# Then merge the PR — auto-tag step sees HEAD is already tagged, skips
+```
+
+If HEAD is already tagged, the auto-tag step is skipped. This prevents conflicts between manual and auto tags.
 
 ### Cloudflare Worker
 ```bash
