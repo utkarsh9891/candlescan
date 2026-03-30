@@ -3,12 +3,20 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { chartCacheDevPlugin } from './vite-plugin-chart-cache.mjs';
 
-import { readFileSync } from 'node:fs';
-const pkg = JSON.parse(readFileSync('./package.json', 'utf8'));
+import { execSync } from 'node:child_process';
+
+function gitVersion() {
+  try {
+    // v2.1.0 (on tag) or v2.1.0-3-gabcdef (3 commits after tag)
+    return execSync('git describe --tags --always', { encoding: 'utf8' }).trim();
+  } catch {
+    return 'dev';
+  }
+}
 
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(gitVersion()),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   plugins: [
