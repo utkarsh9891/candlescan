@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { fetchOHLCV } from './engine/fetcher.js';
-import { detectPatterns as detectPatternsV1 } from './engine/patterns.js';
-import { detectLiquidityBox as detectLiquidityBoxV1 } from './engine/liquidityBox.js';
-import { computeRiskScore as computeRiskScoreV1 } from './engine/risk.js';
+import { detectPatterns as detectPatternsClassic } from './engine/patterns-classic.js';
+import { detectLiquidityBox as detectLiquidityBoxClassic } from './engine/liquidityBox-classic.js';
+import { computeRiskScore as computeRiskScoreClassic } from './engine/risk-classic.js';
 import { detectPatterns as detectPatternsV2 } from './engine/patterns-v2.js';
 import { detectLiquidityBox as detectLiquidityBoxV2 } from './engine/liquidityBox-v2.js';
 import { computeRiskScore as computeRiskScoreV2 } from './engine/risk-v2.js';
@@ -79,8 +79,10 @@ export default function App() {
     try { localStorage.setItem('candlescan_engine', engineVersion); } catch { /* quota */ }
     // Reset signal filters when engine changes (different category sets)
     setActiveFilters(new Set(getCategoriesForEngine(engineVersion)));
-    // Auto-set timeframe for scalping
+    // Auto-set timeframe per engine
     if (engineVersion === 'scalp') setTimeframe('1m');
+    else if (engineVersion === 'v2') setTimeframe('5m');
+    // Classic: no auto-set (user picks, typically 1d)
   }, [engineVersion]);
   const [timeframe, setTimeframe] = useState(() => {
     try {
@@ -238,9 +240,9 @@ export default function App() {
       }
 
       setCandles(cd);
-      const detectPat = engineVersion === 'scalp' ? detectPatternsScalp : engineVersion === 'v2' ? detectPatternsV2 : detectPatternsV1;
-      const detectBox = engineVersion === 'scalp' ? detectLiquidityBoxScalp : engineVersion === 'v2' ? detectLiquidityBoxV2 : detectLiquidityBoxV1;
-      const scoreRisk = engineVersion === 'scalp' ? computeRiskScoreScalp : engineVersion === 'v2' ? computeRiskScoreV2 : computeRiskScoreV1;
+      const detectPat = engineVersion === 'scalp' ? detectPatternsScalp : engineVersion === 'v1' ? detectPatternsClassic : detectPatternsV2;
+      const detectBox = engineVersion === 'scalp' ? detectLiquidityBoxScalp : engineVersion === 'v1' ? detectLiquidityBoxClassic : detectLiquidityBoxV2;
+      const scoreRisk = engineVersion === 'scalp' ? computeRiskScoreScalp : engineVersion === 'v1' ? computeRiskScoreClassic : computeRiskScoreV2;
 
       // For scalp mode, fetch index direction
       let idxDir = null;

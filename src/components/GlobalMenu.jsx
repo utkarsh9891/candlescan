@@ -22,6 +22,16 @@ const SCALP_CATEGORIES_UI = [
   { key: 'micro-double', label: 'Double B/T' },
 ];
 
+const CLASSIC_CATEGORIES_UI = [
+  { key: 'ma-cross', label: 'MA Cross' },
+  { key: 'support-resistance', label: 'Support/Resist' },
+  { key: 'channel', label: 'Channel' },
+  { key: 'volume-surge', label: 'Vol Surge' },
+  { key: 'swing-structure', label: 'Swing Struct' },
+  { key: 'daily-engulfing', label: 'Engulfing' },
+  { key: 'gap', label: 'Gap' },
+];
+
 /**
  * @param {Object} props
  * @param {Set} props.activeFilters
@@ -41,7 +51,7 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
     return () => document.removeEventListener('pointerdown', handler);
   }, [open]);
 
-  const CATEGORIES = engineVersion === 'scalp' ? SCALP_CATEGORIES_UI : INTRADAY_CATEGORIES;
+  const CATEGORIES = engineVersion === 'scalp' ? SCALP_CATEGORIES_UI : engineVersion === 'v1' ? CLASSIC_CATEGORIES_UI : INTRADAY_CATEGORIES;
 
   const toggleFilter = (key) => {
     const next = new Set(activeFilters);
