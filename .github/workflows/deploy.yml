@@ -3,7 +3,6 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main, master]
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -24,8 +23,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0  # full history for git describe --tags
+
+      # Auto-tag: bump patch version on every deploy
+      - name: Auto-tag patch version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          # Parse major.minor.patch
+          MAJOR=$(echo $LATEST | sed 's/v//' | cut -d. -f1)
+          MINOR=$(echo $LATEST | sed 's/v//' | cut -d. -f2)
+          PATCH=$(echo $LATEST | sed 's/v//' | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          # Only tag if HEAD isn't already tagged
+          if [ "$(git tag --points-at HEAD)" = "" ]; then
+            git tag "$NEW_TAG"
+            git push origin "$NEW_TAG"
+            echo "Tagged: $NEW_TAG"
+          else
+            echo "HEAD already tagged: $(git tag --points-at HEAD)"
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
