@@ -283,10 +283,23 @@ If tests or build fail, deployment is blocked.
 
 ## Versioning
 
-- Version is defined in `package.json` (`version` field)
-- Injected at build time via Vite `define` → `__APP_VERSION__` and `__BUILD_TIME__`
-- Visible in hamburger menu (bottom): `v2.1.0 30 Mar`
-- To bump: update `package.json` version, push to main → auto-deployed with new version
+Version is derived from **git tags** at build time — no hardcoding required.
+
+```bash
+# Tag a release (creates version v2.2.0)
+git tag v2.2.0
+git push origin v2.2.0
+
+# After the next push to main, the app shows:
+#   On the tag commit:  v2.2.0
+#   1 commit later:     v2.2.0-1-gabcdef
+#   5 commits later:    v2.2.0-5-g1234567
+```
+
+- **Source**: `git describe --tags --always` (run at build time in `vite.config.js`)
+- **Display**: hamburger menu bottom — e.g. `v2.2.0-3-gabcdef 30 Mar`
+- **CI**: GitHub Actions fetches full git history (`fetch-depth: 0`) so tags are available
+- **Semver convention**: tag `vMAJOR.MINOR.PATCH` for releases, commits after a tag auto-append count + hash
 
 ## Debug Mode
 
