@@ -18,7 +18,7 @@ const CATEGORIES = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange }) {
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, debugMode, onDebugModeChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -331,6 +331,33 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
               </div>
             </>
           )}
+
+          {/* Debug + Version */}
+          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '8px 10px 6px' }}>
+            {onDebugModeChange && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
+                fontWeight: 600, color: debugMode ? '#2563eb' : '#8892a8',
+                cursor: 'pointer', marginBottom: 6,
+              }}>
+                <input
+                  type="checkbox"
+                  checked={!!debugMode}
+                  onChange={(e) => onDebugModeChange(e.target.checked)}
+                  style={{ accentColor: '#2563eb', margin: 0, width: 14, height: 14 }}
+                />
+                Debug mode
+              </label>
+            )}
+            <div style={{ fontSize: 10, color: '#b0b8c8', fontFamily: "'SF Mono', Menlo, monospace" }}>
+              v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}
+              {typeof __BUILD_TIME__ !== 'undefined' && (
+                <span style={{ marginLeft: 6 }}>
+                  {new Date(__BUILD_TIME__).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
