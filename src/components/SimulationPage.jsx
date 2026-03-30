@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback } from 'react';
 import { NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
-import { detectPatterns as detectPatternsV1 } from '../engine/patterns.js';
-import { detectLiquidityBox as detectLiquidityBoxV1 } from '../engine/liquidityBox.js';
-import { computeRiskScore as computeRiskScoreV1 } from '../engine/risk.js';
+import { detectPatterns as detectPatternsClassic } from '../engine/patterns-classic.js';
+import { detectLiquidityBox as detectLiquidityBoxClassic } from '../engine/liquidityBox-classic.js';
+import { computeRiskScore as computeRiskScoreClassic } from '../engine/risk-classic.js';
 import { detectPatterns as detectPatternsV2 } from '../engine/patterns-v2.js';
 import { detectLiquidityBox as detectLiquidityBoxV2 } from '../engine/liquidityBox-v2.js';
 import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
@@ -113,7 +113,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       ? { detectPatterns: detectPatternsScalp, detectLiquidityBox: detectLiquidityBoxScalp, computeRiskScore: computeRiskScoreScalp }
       : localEngine === 'v2'
       ? { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 }
-      : { detectPatterns: detectPatternsV1, detectLiquidityBox: detectLiquidityBoxV1, computeRiskScore: computeRiskScoreV1 };
+      : { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
 
     try {
       const res = await runSimulation({
