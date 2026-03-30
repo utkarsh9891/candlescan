@@ -350,7 +350,7 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
               </label>
             )}
             <div style={{ fontSize: 10, color: '#b0b8c8', fontFamily: "'SF Mono', Menlo, monospace" }}>
-              v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}
+              {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v?'}
               {typeof __BUILD_TIME__ !== 'undefined' && (
                 <span style={{ marginLeft: 6 }}>
                   {new Date(__BUILD_TIME__).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
