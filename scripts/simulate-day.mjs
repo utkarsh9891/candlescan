@@ -43,7 +43,7 @@ function parseArgs() {
   let indexName = 'NIFTY 200';
   let date = null;
   let engine = 'scalp';
-  let minConfidence = 70;
+  let minConfidence = 80;
   let maxPositions = 1;
   let maxTotalTrades = 10;
   let positionSize = 300000;

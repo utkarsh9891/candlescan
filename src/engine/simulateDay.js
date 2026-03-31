@@ -135,10 +135,26 @@ export async function runSimulation({
         const dayStart = allCandles.indexOf(dayCandles[0]);
         const priorCandles = allCandles.slice(Math.max(0, dayStart - 20), dayStart);
 
+        // Previous day high/low for pattern context
+        const prevCandles = allCandles.filter(c => istDate(c.t) < date);
+        const prevDayHigh = prevCandles.length ? Math.max(...prevCandles.map(c => c.h)) : null;
+        const prevDayLow = prevCandles.length ? Math.min(...prevCandles.map(c => c.l)) : null;
+
+        // Opening Range (first 15 bars of the day = 9:15-9:30 on 1m)
+        const orbBars = dayCandles.slice(0, 15);
+        const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
+        const orbLow = orbBars.length >= 5 ? Math.min(...orbBars.map(c => c.l)) : null;
+
+        // Pre-window candles (09:15 to window start) for pattern lookback context
+        const preWindowCandles = dayCandles.filter(c => {
+          const s = timeToSecs(istTime(c.t));
+          return s >= timeToSecs('09:15') && s < startSecs;
+        });
+
         // Map window candles to their index within dayCandles for bar tracking
         const firstWindowIdx = dayCandles.indexOf(windowCandles[0]);
 
-        stockData[sym] = { dayCandles, priorCandles, windowCandles, firstWindowIdx, avgVol };
+        stockData[sym] = { dayCandles, priorCandles, preWindowCandles, windowCandles, firstWindowIdx, avgVol, prevDayHigh, prevDayLow, orbHigh, orbLow };
       } catch { /* skip */ }
     }));
     loaded = Math.min(total, i + concurrency);
@@ -236,12 +252,19 @@ export async function runSimulation({
       const sd = stockData[sym];
       if (barIdx >= sd.windowCandles.length) continue;
 
-      // Build candle array: prior + day candles up to current bar (NO LOOKAHEAD)
+      // Build candle array: prior + pre-window + day candles up to current bar (NO LOOKAHEAD)
       const dayBarIdx = sd.firstWindowIdx + barIdx;
-      const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
+      const preWindow = sd.preWindowCandles || [];
+      const candlesSoFar = [...sd.priorCandles, ...preWindow, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
       if (candlesSoFar.length < 10) continue;
 
-      const patterns = detectPatterns(candlesSoFar, { barIndex: barIdx });
+      const patterns = detectPatterns(candlesSoFar, {
+        barIndex: barIdx,
+        orbHigh: sd.orbHigh,
+        orbLow: sd.orbLow,
+        prevDayHigh: sd.prevDayHigh,
+        prevDayLow: sd.prevDayLow,
+      });
       const box = detectLiquidityBox(candlesSoFar);
       const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx } });
 
