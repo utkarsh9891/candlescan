@@ -81,8 +81,8 @@ Only use `--merge`. Do not use `--squash` or `--rebase`.
 ### 6. After merge — versioning is automatic
 
 Once the PR merges to `main`, GitHub Actions does everything:
-1. Fetches the latest git tag (e.g., `v3.0.5`)
-2. Increments the patch number → creates `v3.0.6`
+1. Fetches the latest git tag (e.g., `v0.5.3`)
+2. Increments the patch number → creates `v0.5.4`
 3. Pushes the new tag
 4. Runs `npm ci` → `npm test` → `npm run build`
 5. Deploys to GitHub Pages
@@ -103,7 +103,10 @@ There is no version field in `package.json`. Do not add one.
 
 ### Tag format
 
-`vMAJOR.MINOR.PATCH` — e.g., `v3.0.6`
+`vMAJOR.MINOR.PATCH` — e.g., `v0.5.1`
+
+**This project is pre-1.0 (in active development).** Version `0.x.y` signals the app is not production-ready.
+- `v1.0.0` will be tagged only when the core scanning + simulation flow is stable and validated.
 
 ### What gets which version bump
 
@@ -111,10 +114,10 @@ There is no version field in `package.json`. Do not add one.
 |--------|-------------|----------------|
 | Bug fix, tuning, UI tweak, docs | **Patch** (auto) | Merge PR → CI auto-tags |
 | New feature, page, pattern category, signal type | **Patch** (auto) | Same — let CI handle it |
-| New engine mode, breaking API change | **Major/Minor** (manual) | Owner tags manually after merge |
+| Significant milestone (engine stabilization, etc.) | **Minor** (manual) | Owner tags `v0.6.0`, `v0.7.0`, etc. |
 
 **For coding agents: always let the auto-patch handle versioning.**
-Only the repo owner manually tags major/minor versions when needed.
+Only the repo owner manually tags minor versions when needed.
 
 ### How auto-tagging works (deploy.yml)
 
@@ -126,7 +129,7 @@ Push to main (PR merge)
   → npm ci → npm test → npm run build → deploy
 ```
 
-If the owner pushes a manual tag (e.g., `v4.0.0`), CI triggers a second deploy
+If the owner pushes a manual tag (e.g., `v0.6.0`), CI triggers a second deploy
 with that version. `cancel-in-progress: true` ensures the manual tag deploy
 replaces any in-flight auto-patch deploy.
 
@@ -135,8 +138,8 @@ replaces any in-flight auto-patch deploy.
 ## Version Display
 
 Shown in the hamburger menu footer. Format examples:
-- `v3.0.6` — exactly on a tag
-- `v3.0.6-3-gabcdef` — 3 commits after v3.0.6
+- `v0.5.1` — exactly on a tag
+- `v0.5.1-3-gabcdef` — 3 commits after v0.5.1
 - Injected via `__APP_VERSION__` global defined in `vite.config.js`
 
 ---
