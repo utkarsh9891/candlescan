@@ -127,10 +127,10 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.0015 : rawEntry * 0.9985;
 
-  // SL: wide enough to survive noise — 0.7% minimum (safety net, rarely hit)
+  // SL: wide catastrophic stop — 2% minimum. Rarely hit; TIME exit is the real loss limiter.
   const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
-  const slDist = Math.max(atrVal * 1.5, avgBarRange * 2.5, entry * 0.007);
-  // Target: tight, achievable in a few bars — take the cut and move on
+  const slDist = Math.max(atrVal * 3.0, avgBarRange * 5, entry * 0.020);
+  // Target: aggressive, reachable in a few bars — take the cut and move on
   let targetDist;
   let sl, target;
 
@@ -140,26 +140,25 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-15).map(c => c.h));
     const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > entry * 0.002 ? Math.min(resistanceDist, atrVal * 1.0) : atrVal * 1.0;
+    targetDist = resistanceDist > entry * 0.003 ? Math.min(resistanceDist, atrVal * 1.0) : atrVal * 1.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-15).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > entry * 0.002 ? Math.min(supportDist, atrVal * 1.0) : atrVal * 1.0;
+    targetDist = supportDist > entry * 0.003 ? Math.min(supportDist, atrVal * 1.0) : atrVal * 1.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry - targetDist;
   }
 
   const rr = targetDist / Math.max(slDist, 1e-9);
-  const rrClamped = Math.min(9, Math.max(0.3, rr));
-  // Scalp R:R scoring: flatter curve — don't penalize low R:R as harshly
-  // R:R 0.4 → 15/25, R:R 1.0 → 20/25, R:R 2.0 → 23/25 (vs v2: 8, 15, 21)
-  const rrScore = Math.round(25 * (1 - Math.exp(-1.8 * rrClamped)));
+  const rrClamped = Math.min(9, Math.max(0.1, rr));
+  // Scalp R:R scoring: flat — R:R is irrelevant for scalping, win rate matters
+  // Any valid setup gets 20/25; only truly degenerate R:R (<0.1) gets penalized
+  const rrScore = Math.max(20, Math.round(25 * (1 - Math.exp(-2.5 * rrClamped))));
 
-  // Min R:R 0.3 — scalping relies on win rate, not R:R
-  if (rr < 0.3) return noTrade(cur, candles, box);
+  // No R:R gate — scalping relies on win rate + tight targets, not R:R
 
   // Min target 0.3% of entry — ensures Rs.900+ gain per trade on Rs.3L
   if (targetDist < entry * 0.003) return noTrade(cur, candles, box);
