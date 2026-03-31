@@ -222,22 +222,26 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 80px' }}>
           <div style={labelStyle}>Capital</div>
-          <input type="number" value={capital} onChange={e => setCapital(+e.target.value)}
+          <input type="number" value={capital || ''} onChange={e => setCapital(e.target.value === '' ? '' : +e.target.value)}
+            onBlur={e => { if (!e.target.value) setCapital(300000); }}
             step={50000} min={50000} disabled={running} style={{ ...inputStyle, width: '100%' }} />
         </div>
         <div style={{ flex: '1 1 80px' }}>
           <div style={labelStyle}>Per Trade</div>
-          <input type="number" value={positionSize} onChange={e => setPositionSize(+e.target.value)}
+          <input type="number" value={positionSize || ''} onChange={e => setPositionSize(e.target.value === '' ? '' : +e.target.value)}
+            onBlur={e => { if (!e.target.value) setPositionSize(300000); }}
             step={50000} min={10000} disabled={running} style={{ ...inputStyle, width: '100%' }} />
         </div>
         <div style={{ flex: '0 0 60px' }}>
           <div style={labelStyle}>Max Open</div>
-          <input type="number" value={maxConcurrent} onChange={e => setMaxConcurrent(+e.target.value)}
+          <input type="number" value={maxConcurrent || ''} onChange={e => setMaxConcurrent(e.target.value === '' ? '' : +e.target.value)}
+            onBlur={e => { if (!e.target.value) setMaxConcurrent(1); }}
             min={1} max={5} disabled={running} style={{ ...inputStyle, width: '100%' }} />
         </div>
         <div style={{ flex: '0 0 60px' }}>
           <div style={labelStyle}>Max Trades</div>
-          <input type="number" value={maxTotalTrades} onChange={e => setMaxTotalTrades(+e.target.value)}
+          <input type="number" value={maxTotalTrades || ''} onChange={e => setMaxTotalTrades(e.target.value === '' ? '' : +e.target.value)}
+            onBlur={e => { if (!e.target.value) setMaxTotalTrades(5); }}
             min={1} max={15} disabled={running} style={{ ...inputStyle, width: '100%' }} />
         </div>
       </div>
