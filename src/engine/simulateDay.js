@@ -82,9 +82,10 @@ export async function runSimulation({
   maxConcurrent = 1,
   maxTotalTrades = 5,
   txCostPct = 0.0005,
-  minConfidence = 70,
+  minConfidence = 80,
   skipFirstBars = 0,
   minAvgVolume = 0,
+  indexDirection,
   batchToken,
   onProgress,
   signal,
@@ -278,7 +279,7 @@ export async function runSimulation({
         prevDayLow: sd.prevDayLow,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexDirection || null } });
 
       if (risk.confidence < minConfidence) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
