@@ -212,6 +212,29 @@ Navigation via shared GlobalMenu:
 
 ---
 
+## CRITICAL: Three Code Paths Must Stay in Sync
+
+Signal generation runs in three places. **Any change to one MUST be applied to all three.**
+
+| Path | File | Purpose |
+|------|------|---------|
+| CLI simulation | `scripts/simulate-day.mjs` (`runWindow`) | Offline backtesting via CLI |
+| Browser simulation | `src/engine/simulateDay.js` (`runSimulation`) | In-app simulation page |
+| Index scan | `src/engine/batchScan.js` (`batchScan`) | Live "Scan All" in Index Scanner |
+
+All three must use:
+- Same engine functions (scalp/v2/classic) via `engineFns` parameter
+- Same ORB/prevDay computation per stock
+- Same `indexDirection` passed to `computeRiskScore`
+- Same `barIndex` passed to both `detectPatterns` and `computeRiskScore`
+- Same pre-window candle context (09:15 bars) in lookback
+- Same volume filtering (25th percentile auto-detect)
+- Same defaults: `minConfidence=80`, `skipFirstBars=0`
+
+**Before merging any signal/scoring change, grep all three files to verify parity.**
+
+---
+
 ## Deployment & Versioning
 
 > **Full guide: [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md)** — read this before making any commits.

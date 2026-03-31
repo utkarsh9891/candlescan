@@ -83,6 +83,7 @@ export async function batchScan({
           const prevDayLow = prevCandles.length ? Math.min(...prevCandles.map(c => c.l)) : null;
 
           const patterns = detectPatterns(candles, {
+            barIndex: candles.length,
             orbHigh, orbLow, prevDayHigh, prevDayLow,
           });
           const box = detectLiquidityBox(candles);
