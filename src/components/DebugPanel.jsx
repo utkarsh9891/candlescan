@@ -9,6 +9,7 @@ const mono = "'SF Mono', Menlo, monospace";
 export default function DebugPanel({ open, onClose }) {
   const [logs, setLogs] = useState([]);
   const [expandedId, setExpandedId] = useState(null);
+  const [collapsed, setCollapsed] = useState(false);
   const originalFetch = useRef(null);
   const idRef = useRef(0);
 
@@ -95,6 +96,33 @@ export default function DebugPanel({ open, onClose }) {
 
   if (!open) return null;
 
+  // Collapsed: thin bottom bar with request count, tap to expand
+  if (collapsed) {
+    const errCount = logs.filter(e => e.status !== 200 && e.status !== 204 && e.status !== '...').length;
+    return (
+      <div
+        onClick={() => setCollapsed(false)}
+        style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 9000,
+          height: 28, background: '#1a1d26', color: '#8892a8',
+          borderTop: '2px solid #2563eb',
+          display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px',
+          fontFamily: mono, fontSize: 10, cursor: 'pointer',
+        }}
+      >
+        <span style={{ fontWeight: 700, color: '#2563eb' }}>Debug</span>
+        <span>{logs.length} req{logs.length !== 1 ? 's' : ''}</span>
+        {errCount > 0 && <span style={{ color: '#dc2626' }}>{errCount} err</span>}
+        <div style={{ flex: 1 }} />
+        <span style={{ color: '#555' }}>tap to expand ▴</span>
+        <button type="button" onClick={(ev) => { ev.stopPropagation(); onClose(); }}
+          style={{ fontSize: 14, color: '#8892a8', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}>
+          ×
+        </button>
+      </div>
+    );
+  }
+
   function copyToClipboard(text) {
     navigator.clipboard?.writeText(text).catch(() => {});
   }
@@ -149,6 +177,11 @@ export default function DebugPanel({ open, onClose }) {
         </button>
         <button type="button" onClick={() => { setLogs([]); setExpandedId(null); }} style={btnStyle}>
           Clear
+        </button>
+        <button type="button" onClick={() => setCollapsed(true)}
+          style={{ fontSize: 12, color: '#8892a8', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}
+          title="Collapse to bottom bar">
+          ▾
         </button>
         <button type="button" onClick={onClose}
           style={{ fontSize: 14, color: '#8892a8', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}>

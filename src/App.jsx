@@ -141,9 +141,52 @@ export default function App() {
   const [highlightSignals, setHighlightSignals] = useState(true);
 
   // View state: 'main' | 'batch' | 'simulate'
-  const [view, setView] = useState('main');
+  const [view, setViewRaw] = useState('main');
   const [cameFromBatch, setCameFromBatch] = useState(false);
   const [cameFromSimulation, setCameFromSimulation] = useState(false);
+
+  // Ref to track whether popstate handler should skip (to avoid loops)
+  const handlingPopState = useRef(false);
+  const lastBackTime = useRef(0);
+
+  // Wrap setView to push browser history state for back gesture/button support
+  const setView = useCallback((newView) => {
+    if (!handlingPopState.current) {
+      window.history.pushState({ view: newView }, '', '');
+    }
+    setViewRaw(newView);
+  }, []);
+
+  // Handle back gesture/button via popstate — navigate within app instead of closing
+  useEffect(() => {
+    window.history.replaceState({ view: 'main' }, '', '');
+
+    const onPopState = (e) => {
+      handlingPopState.current = true;
+      const targetView = e.state?.view;
+
+      if (targetView && targetView !== 'main') {
+        setViewRaw(targetView);
+      } else {
+        // At root — double-back within 2s to close, otherwise stay
+        const now = Date.now();
+        if (now - lastBackTime.current < 2000) {
+          // Let browser handle it (close PWA / navigate away)
+          handlingPopState.current = false;
+          return;
+        }
+        lastBackTime.current = now;
+        window.history.pushState({ view: 'main' }, '', '');
+        setViewRaw('main');
+        setCameFromBatch(false);
+        setCameFromSimulation(false);
+      }
+      handlingPopState.current = false;
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
   const [debugMode, setDebugMode] = useState(false);
 
   // Drawing tool state
