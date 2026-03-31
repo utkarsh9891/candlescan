@@ -228,9 +228,14 @@ async function fetchWithFallbacks(symbol, interval, range, options) {
   for (const run of attempts) {
     try {
       const json = await run();
+      // If Yahoo returned a valid response structure (has chart.result[0].meta)
+      // but no candle data, that's authoritative — don't waste 25s on fallbacks.
+      const hasYahooMeta = json?.chart?.result?.[0]?.meta;
       const parsed = parseChartJson(json);
       if (parsed?.candles?.length)
         return { candles: parsed.candles, companyName: parsed.companyName, live: true };
+      if (hasYahooMeta)
+        return { candles: null, live: false, companyName: hasYahooMeta.longName || hasYahooMeta.shortName || '' };
     } catch {
       /* next */
     }
