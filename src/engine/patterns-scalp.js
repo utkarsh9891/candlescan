@@ -105,7 +105,7 @@ export function detectPatterns(candles, opts) {
         category: 'vwap', emoji: '📊',
         tip: 'Price crossed above VWAP with volume — institutional buying',
         description: 'Price reclaimed VWAP from below with volume confirmation. Strong bullish signal.',
-        reliability: 0.68, candleIndices: [n - 1],
+        reliability: 0.72, candleIndices: [n - 1],
       });
     }
     // Bearish VWAP breakdown
@@ -116,7 +116,7 @@ export function detectPatterns(candles, opts) {
         category: 'vwap', emoji: '📊',
         tip: 'Price broke below VWAP with volume — institutional selling',
         description: 'Price lost VWAP from above with volume confirmation. Strong bearish signal.',
-        reliability: 0.66, candleIndices: [n - 1],
+        reliability: 0.70, candleIndices: [n - 1],
       });
     }
     // VWAP rejection: touched VWAP but bounced off
@@ -127,7 +127,7 @@ export function detectPatterns(candles, opts) {
         category: 'vwap', emoji: '📊',
         tip: 'Price bounced off VWAP support',
         description: 'Price dipped to VWAP and bounced — VWAP acting as support.',
-        reliability: 0.62, candleIndices: [n - 1],
+        reliability: 0.64, candleIndices: [n - 1],
       });
     }
   }
@@ -146,7 +146,7 @@ export function detectPatterns(candles, opts) {
         category: 'micro-momentum', emoji: '🚀',
         tip: '3 green candles with rising volume — momentum building',
         description: 'Three consecutive bullish candles with increasing volume. Ride the wave.',
-        reliability: 0.60, candleIndices: [n - 3, n - 2, n - 1],
+        reliability: 0.62, candleIndices: [n - 3, n - 2, n - 1],
       });
     }
     if (allBear && volIncreasing && body(cur) > ab * 1.2) {
@@ -156,7 +156,7 @@ export function detectPatterns(candles, opts) {
         category: 'micro-momentum', emoji: '⬇️',
         tip: '3 red candles with rising volume — selling pressure',
         description: 'Three consecutive bearish candles with increasing volume. Short opportunity.',
-        reliability: 0.58, candleIndices: [n - 3, n - 2, n - 1],
+        reliability: 0.60, candleIndices: [n - 3, n - 2, n - 1],
       });
     }
   }
@@ -172,7 +172,7 @@ export function detectPatterns(candles, opts) {
           category: 'orb', emoji: '🔓',
           tip: 'Price broke above opening range — strong directional move',
           description: `Price broke above the opening range high (${opts.orbHigh.toFixed(1)}) with conviction.`,
-          reliability: 0.70, candleIndices: [n - 1],
+          reliability: 0.75, candleIndices: [n - 1],
         });
       }
       if (cur.c < opts.orbLow && cur.c < cur.o && body(cur) > orbRange * 0.3) {
@@ -182,7 +182,7 @@ export function detectPatterns(candles, opts) {
           category: 'orb', emoji: '🔓',
           tip: 'Price broke below opening range — selling pressure',
           description: `Price broke below the opening range low (${opts.orbLow.toFixed(1)}) with conviction.`,
-          reliability: 0.68, candleIndices: [n - 1],
+          reliability: 0.73, candleIndices: [n - 1],
         });
       }
     }
@@ -231,7 +231,7 @@ export function detectPatterns(candles, opts) {
         category: 'volume-climax', emoji: '💥',
         tip: 'Extreme volume exhaustion — buyers done, reversal likely',
         description: 'Massive volume spike followed by bearish reversal. Institutions have finished buying.',
-        reliability: 0.62, candleIndices: [n - 2, n - 1],
+        reliability: 0.65, candleIndices: [n - 2, n - 1],
       });
     }
     if (!isBull(prev) && isBull(cur) && body(cur) > ab * 0.8) {
@@ -241,7 +241,7 @@ export function detectPatterns(candles, opts) {
         category: 'volume-climax', emoji: '💥',
         tip: 'Extreme volume exhaustion — sellers done, bounce likely',
         description: 'Massive volume spike followed by bullish reversal. Selling pressure exhausted.',
-        reliability: 0.62, candleIndices: [n - 2, n - 1],
+        reliability: 0.65, candleIndices: [n - 2, n - 1],
       });
     }
   }
@@ -255,7 +255,7 @@ export function detectPatterns(candles, opts) {
         category: 'prev-day', emoji: '📈',
         tip: 'Broke above yesterday\'s high — fresh buying',
         description: `Price exceeded previous day high (${opts.prevDayHigh.toFixed(1)}). Key institutional level cleared.`,
-        reliability: 0.65, candleIndices: [n - 1],
+        reliability: 0.68, candleIndices: [n - 1],
       });
     }
     if (cur.c < opts.prevDayLow && cur.c < cur.o) {
@@ -265,50 +265,12 @@ export function detectPatterns(candles, opts) {
         category: 'prev-day', emoji: '📉',
         tip: 'Broke below yesterday\'s low — fresh selling',
         description: `Price broke below previous day low (${opts.prevDayLow.toFixed(1)}). Key support lost.`,
-        reliability: 0.63, candleIndices: [n - 1],
+        reliability: 0.66, candleIndices: [n - 1],
       });
     }
   }
 
-  // --- 7. Micro Double Bottom/Top (require volume confirmation >= 1.3x) ---
-  if (n >= 20 && vf >= 1.3) {
-    const lookback = candles.slice(-20, -1);
-    const curLow = cur.l;
-    const curHigh = cur.h;
-    const tolerance = range(cur) * 0.2 || 0.3; // tighter tolerance
-
-    // Double bottom: find a prior bar with similar low, current bouncing with strong body
-    const priorBottomIdx = lookback.findIndex(c =>
-      Math.abs(c.l - curLow) < tolerance && isBull(cur) && cur.c > cur.o
-    );
-    if (priorBottomIdx >= 0 && priorBottomIdx < 15 && isBull(cur) && body(cur) > ab * 0.8) {
-      patterns.push({
-        name: 'Micro Double Bottom', direction: 'bullish',
-        strength: Math.min(0.85, 0.58 * Math.min(1.8, vf)),
-        category: 'micro-double', emoji: 'W',
-        tip: 'Double bounce off same level — support confirmed',
-        description: 'Price tested the same low twice and bounced. Micro support confirmed.',
-        reliability: 0.58, candleIndices: [n - 20 + priorBottomIdx, n - 1],
-      });
-    }
-
-    // Double top
-    const priorTopIdx = lookback.findIndex(c =>
-      Math.abs(c.h - curHigh) < tolerance && !isBull(cur) && cur.c < cur.o
-    );
-    if (priorTopIdx >= 0 && priorTopIdx < 15 && !isBull(cur) && body(cur) > ab * 0.8) {
-      patterns.push({
-        name: 'Micro Double Top', direction: 'bearish',
-        strength: Math.min(0.85, 0.56 * Math.min(1.8, vf)),
-        category: 'micro-double', emoji: 'M',
-        tip: 'Double rejection at same level — resistance confirmed',
-        description: 'Price tested the same high twice and rejected. Micro resistance confirmed.',
-        reliability: 0.56, candleIndices: [n - 20 + priorTopIdx, n - 1],
-      });
-    }
-  }
-
-  // --- 8. RSI Extreme Reversal ---
+  // --- 7. RSI Extreme Reversal (rank #7) ---
   if (n >= 16) {
     const rsiVal = rsi(candles, 14);
     if (rsiVal !== null) {
@@ -335,7 +297,7 @@ export function detectPatterns(candles, opts) {
     }
   }
 
-  // --- 9. Breakout Retest ---
+  // --- 8. Breakout Retest (rank #3) ---
   if (n >= 15) {
     const lookback = candles.slice(-15, -3);
     const recentHigh = Math.max(...lookback.map(c => c.h));
@@ -351,7 +313,7 @@ export function detectPatterns(candles, opts) {
         category: 'breakout-retest', emoji: '🔁',
         tip: 'Broke resistance, retested, now bouncing — high probability long',
         description: 'Classic breakout-retest-continuation. Resistance became support.',
-        reliability: 0.67, candleIndices: [n - 3, n - 2, n - 1],
+        reliability: 0.70, candleIndices: [n - 3, n - 2, n - 1],
       });
     }
 
@@ -363,12 +325,12 @@ export function detectPatterns(candles, opts) {
         category: 'breakout-retest', emoji: '🔁',
         tip: 'Broke support, retested, now rejecting — high probability short',
         description: 'Classic breakdown-retest-continuation. Support became resistance.',
-        reliability: 0.65, candleIndices: [n - 3, n - 2, n - 1],
+        reliability: 0.68, candleIndices: [n - 3, n - 2, n - 1],
       });
     }
   }
 
-  // --- 10. Mean Reversion (oversold bounce / overbought pullback) ---
+  // --- 9. Mean Reversion (rank #9) ---
   // Works best in choppy mid-day markets
   if (n >= 30) {
     const dayOpen = candles[Math.max(0, n - 30)].o; // approx day open from lookback
@@ -383,7 +345,7 @@ export function detectPatterns(candles, opts) {
         category: 'mean-reversion', emoji: '🔄',
         tip: 'Oversold stock bouncing — mean reversion long',
         description: `Stock dropped ${(changeFromOpen * 100).toFixed(1)}% with RSI at ${rsiVal.toFixed(0)}. Bounce likely.`,
-        reliability: 0.65, candleIndices: [n - 1],
+        reliability: 0.60, candleIndices: [n - 1],
       });
     }
 
@@ -395,7 +357,7 @@ export function detectPatterns(candles, opts) {
         category: 'mean-reversion', emoji: '🔄',
         tip: 'Overbought stock pulling back — mean reversion short',
         description: `Stock gained ${(changeFromOpen * 100).toFixed(1)}% with RSI at ${rsiVal.toFixed(0)}. Pullback likely.`,
-        reliability: 0.63, candleIndices: [n - 1],
+        reliability: 0.58, candleIndices: [n - 1],
       });
     }
   }
