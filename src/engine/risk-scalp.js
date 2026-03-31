@@ -93,7 +93,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   if (candles.length >= 20 && top) {
     const recent = candles.slice(-20);
     const trendSlope = (recent[recent.length - 1].c - recent[0].c) / recent[0].c;
-    // Counter-trend: reject
+    // Counter-trend: reject if stock trend opposes the signal
     if (top.direction === 'bullish' && trendSlope < -0.001) return noTrade(cur, candles, box);
     if (top.direction === 'bearish' && trendSlope > 0.001) return noTrade(cur, candles, box);
   }
@@ -124,7 +124,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   // SL: wide enough to survive noise — 1.2% minimum for smallcaps
   const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
   const slDist = Math.max(atrVal * 2.5, avgBarRange * 4, entry * 0.012);
-  // Target: achievable within 15 bars — 2x SL for good R:R
+  // Target: ATR-based, at least 2× SL for good R:R
   let targetDist;
   let sl, target;
 
@@ -134,14 +134,14 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-15).map(c => c.h));
     const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 6.0) : atrVal * 6.0;
+    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 3.0) : atrVal * 3.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-15).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 6.0) : atrVal * 6.0;
+    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 3.0) : atrVal * 3.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry - targetDist;
   }
@@ -248,7 +248,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 40, // 8 minutes on 1m = forced exit
+    maxHoldBars: 40, // 40 minutes on 1m = forced exit
   };
 }
 
