@@ -18,7 +18,7 @@ const BASE_PRICES = {
 };
 
 export const TIMEFRAME_MAP = {
-  '1m': { interval: '1m', range: '1d' },
+  '1m': { interval: '1m', range: '5d' },
   '5m': { interval: '5m', range: '5d' },
   '15m': { interval: '15m', range: '5d' },
   '30m': { interval: '30m', range: '1mo' },
