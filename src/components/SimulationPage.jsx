@@ -134,9 +134,10 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       : { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
 
     try {
+      const simTimeframe = localEngine === 'scalp' ? '1m' : '5m';
       const res = await runSimulation({
         indexName: nseIndex,
-        timeframe: '5m',
+        timeframe: simTimeframe,
         date, startTime, endTime,
         engineFns,
         capital, positionSize, maxConcurrent, maxTotalTrades,

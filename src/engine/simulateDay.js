@@ -82,9 +82,9 @@ export async function runSimulation({
   maxConcurrent = 1,
   maxTotalTrades = 5,
   txCostPct = 0.0005,
-  minConfidence = 80,
-  skipFirstBars = 4,
-  minAvgVolume = 50000,
+  minConfidence = 70,
+  skipFirstBars = 0,
+  minAvgVolume = 0,
   batchToken,
   onProgress,
   signal,
@@ -127,9 +127,8 @@ export async function runSimulation({
         });
         if (windowCandles.length < 3) return;
 
-        // Check avg volume
+        // Compute avg volume (filtering done after loading via auto-detect)
         const avgVol = windowCandles.reduce((s, c) => s + c.v, 0) / windowCandles.length;
-        if (avgVol < minAvgVolume) return;
 
         // Prior candles for pattern lookback
         const dayStart = allCandles.indexOf(dayCandles[0]);
@@ -169,9 +168,20 @@ export async function runSimulation({
     throw new Error(`No trading data found for ${date}. This date may be a market holiday, or the data is older than 5 trading days. Try a more recent trading day.`);
   }
 
+  // Auto-detect volume threshold: 25th percentile (same as CLI)
+  const allVols = Object.values(stockData).map(d => d.avgVol).sort((a, b) => a - b);
+  if (allVols.length > 0) {
+    const volThreshold = allVols[Math.floor(allVols.length * 0.25)] || 0;
+    for (const sym of Object.keys(stockData)) {
+      if (stockData[sym].avgVol < volThreshold) delete stockData[sym];
+    }
+  }
+  const stockCount2 = Object.keys(stockData).length;
+
   // Phase 3: Bar-by-bar simulation
   const trades = [];
   const openPositions = [];
+  const cooldownUntil = {}; // sym -> barIdx when cooldown expires
   let currentCapital = capital;
   let peakCapital = capital;
   let maxDrawdown = 0;
@@ -233,6 +243,7 @@ export async function runSimulation({
           confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
         });
         openPositions.splice(p, 1);
+        cooldownUntil[pos.sym] = barIdx + 2; // 2-bar cooldown (matches CLI)
       }
     }
 
@@ -248,6 +259,7 @@ export async function runSimulation({
       if (openPositions.length >= maxConcurrent) break;
       if (totalTradesOpened >= maxTotalTrades) break;
       if (openPositions.some(p => p.sym === sym)) continue;
+      if (cooldownUntil[sym] && barIdx < cooldownUntil[sym]) continue;
 
       const sd = stockData[sym];
       if (barIdx >= sd.windowCandles.length) continue;
@@ -295,7 +307,7 @@ export async function runSimulation({
   return {
     trades,
     summary: {
-      date, stocksScanned: stockCount,
+      date, stocksScanned: stockCount2 || stockCount,
       totalTrades: trades.length, wins, losses,
       winRate: trades.length ? (wins / trades.length * 100) : 0,
       totalPnl, totalTxCost, capital, finalCapital: currentCapital,
