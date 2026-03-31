@@ -9,6 +9,7 @@ import { computeRiskScore as computeRiskScoreV2 } from './engine/risk-v2.js';
 import { detectPatterns as detectPatternsScalp } from './engine/patterns-scalp.js';
 import { detectLiquidityBox as detectLiquidityBoxScalp } from './engine/liquidityBox-scalp.js';
 import { computeRiskScore as computeRiskScoreScalp } from './engine/risk-scalp.js';
+import { getScalpVariantFns, DEFAULT_SCALP_VARIANT } from './engine/scalp-variants/registry.js';
 import { getIndexDirection } from './engine/indexDirection.js';
 import Header from './components/Header.jsx';
 import TimeframePills from './components/TimeframePills.jsx';
@@ -74,6 +75,9 @@ export default function App() {
   const [engineVersion, setEngineVersion] = useState(() => {
     try { return localStorage.getItem('candlescan_engine') || 'scalp'; } catch { return 'scalp'; }
   });
+  const [scalpVariant, setScalpVariant] = useState(() => {
+    try { return localStorage.getItem('candlescan_scalp_variant') || DEFAULT_SCALP_VARIANT; } catch { return DEFAULT_SCALP_VARIANT; }
+  });
 
   useEffect(() => {
     try { localStorage.setItem('candlescan_engine', engineVersion); } catch { /* quota */ }
@@ -84,6 +88,9 @@ export default function App() {
     else if (engineVersion === 'v2') setTimeframe('5m');
     // Classic: no auto-set (user picks, typically 1d)
   }, [engineVersion]);
+  useEffect(() => {
+    try { localStorage.setItem('candlescan_scalp_variant', scalpVariant); } catch { /* quota */ }
+  }, [scalpVariant]);
   const [timeframe, setTimeframe] = useState(() => {
     try {
       const eng = localStorage.getItem('candlescan_engine') || 'scalp';
@@ -283,9 +290,17 @@ export default function App() {
       }
 
       setCandles(cd);
-      const detectPat = engineVersion === 'scalp' ? detectPatternsScalp : engineVersion === 'v1' ? detectPatternsClassic : detectPatternsV2;
-      const detectBox = engineVersion === 'scalp' ? detectLiquidityBoxScalp : engineVersion === 'v1' ? detectLiquidityBoxClassic : detectLiquidityBoxV2;
-      const scoreRisk = engineVersion === 'scalp' ? computeRiskScoreScalp : engineVersion === 'v1' ? computeRiskScoreClassic : computeRiskScoreV2;
+      let detectPat, detectBox, scoreRisk;
+      if (engineVersion === 'scalp') {
+        const varFns = getScalpVariantFns(scalpVariant);
+        detectPat = varFns.detectPatterns;
+        detectBox = varFns.detectLiquidityBox;
+        scoreRisk = varFns.computeRiskScore;
+      } else if (engineVersion === 'v1') {
+        detectPat = detectPatternsClassic; detectBox = detectLiquidityBoxClassic; scoreRisk = computeRiskScoreClassic;
+      } else {
+        detectPat = detectPatternsV2; detectBox = detectLiquidityBoxV2; scoreRisk = computeRiskScoreV2;
+      }
 
       // For scalp mode, fetch index direction
       let idxDir = null;
@@ -310,7 +325,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [timeframe, engineVersion, nseIndex]);
+  }, [timeframe, engineVersion, scalpVariant, nseIndex]);
 
   useEffect(() => {
     if (mode !== 'advanced' || simulated || !yahooSym || !risk) {
@@ -425,6 +440,8 @@ export default function App() {
           onRemoveCustomIndex={handleRemoveCustomIndex}
           engineVersion={engineVersion}
           onEngineVersionChange={setEngineVersion}
+          scalpVariant={scalpVariant}
+          onScalpVariantChange={setScalpVariant}
           debugMode={debugMode}
           onDebugModeChange={(v) => {
             setDebugMode(v);
@@ -445,6 +462,7 @@ export default function App() {
           savedIndex={nseIndex}
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
+          scalpVariant={scalpVariant}
         />
       </div>
 
@@ -460,6 +478,8 @@ export default function App() {
           savedIndex={nseIndex}
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
+          scalpVariant={scalpVariant}
+          onScalpVariantChange={setScalpVariant}
         />
       </div>
 

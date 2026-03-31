@@ -9,6 +9,7 @@ import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
 import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
 import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
 import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
+import { getScalpVariantFns, SCALP_VARIANTS, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { getBatchToken } from '../utils/batchAuth.js';
@@ -84,9 +85,10 @@ const ENGINE_PRESETS = {
   v1:     { from: '09:15', to: '15:30', maxOpen: 3, maxTrades: 2 },
 };
 
-export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion }) {
+export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant: parentVariant, onScalpVariantChange }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [localEngine, setLocalEngine] = useState(engineVersion || 'scalp');
+  const [localVariant, setLocalVariant] = useState(parentVariant || DEFAULT_SCALP_VARIANT);
   const preset = ENGINE_PRESETS[localEngine] || ENGINE_PRESETS.scalp;
   const [date, setDate] = useState(getLastTradingDay);
   const [startTime, setStartTime] = useState(preset.from);
@@ -128,11 +130,14 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const engineFns = localEngine === 'scalp'
-      ? { detectPatterns: detectPatternsScalp, detectLiquidityBox: detectLiquidityBoxScalp, computeRiskScore: computeRiskScoreScalp }
-      : localEngine === 'v2'
-      ? { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 }
-      : { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
+    let engineFns;
+    if (localEngine === 'scalp') {
+      engineFns = getScalpVariantFns(localVariant);
+    } else if (localEngine === 'v2') {
+      engineFns = { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
+    } else {
+      engineFns = { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
+    }
 
     try {
       // Compute index direction for scalp engine (matches CLI behavior)
@@ -198,6 +203,29 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
           ))}
         </div>
       </div>
+
+      {/* 1b. Scalp variant selector */}
+      {localEngine === 'scalp' && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={labelStyle}>Scalp Variant</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+            {SCALP_VARIANTS.map(v => (
+              <button key={v.key} type="button" disabled={running}
+                title={v.description}
+                onClick={() => { setLocalVariant(v.key); if (onScalpVariantChange) onScalpVariantChange(v.key); }}
+                style={{
+                  padding: '6px 10px', fontSize: 10, fontWeight: 700, borderRadius: 6,
+                  border: localVariant === v.key ? 'none' : '1px solid #e2e5eb',
+                  background: localVariant === v.key ? v.color : '#fff',
+                  color: localVariant === v.key ? '#fff' : '#4a5068',
+                  cursor: running ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+                }}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 2. Date + Time window */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
