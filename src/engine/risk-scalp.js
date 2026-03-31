@@ -94,8 +94,8 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     const recent = candles.slice(-20);
     const trendSlope = (recent[recent.length - 1].c - recent[0].c) / recent[0].c;
     // Counter-trend: reject
-    if (top.direction === 'bullish' && trendSlope < -0.002) return noTrade(cur, candles, box);
-    if (top.direction === 'bearish' && trendSlope > 0.002) return noTrade(cur, candles, box);
+    if (top.direction === 'bullish' && trendSlope < -0.001) return noTrade(cur, candles, box);
+    if (top.direction === 'bearish' && trendSlope > 0.001) return noTrade(cur, candles, box);
   }
 
   /* ── 1. Signal clarity (max 25) — volume-weighted ──────────── */
@@ -121,14 +121,14 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.0015 : rawEntry * 0.9985;
 
-  // SL: volatility-adaptive — must survive at least 3 typical bar ranges
+  // SL: wide enough to survive noise — 1.2% minimum for smallcaps
   const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
-  const slDist = Math.max(atrVal * 2.0, avgBarRange * 3, entry * 0.008);
+  const slDist = Math.max(atrVal * 2.5, avgBarRange * 4, entry * 0.012);
   // Target: achievable within 15 bars — 2x SL for good R:R
   let targetDist;
   let sl, target;
 
-  const targetFloor = Math.max(slDist * 2, entry * 0.015); // 1.5% minimum = Rs.4,500 on Rs.3L
+  const targetFloor = Math.max(slDist * 2, entry * 0.010); // 1.0% minimum = Rs.3,000 on Rs.3L
 
   if (direction === 'long') {
     sl = entry - slDist;
@@ -150,11 +150,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rrClamped = Math.min(9, Math.max(0.3, rr));
   const rrScore = Math.round(25 * (1 - Math.exp(-0.9 * rrClamped)));
 
-  // Min R:R 2.0 — each win must cover 2 losses
-  if (rr < 2.0) return noTrade(cur, candles, box);
+  // Min R:R 1.5 — each win must meaningfully exceed losses
+  if (rr < 1.5) return noTrade(cur, candles, box);
 
-  // Min target 1.5% of entry — ensures meaningful gain per trade
-  if (targetDist < entry * 0.015) return noTrade(cur, candles, box);
+  // Min target 1.0% of entry — ensures Rs.3K+ gain per trade on Rs.3L
+  if (targetDist < entry * 0.010) return noTrade(cur, candles, box);
 
   /* ── 4. Pattern reliability (max 15) ───────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;
@@ -205,11 +205,13 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   // Confidence floor 20 (wider range for scalping discrimination)
   let confidence = Math.round(20 + (rawClamped / 100) * 80);
 
-  // Index direction filter — small bonus for alignment, no penalty for counter-trend
+  // Index direction filter — bonus for alignment, moderate penalty for counter-trend
   const idxDir = opts?.indexDirection;
   if (idxDir) {
-    if (direction === 'long' && idxDir.direction === 'bullish') confidence += 3;
-    else if (direction === 'short' && idxDir.direction === 'bearish') confidence += 3;
+    if (direction === 'long' && idxDir.direction === 'bullish') confidence += 5;
+    else if (direction === 'short' && idxDir.direction === 'bearish') confidence += 5;
+    else if (direction === 'long' && idxDir.direction === 'bearish') confidence -= 15;
+    else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 15;
   }
 
   // Time-of-day filter: first 10 bars (9:15-9:25) = skip
@@ -246,7 +248,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 20, // 8 minutes on 1m = forced exit
+    maxHoldBars: 40, // 8 minutes on 1m = forced exit
   };
 }
 
@@ -256,6 +258,6 @@ function noTrade(cur, candles, box) {
     total: 0, confidence: 20, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
-    maxHoldBars: 20,
+    maxHoldBars: 40,
   };
 }

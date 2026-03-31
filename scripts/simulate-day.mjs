@@ -313,20 +313,32 @@ function buildWindowStockData(allStockBase, wFrom, wTo) {
     candidates.push({ sym, base, windowCandles, firstWindowIdx, avgVol, preWindowCandles });
   }
 
-  if (!candidates.length) return {};
+  const noWindowData = Object.keys(allStockBase).length - candidates.length;
+  if (!candidates.length) {
+    console.log(`  ${Object.keys(allStockBase).length} stocks loaded`);
+    console.log(`  ${noWindowData} filtered: no data in ${wFrom}-${wTo} window`);
+    console.log(`  0 passed → ready for simulation`);
+    return {};
+  }
 
   // Auto-detect volume threshold: 25th percentile
   const sortedVols = candidates.map(c => c.avgVol).sort((a, b) => a - b);
   const p25Idx = Math.floor(sortedVols.length * 0.25);
   const volThreshold = sortedVols[p25Idx] || 0;
-  console.log(`Volume threshold (25th pctile): ${Math.round(volThreshold).toLocaleString()} (${candidates.length} stocks before filter)`);
 
   // Second pass: filter by volume
   const result = {};
+  let volFiltered = 0;
   for (const c of candidates) {
-    if (c.avgVol < volThreshold) continue;
+    if (c.avgVol < volThreshold) { volFiltered++; continue; }
     result[c.sym] = { ...c.base, windowCandles: c.windowCandles, firstWindowIdx: c.firstWindowIdx, avgVol: c.avgVol, preWindowCandles: c.preWindowCandles };
   }
+
+  const passed = Object.keys(result).length;
+  console.log(`  ${noWindowData} filtered: no data in ${wFrom}-${wTo} window`);
+  console.log(`  ${volFiltered} filtered: avg volume below ${Math.round(volThreshold).toLocaleString()} (25th pctile)`);
+  console.log(`  ${passed} passed → ready for simulation`);
+
   return result;
 }
 
@@ -364,32 +376,30 @@ async function main() {
 
   // 2. Load candle data (cache only) — load full day for all stocks
   console.log('Loading candle data from cache...');
-  const allStockBase = {}; // sym -> { dayCandles, priorCandles, prevDayHigh, prevDayLow, orbHigh, orbLow }
+  const allStockBase = {};
   let loaded = 0;
-  let skippedNoCache = 0;
+  const filterStats = { total: symbols.length, noCache: 0, noCandles: 0, noDate: 0, loaded: 0 };
   for (const sym of symbols) {
     const yahooSym = `${sym}.NS`;
     try {
       const cached = readCachedChartJson(yahooSym, tf.interval, tf.range, 0);
-      if (!cached) { skippedNoCache++; continue; }
+      if (!cached) { filterStats.noCache++; continue; }
       const parsed = parseChartJson(cached);
-      if (!parsed?.candles?.length) continue;
+      if (!parsed?.candles?.length) { filterStats.noCandles++; continue; }
       const allCandles = trimTrailingFlatCandles(parsed.candles);
-      if (!allCandles?.length) continue;
+      if (!allCandles?.length) { filterStats.noCandles++; continue; }
 
       const dayCandles = filterByDate(allCandles, targetDate);
-      if (dayCandles.length < 5) continue;
+      if (dayCandles.length < 5) { filterStats.noDate++; continue; }
 
       const dayStart = allCandles.indexOf(dayCandles[0]);
       const priorCandles = allCandles.slice(Math.max(0, dayStart - 20), dayStart);
 
-      // Previous day high/low
       const targetDateStr = istDateStr(dayCandles[0].t);
       const prevDayCandles = allCandles.filter(c => istDateStr(c.t) < targetDateStr);
       const prevDayHigh = prevDayCandles.length ? Math.max(...prevDayCandles.map(c => c.h)) : null;
       const prevDayLow = prevDayCandles.length ? Math.min(...prevDayCandles.map(c => c.l)) : null;
 
-      // Opening Range (first 15 bars on 1m)
       const orbBars = dayCandles.slice(0, 15);
       const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
       const orbLow = orbBars.length >= 5 ? Math.min(...orbBars.map(c => c.l)) : null;
@@ -398,7 +408,13 @@ async function main() {
       loaded++;
     } catch (e) { /* skip */ }
   }
-  console.log(`Loaded ${loaded} stocks (${skippedNoCache} not cached)\n`);
+  filterStats.loaded = loaded;
+  console.log(`\n── Stock Filter Pipeline ──`);
+  console.log(`  ${filterStats.total} symbols in index`);
+  console.log(`  ${filterStats.noCache} filtered: no cache data`);
+  console.log(`  ${filterStats.noCandles} filtered: no valid candles`);
+  console.log(`  ${filterStats.noDate} filtered: no data for target date`);
+  console.log(`  ${filterStats.loaded} passed → loaded for simulation`);
 
   if (!loaded) {
     console.log('No data available. Try warming the cache: npm run cache:charts');
