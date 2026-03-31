@@ -134,27 +134,27 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-15).map(c => c.h));
     const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 2.0) : atrVal * 2.0;
+    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 6.0) : atrVal * 6.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-15).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 2.0) : atrVal * 2.0;
+    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 6.0) : atrVal * 6.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry - targetDist;
   }
 
   const rr = targetDist / Math.max(slDist, 1e-9);
-  const rrClamped = Math.min(3, Math.max(0.3, rr));
+  const rrClamped = Math.min(9, Math.max(0.3, rr));
   const rrScore = Math.round(25 * (1 - Math.exp(-0.9 * rrClamped)));
 
-  // Min R:R 1.0 for scalping (trailing stop manages actual R:R)
-  if (rr < 1.0) return noTrade(cur, candles, box);
+  // Min R:R 0.5 for scalping (trailing stop manages actual R:R)
+  if (rr < 0.5) return noTrade(cur, candles, box);
 
   // Transaction cost filter
-  if (targetDist < entry * 0.002) return noTrade(cur, candles, box);
+  if (targetDist < entry * 0.001) return noTrade(cur, candles, box);
 
   /* ── 4. Pattern reliability (max 15) ───────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;

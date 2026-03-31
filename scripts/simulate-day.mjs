@@ -35,7 +35,6 @@ const TIMEFRAME_MAP = {
 };
 
 const TX_COST_PCT = 0.0005; // 0.05% per side
-const MIN_AVG_VOLUME = 10000;
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
 function parseArgs() {
@@ -48,7 +47,7 @@ function parseArgs() {
   let maxPositions = 1;
   let maxTotalTrades = 10;
   let positionSize = 300000;
-  let skipFirstBars = 5;
+  let skipFirstBars = 0;
   let fromTime = '09:30';
   let toTime = '11:00';
   let multiWindow = false;
@@ -157,43 +156,12 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
   const maxBars = Math.max(...Object.values(stockDataForWindow).map(d => d.windowCandles.length));
 
   for (let barIdx = 0; barIdx < maxBars; barIdx++) {
-    // --- Check existing positions for trailing stop, SL/target hit ---
+    // --- Check existing positions for SL/target hit (hard SL, no trailing) ---
     for (let p = openPositions.length - 1; p >= 0; p--) {
       const pos = openPositions[p];
       const sd = stockDataForWindow[pos.sym];
       if (barIdx >= sd.windowCandles.length) continue;
       const bar = sd.windowCandles[barIdx];
-
-      // --- Trailing stop update (before SL check) ---
-      // Only trail AFTER the entry bar and only when a meaningful move has occurred
-      if (barIdx > pos.entryBar + 1) {
-        const bestPrice = pos.direction === 'long' ? bar.h : bar.l;
-        const unrealized = pos.direction === 'long'
-          ? (bestPrice - pos.entry)
-          : (pos.entry - bestPrice);
-        const movePercent = unrealized / pos.entry;
-
-        // Track maximum favorable excursion
-        if (!pos.maxFavorable || unrealized > pos.maxFavorable) {
-          pos.maxFavorable = unrealized;
-        }
-
-        // Only start trailing after 0.3% favorable move
-        if (pos.maxFavorable > pos.entry * 0.003) {
-          // Move SL to breakeven once we've moved 0.3%+
-          if (pos.direction === 'long') pos.sl = Math.max(pos.sl, pos.entry);
-          else pos.sl = Math.min(pos.sl, pos.entry);
-
-          // After 0.5%+ move, trail at 50% of max favorable
-          if (pos.maxFavorable > pos.entry * 0.005) {
-            const trailLevel = pos.direction === 'long'
-              ? pos.entry + pos.maxFavorable * 0.50
-              : pos.entry - pos.maxFavorable * 0.50;
-            if (pos.direction === 'long') pos.sl = Math.max(pos.sl, trailLevel);
-            else pos.sl = Math.min(pos.sl, trailLevel);
-          }
-        }
-      }
 
       let exitPrice = null;
       let exitReason = null;
@@ -204,15 +172,6 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       } else {
         if (bar.h >= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
         else if (bar.l <= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
-      }
-
-      // Validation window: if after 3 bars the trade hasn't moved 0.1% favorably, cut it
-      if (!exitPrice && (barIdx - pos.entryBar) === 3) {
-        const bestSoFar = pos.maxFavorable || 0;
-        if (bestSoFar < pos.entry * 0.001) {
-          exitPrice = bar.c;
-          exitReason = 'VALIDATION';
-        }
       }
 
       if (!exitPrice && pos.maxHoldBars && (barIdx - pos.entryBar) >= pos.maxHoldBars) {
@@ -246,8 +205,8 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         });
 
         openPositions.splice(p, 1);
-        // Set cooldown: don't re-enter same stock for 5 bars
-        cooldownUntil[pos.sym] = barIdx + 5;
+        // Set cooldown: don't re-enter same stock for 2 bars
+        cooldownUntil[pos.sym] = barIdx + 2;
       }
     }
 
@@ -265,7 +224,8 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       if (barIdx >= sd.windowCandles.length) continue;
 
       const dayBarIdx = sd.firstWindowIdx + barIdx;
-      const candlesSoFar = [...sd.priorCandles, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
+      const preWindow = sd.preWindowCandles || [];
+      const candlesSoFar = [...sd.priorCandles, ...preWindow, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
       if (candlesSoFar.length < 10) continue;
 
       const patterns = detectPatterns(candlesSoFar, {
@@ -335,16 +295,37 @@ function printSummary(trades, capital, currentCapital, maxDrawdown, label = 'SIM
   console.log(`Return:          ${((currentCapital - capital) / capital * 100).toFixed(2)}%`);
 }
 
-/** Build window-specific stock data by re-filtering dayCandles for a time window. */
+/** Build window-specific stock data by re-filtering dayCandles for a time window.
+ *  Volume threshold is auto-detected: 25th percentile of all stocks' avg volume. */
 function buildWindowStockData(allStockBase, wFrom, wTo) {
-  const result = {};
+  // First pass: compute avgVol for ALL stocks, collect pre-window candles
+  const candidates = [];
   for (const [sym, base] of Object.entries(allStockBase)) {
     const windowCandles = filterByTimeWindow(base.dayCandles, wFrom, wTo);
     if (windowCandles.length < 3) continue;
     const avgVol = windowCandles.reduce((s, c) => s + c.v, 0) / windowCandles.length;
-    if (avgVol < MIN_AVG_VOLUME) continue;
     const firstWindowIdx = base.dayCandles.indexOf(windowCandles[0]);
-    result[sym] = { ...base, windowCandles, firstWindowIdx, avgVol };
+    // Pre-window candles: 09:15 to window start for pattern lookback context
+    const preWindowCandles = base.dayCandles.filter(c => {
+      const t = istTimeStr(c.t);
+      return t >= '09:15' && t < wFrom;
+    });
+    candidates.push({ sym, base, windowCandles, firstWindowIdx, avgVol, preWindowCandles });
+  }
+
+  if (!candidates.length) return {};
+
+  // Auto-detect volume threshold: 25th percentile
+  const sortedVols = candidates.map(c => c.avgVol).sort((a, b) => a - b);
+  const p25Idx = Math.floor(sortedVols.length * 0.25);
+  const volThreshold = sortedVols[p25Idx] || 0;
+  console.log(`Volume threshold (25th pctile): ${Math.round(volThreshold).toLocaleString()} (${candidates.length} stocks before filter)`);
+
+  // Second pass: filter by volume
+  const result = {};
+  for (const c of candidates) {
+    if (c.avgVol < volThreshold) continue;
+    result[c.sym] = { ...c.base, windowCandles: c.windowCandles, firstWindowIdx: c.firstWindowIdx, avgVol: c.avgVol, preWindowCandles: c.preWindowCandles };
   }
   return result;
 }
@@ -362,7 +343,7 @@ async function main() {
   console.log(`\n=== CandleScan ${engine} Simulation${multiWindow ? ' (Multi-Window)' : ''} ===`);
   console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
   console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${maxPositions} | Per trade: Rs.${positionSize.toLocaleString()} | Max trades: ${maxTotalTrades}`);
-  console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Min avg volume: ${MIN_AVG_VOLUME.toLocaleString()}`);
+  console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Volume: auto (25th pctile)`);
   console.log('');
 
   // 1. Fetch index constituents (with cache fallback)
