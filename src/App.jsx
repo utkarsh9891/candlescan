@@ -444,6 +444,7 @@ export default function App() {
           }}
           savedIndex={nseIndex}
           indexOptions={allIndexOptions}
+          engineVersion={engineVersion}
         />
       </div>
 
