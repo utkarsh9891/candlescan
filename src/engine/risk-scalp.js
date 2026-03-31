@@ -127,40 +127,42 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.0015 : rawEntry * 0.9985;
 
-  // SL: wide enough to survive noise — 1.2% minimum for smallcaps
+  // SL: wide enough to survive noise — 0.7% minimum (safety net, rarely hit)
   const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
-  const slDist = Math.max(atrVal * 2.5, avgBarRange * 4, entry * 0.012);
-  // Target: ATR-based, at least 2× SL for good R:R
+  const slDist = Math.max(atrVal * 1.5, avgBarRange * 2.5, entry * 0.007);
+  // Target: tight, achievable in a few bars — take the cut and move on
   let targetDist;
   let sl, target;
 
-  const targetFloor = Math.max(slDist * 2, entry * 0.010); // 1.0% minimum = Rs.3,000 on Rs.3L
+  const targetFloor = entry * 0.003; // 0.3% minimum = Rs.900 on Rs.3L
 
   if (direction === 'long') {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-15).map(c => c.h));
     const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 3.0) : atrVal * 3.0;
+    targetDist = resistanceDist > entry * 0.002 ? Math.min(resistanceDist, atrVal * 1.0) : atrVal * 1.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-15).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 3.0) : atrVal * 3.0;
+    targetDist = supportDist > entry * 0.002 ? Math.min(supportDist, atrVal * 1.0) : atrVal * 1.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry - targetDist;
   }
 
   const rr = targetDist / Math.max(slDist, 1e-9);
   const rrClamped = Math.min(9, Math.max(0.3, rr));
-  const rrScore = Math.round(25 * (1 - Math.exp(-0.9 * rrClamped)));
+  // Scalp R:R scoring: flatter curve — don't penalize low R:R as harshly
+  // R:R 0.4 → 15/25, R:R 1.0 → 20/25, R:R 2.0 → 23/25 (vs v2: 8, 15, 21)
+  const rrScore = Math.round(25 * (1 - Math.exp(-1.8 * rrClamped)));
 
-  // Min R:R 1.5 — each win must meaningfully exceed losses
-  if (rr < 1.5) return noTrade(cur, candles, box);
+  // Min R:R 0.3 — scalping relies on win rate, not R:R
+  if (rr < 0.3) return noTrade(cur, candles, box);
 
-  // Min target 1.0% of entry — ensures Rs.3K+ gain per trade on Rs.3L
-  if (targetDist < entry * 0.010) return noTrade(cur, candles, box);
+  // Min target 0.3% of entry — ensures Rs.900+ gain per trade on Rs.3L
+  if (targetDist < entry * 0.003) return noTrade(cur, candles, box);
 
   /* ── 4. Pattern reliability (max 15) ───────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;
