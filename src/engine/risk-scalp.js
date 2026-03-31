@@ -1,14 +1,20 @@
 /**
  * Scalping risk scoring engine.
- * Optimized for 5-10 min holds on 1m candles.
+ * Optimized for 5-15 min holds on 1m candles.
  *
- * Key differences from v2:
- *  - Tighter SL (ATR×0.8) and target (ATR×1.2)
- *  - Time-based exit: maxHoldBars = 8 (8 min on 1m)
- *  - Index direction filter: -20 confidence for counter-trend
+ * === HARD CONSTRAINTS (do NOT exceed these) ===
+ *  - maxHoldBars: 15 (15 min on 1m — hard scalp limit)
+ *  - Timeframe: 1m only
+ *  - Window: 09:30-11:00 AM IST
+ *
+ * Key differences from v2 (intraday):
+ *  - SL: max(ATR×2.5, avgBarRange×4, 1.2%)
+ *  - Target: resistance/support-based, capped at ATR×3
+ *  - Time-based exit: maxHoldBars = 15 (15 min on 1m)
+ *  - Index direction filter: -15 confidence for counter-trend
  *  - Day/time awareness (Monday/Friday adjustments)
  *  - Wider slippage buffer (0.15%)
- *  - Min R:R 1.0:1 (acceptable for high win-rate scalping)
+ *  - Min R:R 1.5:1
  *  - Confidence floor 20 (wider range for discrimination)
  */
 

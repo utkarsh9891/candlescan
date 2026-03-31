@@ -235,6 +235,35 @@ All three must use:
 
 ---
 
+## CRITICAL: Engine Identity Constraints
+
+Each engine represents a fundamentally different trading style. **Never tune parameters past these hard limits — they define what the engine IS.**
+
+### Scalp Engine (`risk-scalp.js`, `patterns-scalp.js`)
+| Constraint | Hard Limit | Why |
+|------------|-----------|-----|
+| **maxHoldBars** | **≤ 15** (15 min on 1m) | Scalping = quick in-and-out. Anything longer is intraday. |
+| **Timeframe** | **1m only** | Scalping needs bar-by-bar precision. |
+| **Window** | **09:30–11:00 IST** | Morning volatility window. |
+| **Hold duration** | **5–15 min typical** | If most trades hold 20+ min, the engine has drifted. |
+
+### Intraday Engine (`risk-v2.js`, `patterns-v2.js`)
+| Constraint | Hard Limit | Why |
+|------------|-----------|-----|
+| **maxHoldBars** | **No limit / full day** | Intraday can hold until close. |
+| **Timeframe** | **5m / 15m** | Wider bars for longer holds. |
+| **Window** | **Full session** | 09:15–15:30 IST. |
+
+### Classic Engine (`risk-classic.js`, `patterns-classic.js`)
+| Constraint | Hard Limit | Why |
+|------------|-----------|-----|
+| **Hold duration** | **3–4 days** | Swing trading across sessions. |
+| **Timeframe** | **1d** | Daily candles for multi-day patterns. |
+
+**Tests enforce these constraints** — see `risk-scalp.test.js`. If a tuning change makes a test fail, the change violates engine identity and must be reconsidered.
+
+---
+
 ## Deployment & Versioning
 
 > **Full guide: [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md)** — read this before making any commits.
