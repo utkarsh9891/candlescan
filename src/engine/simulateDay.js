@@ -254,11 +254,10 @@ export async function runSimulation({
     if (totalTradesOpened >= maxTotalTrades) continue;
     if (openPositions.length >= maxConcurrent) continue;
 
-    // Generate signals
+    // Collect all qualifying signals at this bar, then pick best by confidence
+    const candidates = [];
     for (const sym of Object.keys(stockData)) {
       if (signal?.aborted) break;
-      if (openPositions.length >= maxConcurrent) break;
-      if (totalTradesOpened >= maxTotalTrades) break;
       if (openPositions.some(p => p.sym === sym)) continue;
       if (cooldownUntil[sym] && barIdx < cooldownUntil[sym]) continue;
 
@@ -287,13 +286,22 @@ export async function runSimulation({
       const shares = Math.floor(positionSize / risk.entry);
       if (shares < 1) continue;
 
+      candidates.push({ sym, risk, patterns, shares });
+    }
+
+    // Sort by confidence descending, pick top candidates up to available slots
+    candidates.sort((a, b) => b.risk.confidence - a.risk.confidence);
+    for (const c of candidates) {
+      if (openPositions.length >= maxConcurrent) break;
+      if (totalTradesOpened >= maxTotalTrades) break;
+
       openPositions.push({
-        sym, direction: risk.direction,
-        entry: risk.entry, sl: risk.sl, target: risk.target,
-        entryBar: barIdx, shares,
-        confidence: risk.confidence, action: risk.action,
-        pattern: patterns[0]?.name || 'None',
-        maxHoldBars: risk.maxHoldBars || null,
+        sym: c.sym, direction: c.risk.direction,
+        entry: c.risk.entry, sl: c.risk.sl, target: c.risk.target,
+        entryBar: barIdx, shares: c.shares,
+        confidence: c.risk.confidence, action: c.risk.action,
+        pattern: c.patterns[0]?.name || 'None',
+        maxHoldBars: c.risk.maxHoldBars || null,
       });
       totalTradesOpened++;
     }

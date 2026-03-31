@@ -214,9 +214,9 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
     if (openPositions.length >= MAX_POSITIONS) continue;
     if (totalTradesOpened >= MAX_TOTAL_TRADES) continue;
 
+    // Collect all qualifying signals at this bar, then pick best by confidence
+    const candidates = [];
     for (const sym of Object.keys(stockDataForWindow)) {
-      if (openPositions.length >= MAX_POSITIONS) break;
-      if (totalTradesOpened >= MAX_TOTAL_TRADES) break;
       if (openPositions.some(p => p.sym === sym)) continue;
       if (cooldownUntil[sym] && barIdx < cooldownUntil[sym]) continue;
 
@@ -244,13 +244,22 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       const shares = Math.floor(POSITION_SIZE / risk.entry);
       if (shares < 1) continue;
 
+      candidates.push({ sym, risk, patterns, shares });
+    }
+
+    // Sort by confidence descending, pick top candidates up to available slots
+    candidates.sort((a, b) => b.risk.confidence - a.risk.confidence);
+    for (const c of candidates) {
+      if (openPositions.length >= MAX_POSITIONS) break;
+      if (totalTradesOpened >= MAX_TOTAL_TRADES) break;
+
       openPositions.push({
-        sym, direction: risk.direction,
-        entry: risk.entry, sl: risk.sl, target: risk.target,
-        entryBar: barIdx, shares,
-        confidence: risk.confidence, action: risk.action,
-        pattern: patterns[0]?.name || 'None',
-        maxHoldBars: risk.maxHoldBars || null,
+        sym: c.sym, direction: c.risk.direction,
+        entry: c.risk.entry, sl: c.risk.sl, target: c.risk.target,
+        entryBar: barIdx, shares: c.shares,
+        confidence: c.risk.confidence, action: c.risk.action,
+        pattern: c.patterns[0]?.name || 'None',
+        maxHoldBars: c.risk.maxHoldBars || null,
       });
       totalTradesOpened++;
     }
@@ -426,10 +435,15 @@ async function main() {
   console.log(`Simulation date: ${simDate}`);
   console.log('─'.repeat(100));
 
-  // Compute index direction
+  // Compute index direction — use same symbol mapping as browser (indexDirection.js)
+  const INDEX_SYMBOL_MAP = {
+    'NIFTY 50': '^NSEI', 'NIFTY NEXT 50': '^NSEI', 'NIFTY 100': '^NSEI', 'NIFTY 200': '^NSEI',
+    'NIFTY MIDCAP 50': 'NIFTY_MIDCAP_50.NS', 'NIFTY MIDCAP 100': 'NIFTY_MIDCAP_50.NS', 'NIFTY MIDCAP 150': 'NIFTY_MIDCAP_50.NS',
+    'NIFTY SMALLCAP 50': 'NIFTY_SMLCAP_50.NS', 'NIFTY SMALLCAP 100': 'NIFTY_SMLCAP_50.NS', 'NIFTY SMALLCAP 250': 'NIFTY_SMLCAP_50.NS',
+  };
   let indexDirection = { direction: 'neutral', strength: 0 };
   if (engine === 'scalp') {
-    const niftySym = '^NSEI';
+    const niftySym = INDEX_SYMBOL_MAP[indexName] || '^NSEI';
     const niftyJson = readCachedChartJson(niftySym, tf.interval, tf.range, 0);
     if (niftyJson) {
       const niftyParsed = parseChartJson(niftyJson);

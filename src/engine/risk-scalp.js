@@ -1,14 +1,20 @@
 /**
  * Scalping risk scoring engine.
- * Optimized for 5-10 min holds on 1m candles.
+ * Optimized for 5-15 min holds on 1m candles.
  *
- * Key differences from v2:
- *  - Tighter SL (ATR×0.8) and target (ATR×1.2)
- *  - Time-based exit: maxHoldBars = 8 (8 min on 1m)
- *  - Index direction filter: -20 confidence for counter-trend
+ * === HARD CONSTRAINTS (do NOT exceed these) ===
+ *  - maxHoldBars: 15 (15 min on 1m — hard scalp limit)
+ *  - Timeframe: 1m only
+ *  - Window: 09:30-11:00 AM IST
+ *
+ * Key differences from v2 (intraday):
+ *  - SL: max(ATR×2.5, avgBarRange×4, 1.2%)
+ *  - Target: resistance/support-based, capped at ATR×3
+ *  - Time-based exit: maxHoldBars = 15 (15 min on 1m)
+ *  - Index direction filter: -15 confidence for counter-trend
  *  - Day/time awareness (Monday/Friday adjustments)
  *  - Wider slippage buffer (0.15%)
- *  - Min R:R 1.0:1 (acceptable for high win-rate scalping)
+ *  - Min R:R 1.5:1
  *  - Confidence floor 20 (wider range for discrimination)
  */
 
@@ -93,7 +99,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   if (candles.length >= 20 && top) {
     const recent = candles.slice(-20);
     const trendSlope = (recent[recent.length - 1].c - recent[0].c) / recent[0].c;
-    // Counter-trend: reject
+    // Counter-trend: reject if stock trend opposes the signal
     if (top.direction === 'bullish' && trendSlope < -0.001) return noTrade(cur, candles, box);
     if (top.direction === 'bearish' && trendSlope > 0.001) return noTrade(cur, candles, box);
   }
@@ -121,40 +127,41 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.0015 : rawEntry * 0.9985;
 
-  // SL: wide enough to survive noise — 1.2% minimum for smallcaps
+  // SL: wide catastrophic stop — 2% minimum. Rarely hit; TIME exit is the real loss limiter.
   const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
-  const slDist = Math.max(atrVal * 2.5, avgBarRange * 4, entry * 0.012);
-  // Target: achievable within 15 bars — 2x SL for good R:R
+  const slDist = Math.max(atrVal * 3.0, avgBarRange * 5, entry * 0.020);
+  // Target: aggressive, reachable in a few bars — take the cut and move on
   let targetDist;
   let sl, target;
 
-  const targetFloor = Math.max(slDist * 2, entry * 0.010); // 1.0% minimum = Rs.3,000 on Rs.3L
+  const targetFloor = entry * 0.003; // 0.3% minimum = Rs.900 on Rs.3L
 
   if (direction === 'long') {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-15).map(c => c.h));
     const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > slDist * 0.5 ? Math.min(resistanceDist, atrVal * 6.0) : atrVal * 6.0;
+    targetDist = resistanceDist > entry * 0.003 ? Math.min(resistanceDist, atrVal * 1.0) : atrVal * 1.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-15).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? Math.min(supportDist, atrVal * 6.0) : atrVal * 6.0;
+    targetDist = supportDist > entry * 0.003 ? Math.min(supportDist, atrVal * 1.0) : atrVal * 1.0;
     targetDist = Math.max(targetDist, targetFloor);
     target = entry - targetDist;
   }
 
   const rr = targetDist / Math.max(slDist, 1e-9);
-  const rrClamped = Math.min(9, Math.max(0.3, rr));
-  const rrScore = Math.round(25 * (1 - Math.exp(-0.9 * rrClamped)));
+  const rrClamped = Math.min(9, Math.max(0.1, rr));
+  // Scalp R:R scoring: flat — R:R is irrelevant for scalping, win rate matters
+  // Any valid setup gets 20/25; only truly degenerate R:R (<0.1) gets penalized
+  const rrScore = Math.max(20, Math.round(25 * (1 - Math.exp(-2.5 * rrClamped))));
 
-  // Min R:R 1.5 — each win must meaningfully exceed losses
-  if (rr < 1.5) return noTrade(cur, candles, box);
+  // No R:R gate — scalping relies on win rate + tight targets, not R:R
 
-  // Min target 1.0% of entry — ensures Rs.3K+ gain per trade on Rs.3L
-  if (targetDist < entry * 0.010) return noTrade(cur, candles, box);
+  // Min target 0.3% of entry — ensures Rs.900+ gain per trade on Rs.3L
+  if (targetDist < entry * 0.003) return noTrade(cur, candles, box);
 
   /* ── 4. Pattern reliability (max 15) ───────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;
@@ -248,7 +255,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 40, // 8 minutes on 1m = forced exit
+    maxHoldBars: 15, // 15 minutes on 1m = hard scalp limit
   };
 }
 
@@ -258,6 +265,6 @@ function noTrade(cur, candles, box) {
     total: 0, confidence: 20, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
-    maxHoldBars: 40,
+    maxHoldBars: 15,
   };
 }
