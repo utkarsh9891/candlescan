@@ -283,23 +283,23 @@ If tests or build fail, deployment is blocked.
 
 ## Versioning
 
-Version is derived from **git tags** at build time — no hardcoding required.
+**Pre-1.0** — this project is in active development. Version `v0.x.y` signals the app is not yet production-ready.
+
+Version is derived from **git tags** at build time — no hardcoding required. CI auto-increments the patch number on every merge to `main`.
 
 ```bash
-# Tag a release (creates version v2.2.0)
-git tag v2.2.0
-git push origin v2.2.0
+# After each merge to main, CI auto-tags:
+#   v0.5.0 → v0.5.1 → v0.5.2 → ...
 
-# After the next push to main, the app shows:
-#   On the tag commit:  v2.2.0
-#   1 commit later:     v2.2.0-1-gabcdef
-#   5 commits later:    v2.2.0-5-g1234567
+# Manual minor bump (milestone):
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
 - **Source**: `git describe --tags --always` (run at build time in `vite.config.js`)
-- **Display**: hamburger menu bottom — e.g. `v2.2.0-3-gabcdef 30 Mar`
+- **Display**: hamburger menu bottom — e.g. `v0.5.3-2-gabcdef 31 Mar`
 - **CI**: GitHub Actions fetches full git history (`fetch-depth: 0`) so tags are available
-- **Semver convention**: tag `vMAJOR.MINOR.PATCH` for releases, commits after a tag auto-append count + hash
+- **Full guide**: See [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md)
 
 ## Debug Mode
 
