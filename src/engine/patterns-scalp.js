@@ -119,49 +119,9 @@ export function detectPatterns(candles, opts) {
         reliability: 0.70, candleIndices: [n - 1],
       });
     }
-    // VWAP rejection: touched VWAP but bounced off
-    if (curSide === 'above' && cur.l <= vwap * 1.001 && cur.c > vwap * 1.002) {
-      patterns.push({
-        name: 'VWAP Rejection (Bull)', direction: 'bullish',
-        strength: Math.min(0.90, 0.60 * Math.min(2, vf)),
-        category: 'vwap', emoji: '📊',
-        tip: 'Price bounced off VWAP support',
-        description: 'Price dipped to VWAP and bounced — VWAP acting as support.',
-        reliability: 0.64, candleIndices: [n - 1],
-      });
-    }
   }
 
-  // --- 2. Micro Momentum Burst ---
-  if (n >= 4) {
-    const last3 = candles.slice(-3);
-    const allBull = last3.every(c => isBull(c));
-    const allBear = last3.every(c => !isBull(c));
-    const volIncreasing = last3[0].v < last3[1].v && last3[1].v < last3[2].v;
-
-    if (allBull && volIncreasing && body(cur) > ab * 1.2) {
-      patterns.push({
-        name: 'Micro Momentum (Bull)', direction: 'bullish',
-        strength: Math.min(0.90, 0.55 + (body(cur) / (ab * 4)) * 0.3),
-        category: 'micro-momentum', emoji: '🚀',
-        tip: '3 green candles with rising volume — momentum building',
-        description: 'Three consecutive bullish candles with increasing volume. Ride the wave.',
-        reliability: 0.62, candleIndices: [n - 3, n - 2, n - 1],
-      });
-    }
-    if (allBear && volIncreasing && body(cur) > ab * 1.2) {
-      patterns.push({
-        name: 'Micro Momentum (Bear)', direction: 'bearish',
-        strength: Math.min(0.90, 0.53 + (body(cur) / (ab * 4)) * 0.3),
-        category: 'micro-momentum', emoji: '⬇️',
-        tip: '3 red candles with rising volume — selling pressure',
-        description: 'Three consecutive bearish candles with increasing volume. Short opportunity.',
-        reliability: 0.60, candleIndices: [n - 3, n - 2, n - 1],
-      });
-    }
-  }
-
-  // --- 3. Opening Range Breakout (ORB) ---
+  // --- 2. Opening Range Breakout (ORB) ---
   if (opts?.orbHigh != null && opts?.orbLow != null) {
     const orbRange = opts.orbHigh - opts.orbLow;
     if (orbRange > 0) {
@@ -188,40 +148,7 @@ export function detectPatterns(candles, opts) {
     }
   }
 
-  // --- 4. EMA Crossover (5/13) ---
-  if (n >= 15) {
-    const ema5now = ema(candles.slice(-6), 5);
-    const ema13now = ema(candles.slice(-14), 13);
-    const ema5prev = ema(candles.slice(-7, -1), 5);
-    const ema13prev = ema(candles.slice(-15, -1), 13);
-
-    if (ema5now && ema13now && ema5prev && ema13prev) {
-      // Bullish crossover: EMA5 was below EMA13, now above
-      if (ema5prev <= ema13prev && ema5now > ema13now) {
-        patterns.push({
-          name: 'EMA Cross (Bull)', direction: 'bullish',
-          strength: Math.min(0.85, 0.58 * Math.min(1.8, vf)),
-          category: 'ema-cross', emoji: '✕',
-          tip: 'EMA 5 crossed above EMA 13 — trend turning bullish',
-          description: 'Short-term EMA crossed above medium-term EMA. Trend shift signal.',
-          reliability: 0.55, candleIndices: [n - 1],
-        });
-      }
-      // Bearish crossover
-      if (ema5prev >= ema13prev && ema5now < ema13now) {
-        patterns.push({
-          name: 'EMA Cross (Bear)', direction: 'bearish',
-          strength: Math.min(0.85, 0.56 * Math.min(1.8, vf)),
-          category: 'ema-cross', emoji: '✕',
-          tip: 'EMA 5 crossed below EMA 13 — trend turning bearish',
-          description: 'Short-term EMA crossed below medium-term EMA. Trend shift signal.',
-          reliability: 0.53, candleIndices: [n - 1],
-        });
-      }
-    }
-  }
-
-  // --- 5. Volume Climax Reversal ---
+  // --- 4. Volume Climax Reversal ---
   if (n >= 3 && vf >= 2.5) {
     // Current bar has extreme volume (3x+) AND previous bar was same direction
     if (isBull(prev) && !isBull(cur) && body(cur) > ab * 0.8) {
@@ -270,34 +197,7 @@ export function detectPatterns(candles, opts) {
     }
   }
 
-  // --- 7. RSI Extreme Reversal (rank #7) ---
-  if (n >= 16) {
-    const rsiVal = rsi(candles, 14);
-    if (rsiVal !== null) {
-      if (rsiVal < 25 && isBull(cur) && body(cur) > ab * 0.8) {
-        patterns.push({
-          name: 'RSI Extreme Reversal (Bull)', direction: 'bullish',
-          strength: Math.min(0.90, 0.60 + (25 - rsiVal) / 50),
-          category: 'rsi-extreme', emoji: '↩️',
-          tip: 'RSI oversold with bullish reversal candle',
-          description: `RSI at ${rsiVal.toFixed(0)} with bullish reversal. Oversold bounce likely.`,
-          reliability: 0.63, candleIndices: [n - 1],
-        });
-      }
-      if (rsiVal > 75 && !isBull(cur) && body(cur) > ab * 0.8) {
-        patterns.push({
-          name: 'RSI Extreme Reversal (Bear)', direction: 'bearish',
-          strength: Math.min(0.90, 0.58 + (rsiVal - 75) / 50),
-          category: 'rsi-extreme', emoji: '↩️',
-          tip: 'RSI overbought with bearish reversal candle',
-          description: `RSI at ${rsiVal.toFixed(0)} with bearish reversal. Overbought pullback likely.`,
-          reliability: 0.61, candleIndices: [n - 1],
-        });
-      }
-    }
-  }
-
-  // --- 8. Breakout Retest (rank #3) ---
+  // --- 6. Breakout Retest ---
   if (n >= 15) {
     const lookback = candles.slice(-15, -3);
     const recentHigh = Math.max(...lookback.map(c => c.h));
@@ -326,38 +226,6 @@ export function detectPatterns(candles, opts) {
         tip: 'Broke support, retested, now rejecting — high probability short',
         description: 'Classic breakdown-retest-continuation. Support became resistance.',
         reliability: 0.68, candleIndices: [n - 3, n - 2, n - 1],
-      });
-    }
-  }
-
-  // --- 9. Mean Reversion (rank #9) ---
-  // Works best in choppy mid-day markets
-  if (n >= 30) {
-    const dayOpen = candles[Math.max(0, n - 30)].o; // approx day open from lookback
-    const changeFromOpen = (cur.c - dayOpen) / dayOpen;
-    const rsiVal = rsi(candles, 14);
-
-    // Oversold bounce: stock dropped > 0.8% from reference AND RSI < 35
-    if (rsiVal !== null && rsiVal < 35 && changeFromOpen < -0.008 && isBull(cur) && body(cur) > ab * 0.5) {
-      patterns.push({
-        name: 'Mean Reversion (Bull)', direction: 'bullish',
-        strength: Math.min(0.90, 0.65 + (35 - rsiVal) / 100),
-        category: 'mean-reversion', emoji: '🔄',
-        tip: 'Oversold stock bouncing — mean reversion long',
-        description: `Stock dropped ${(changeFromOpen * 100).toFixed(1)}% with RSI at ${rsiVal.toFixed(0)}. Bounce likely.`,
-        reliability: 0.60, candleIndices: [n - 1],
-      });
-    }
-
-    // Overbought pullback: stock gained > 0.8% from reference AND RSI > 65
-    if (rsiVal !== null && rsiVal > 65 && changeFromOpen > 0.008 && !isBull(cur) && body(cur) > ab * 0.5) {
-      patterns.push({
-        name: 'Mean Reversion (Bear)', direction: 'bearish',
-        strength: Math.min(0.90, 0.63 + (rsiVal - 65) / 100),
-        category: 'mean-reversion', emoji: '🔄',
-        tip: 'Overbought stock pulling back — mean reversion short',
-        description: `Stock gained ${(changeFromOpen * 100).toFixed(1)}% with RSI at ${rsiVal.toFixed(0)}. Pullback likely.`,
-        reliability: 0.58, candleIndices: [n - 1],
       });
     }
   }

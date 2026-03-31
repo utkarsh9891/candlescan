@@ -88,7 +88,7 @@ export async function batchScan({
           const box = detectLiquidityBox(candles);
           const risk = computeRiskScore({
             candles, patterns, box,
-            opts: { indexDirection: indexDirection || null },
+            opts: { barIndex: candles.length, indexDirection: indexDirection || null },
           });
 
           return {

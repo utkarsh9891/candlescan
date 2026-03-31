@@ -128,7 +128,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   let targetDist;
   let sl, target;
 
-  const targetFloor = slDist * 2; // 2x SL for good R:R
+  const targetFloor = Math.max(slDist * 2, entry * 0.015); // 1.5% minimum = Rs.4,500 on Rs.3L
 
   if (direction === 'long') {
     sl = entry - slDist;
@@ -150,11 +150,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rrClamped = Math.min(9, Math.max(0.3, rr));
   const rrScore = Math.round(25 * (1 - Math.exp(-0.9 * rrClamped)));
 
-  // Min R:R 0.5 for scalping (trailing stop manages actual R:R)
-  if (rr < 0.5) return noTrade(cur, candles, box);
+  // Min R:R 2.0 — each win must cover 2 losses
+  if (rr < 2.0) return noTrade(cur, candles, box);
 
-  // Transaction cost filter
-  if (targetDist < entry * 0.001) return noTrade(cur, candles, box);
+  // Min target 1.5% of entry — ensures meaningful gain per trade
+  if (targetDist < entry * 0.015) return noTrade(cur, candles, box);
 
   /* ── 4. Pattern reliability (max 15) ───────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;
