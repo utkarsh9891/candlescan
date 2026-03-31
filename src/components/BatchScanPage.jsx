@@ -14,6 +14,7 @@ import { detectPatterns as detectPatternsClassic } from '../engine/patterns-clas
 import { detectLiquidityBox as detectLiquidityBoxClassic } from '../engine/liquidityBox-classic.js';
 import { computeRiskScore as computeRiskScoreClassic } from '../engine/risk-classic.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
+import { getScalpVariantFns } from '../engine/scalp-variants/registry.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const ALL_TFS = ['1m', '5m', '15m', '30m', '1h', '1d'];
@@ -141,13 +142,13 @@ function ResultCard({ r, onTap }) {
   );
 }
 
-function getEngineFns(engineVersion) {
-  if (engineVersion === 'scalp') return { detectPatterns: detectPatternsScalp, detectLiquidityBox: detectLiquidityBoxScalp, computeRiskScore: computeRiskScoreScalp };
+function getEngineFns(engineVersion, scalpVariant) {
+  if (engineVersion === 'scalp') return getScalpVariantFns(scalpVariant || 'momentum');
   if (engineVersion === 'v1') return { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [nseIndex, setNseIndex] = useState(savedIndex || DEFAULT_NSE_INDEX_ID);
   const [timeframe, setTimeframe] = useState('5m');
@@ -192,7 +193,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
         symbols,
         timeframe,
         batchToken: token,
-        engineFns: getEngineFns(engineVersion),
+        engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
         concurrency: 5,
         delayMs: 200,

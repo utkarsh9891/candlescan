@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import CustomIndexInput from './CustomIndexInput.jsx';
+import { SCALP_VARIANTS } from '../engine/scalp-variants/registry.js';
 
 const INTRADAY_CATEGORIES = [
   { key: 'engulfing', label: 'Engulfing' },
@@ -38,7 +39,7 @@ const CLASSIC_CATEGORIES_UI = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, debugMode, onDebugModeChange }) {
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, scalpVariant, onScalpVariantChange, debugMode, onDebugModeChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -144,6 +145,22 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
                 ].map((v) => (
                   <button key={v.key} type="button" onClick={() => onEngineVersionChange(v.key)}
                     style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '8px 0', border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 6, cursor: 'pointer', background: engineVersion === v.key ? v.color : '#fff', color: engineVersion === v.key ? '#fff' : '#4a5068' }}>
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* 1b. Scalp variant selector */}
+          {engineVersion === 'scalp' && onScalpVariantChange && (
+            <>
+              <div style={{ padding: '4px 10px 2px', fontSize: 10, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Scalp Variant</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, padding: '3px 10px 8px' }}>
+                {SCALP_VARIANTS.map((v) => (
+                  <button key={v.key} type="button" onClick={() => onScalpVariantChange(v.key)}
+                    title={v.description}
+                    style={{ fontSize: 10, fontWeight: 600, padding: '5px 8px', border: scalpVariant === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 5, cursor: 'pointer', background: scalpVariant === v.key ? v.color : '#fff', color: scalpVariant === v.key ? '#fff' : '#4a5068', whiteSpace: 'nowrap' }}>
                     {v.label}
                   </button>
                 ))}
