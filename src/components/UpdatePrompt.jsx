@@ -42,7 +42,10 @@ export default function UpdatePrompt() {
     // Also check when debug mode is toggled (deliberate user action)
     const onManualCheck = () => {
       navigator.serviceWorker.getRegistration().then(r => r?.update()).catch(() => {});
-      setTimeout(handleSWUpdate, 1000); // give SW time to fetch
+      // Check multiple times — CDN may cache sw.js for up to 10 min (GitHub Pages max-age=600)
+      setTimeout(handleSWUpdate, 2000);
+      setTimeout(handleSWUpdate, 5000);
+      setTimeout(handleSWUpdate, 10000);
     };
     window.addEventListener('candlescan:check-update', onManualCheck);
     return () => window.removeEventListener('candlescan:check-update', onManualCheck);
