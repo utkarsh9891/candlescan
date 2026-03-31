@@ -3,6 +3,17 @@ import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../co
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan } from '../engine/batchScan.js';
 import { getBatchToken, setBatchToken, hasBatchToken, clearBatchToken } from '../utils/batchAuth.js';
+// Engine-specific imports for engine-aware batch scanning
+import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
+import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
+import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
+import { detectPatterns as detectPatternsV2 } from '../engine/patterns-v2.js';
+import { detectLiquidityBox as detectLiquidityBoxV2 } from '../engine/liquidityBox-v2.js';
+import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
+import { detectPatterns as detectPatternsClassic } from '../engine/patterns-classic.js';
+import { detectLiquidityBox as detectLiquidityBoxClassic } from '../engine/liquidityBox-classic.js';
+import { computeRiskScore as computeRiskScoreClassic } from '../engine/risk-classic.js';
+import { getIndexDirection } from '../engine/indexDirection.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const ALL_TFS = ['1m', '5m', '15m', '30m', '1h', '1d'];
@@ -130,7 +141,13 @@ function ResultCard({ r, onTap }) {
   );
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions }) {
+function getEngineFns(engineVersion) {
+  if (engineVersion === 'scalp') return { detectPatterns: detectPatternsScalp, detectLiquidityBox: detectLiquidityBoxScalp, computeRiskScore: computeRiskScoreScalp };
+  if (engineVersion === 'v1') return { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
+  return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
+}
+
+export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [nseIndex, setNseIndex] = useState(savedIndex || DEFAULT_NSE_INDEX_ID);
   const [timeframe, setTimeframe] = useState('5m');
@@ -161,7 +178,13 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
 
       setProgress({ completed: 0, total: symbols.length, current: symbols[0] });
 
-      // 2. Run batch scan
+      // 2. Compute index direction for scalp engine
+      let indexDirection = null;
+      if (engineVersion === 'scalp') {
+        try { indexDirection = await getIndexDirection(nseIndex); } catch { /* ignore */ }
+      }
+
+      // 3. Run batch scan with engine-aware functions
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -169,6 +192,8 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
         symbols,
         timeframe,
         batchToken: token,
+        engineFns: getEngineFns(engineVersion),
+        indexDirection,
         concurrency: 5,
         delayMs: 200,
         onProgress: (completed, total, current) => {
