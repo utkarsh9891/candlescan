@@ -29,7 +29,7 @@ import { readCachedChartJson, writeCachedChartJson } from './lib/chart-cache-fs.
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
 
 const TIMEFRAME_MAP = {
-  '1m': { interval: '1m', range: '1d' },
+  '1m': { interval: '1m', range: '5d' },
   '5m': { interval: '5m', range: '5d' },
   '15m': { interval: '15m', range: '5d' },
 };

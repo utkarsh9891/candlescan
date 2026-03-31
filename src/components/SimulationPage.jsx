@@ -10,6 +10,7 @@ import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.
 import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
 import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
+import { getIndexDirection } from '../engine/indexDirection.js';
 import { getBatchToken } from '../utils/batchAuth.js';
 
 const mono = "'SF Mono', Menlo, monospace";
@@ -134,11 +135,19 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       : { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
 
     try {
+      // Compute index direction for scalp engine (matches CLI behavior)
+      let idxDir = null;
+      if (localEngine === 'scalp') {
+        try { idxDir = await getIndexDirection(nseIndex); } catch { /* ignore */ }
+      }
+
+      const simTimeframe = localEngine === 'scalp' ? '1m' : '5m';
       const res = await runSimulation({
         indexName: nseIndex,
-        timeframe: '5m',
+        timeframe: simTimeframe,
         date, startTime, endTime,
         engineFns,
+        indexDirection: idxDir,
         capital, positionSize, maxConcurrent, maxTotalTrades,
         batchToken: getBatchToken(),
         onProgress: (phase, completed, total, current) => {
