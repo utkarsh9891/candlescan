@@ -13,7 +13,7 @@
     "test:coverage": "vitest run --coverage",
     "simulate": "node scripts/simulate-day.mjs",
     "cache:charts": "node scripts/warm-chart-cache.mjs",
-    "cache:march": "node scripts/warm-march-cache.mjs",
+    "cache:warm": "node scripts/warm-cache.mjs",
     "prepare": "git config core.hooksPath .git-hooks"
   },
   "dependencies": {

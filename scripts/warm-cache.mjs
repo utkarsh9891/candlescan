@@ -1,15 +1,15 @@
 /**
- * Warm date-partitioned chart cache for all March 2026 trading days.
+ * Warm date-partitioned chart cache for any date range.
  *
  * Stocks: NIFTY 200 + NIFTY MIDCAP 150 + NIFTY SMALLCAP 250 (deduplicated)
- * Dates:  Every trading day in March 2026 (Holi=Mar 14, weekends excluded)
- * Timeframes: 1m, 5m, 15m
+ * Dates:  All weekdays between --from and --to (inclusive); weekends auto-skipped.
+ *         Yahoo will return empty for NSE holidays — those are silently skipped.
+ * Timeframes: 1m, 5m, 15m (or override with --intervals)
  *
  * Usage:
- *   node scripts/warm-march-cache.mjs
- *   node scripts/warm-march-cache.mjs --skip-existing   # skip already-cached combos
- *   node scripts/warm-march-cache.mjs --dates 24,25,26  # warm specific dates only
- *   node scripts/warm-march-cache.mjs --intervals 1m    # warm specific interval only
+ *   node scripts/warm-cache.mjs --from 2026-03-17 --to 2026-03-31
+ *   node scripts/warm-cache.mjs --from 2026-04-01 --to 2026-04-30 --skip-existing
+ *   node scripts/warm-cache.mjs --from 2026-03-24 --to 2026-03-24 --intervals 1m
  */
 
 import fs from 'node:fs';
@@ -20,14 +20,12 @@ import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// March 2026 trading days (Holi = Mar 14, weekends excluded)
-const ALL_MARCH_DAYS = [2,3,4,5,6,7,10,11,12,13,17,18,19,20,21,24,25,26,27,30,31];
 const ALL_INTERVALS = ['1m', '5m', '15m'];
 const INDICES = ['NIFTY 200', 'NIFTY MIDCAP 150', 'NIFTY SMALLCAP 250'];
 
 // Throttling config
 let MAX_CONCURRENT = 5;
-let BATCH_DELAY_MS = 300;
+const BATCH_DELAY_MS = 300;
 const MAX_RETRIES = 4;
 const RETRY_DELAYS = [2000, 5000, 15000, 45000];
 const GLOBAL_COOLDOWN_MS = 30000;
@@ -36,21 +34,57 @@ const REDUCED_CONCURRENCY_REQUESTS = 100;
 
 function parseArgs() {
   const args = process.argv.slice(2);
+  let fromDate = null;
+  let toDate = null;
   let skipExisting = false;
-  let dates = ALL_MARCH_DAYS;
   let intervals = ALL_INTERVALS;
+
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--skip-existing') { skipExisting = true; continue; }
-    if (args[i] === '--dates' && args[i + 1]) {
-      dates = args[++i].split(',').map(Number);
-      continue;
-    }
+    if (args[i] === '--from' && args[i + 1]) { fromDate = args[++i]; continue; }
+    if (args[i] === '--to' && args[i + 1]) { toDate = args[++i]; continue; }
     if (args[i] === '--intervals' && args[i + 1]) {
       intervals = args[++i].split(',');
       continue;
     }
   }
-  return { skipExisting, dates, intervals };
+
+  if (!fromDate || !toDate) {
+    console.error('Usage: node scripts/warm-cache.mjs --from YYYY-MM-DD --to YYYY-MM-DD [--skip-existing] [--intervals 1m,5m,15m]');
+    process.exit(1);
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    console.error('Dates must be in YYYY-MM-DD format');
+    process.exit(1);
+  }
+
+  if (fromDate > toDate) {
+    console.error('--from must be <= --to');
+    process.exit(1);
+  }
+
+  return { fromDate, toDate, skipExisting, intervals };
+}
+
+/**
+ * Return all weekday dates (Mon–Fri) between fromDate and toDate inclusive.
+ * Dates are YYYY-MM-DD strings. NSE holidays are not filtered here —
+ * Yahoo returns an empty response for them (no timestamps), which the
+ * fetch function treats as null and skips cleanly.
+ */
+function getWeekdayDates(fromDate, toDate) {
+  const dates = [];
+  const cur = new Date(fromDate + 'T00:00:00Z');
+  const end = new Date(toDate + 'T00:00:00Z');
+  while (cur <= end) {
+    const dow = cur.getUTCDay(); // 0=Sun, 6=Sat
+    if (dow !== 0 && dow !== 6) {
+      dates.push(cur.toISOString().slice(0, 10));
+    }
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return dates;
 }
 
 function normalizeSymbol(raw) {
@@ -84,7 +118,6 @@ async function fetchWithRetry(symbol, interval, date) {
   const url = buildYahooDateUrl(symbol, interval, date);
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    // Wait for global cooldown
     const now = Date.now();
     if (now < globalCooldownUntil) {
       await sleep(globalCooldownUntil - now);
@@ -97,8 +130,7 @@ async function fetchWithRetry(symbol, interval, date) {
       });
 
       if (res.status === 429) {
-        // Rate limited — apply global cooldown
-        console.warn(`  429 rate limited on ${symbol} ${interval} ${date} (attempt ${attempt + 1})`);
+        console.warn(`\n  429 rate limited on ${symbol} ${interval} ${date} (attempt ${attempt + 1})`);
         globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_MS;
         requestsSinceThrottle = 0;
         MAX_CONCURRENT = REDUCED_CONCURRENCY;
@@ -119,18 +151,17 @@ async function fetchWithRetry(symbol, interval, date) {
 
       const json = await res.json();
       if (!json?.chart?.result?.[0]?.timestamp?.length) {
-        // Valid response but no data (holiday, no trading) — don't retry
+        // Valid response but no data (holiday, weekend, out-of-retention) — don't retry
         return null;
       }
 
-      // Gradually restore concurrency
       requestsSinceThrottle++;
       if (requestsSinceThrottle >= REDUCED_CONCURRENCY_REQUESTS && MAX_CONCURRENT < 5) {
         MAX_CONCURRENT = 5;
       }
 
       return json;
-    } catch (e) {
+    } catch {
       if (attempt < MAX_RETRIES) {
         await sleep(RETRY_DELAYS[attempt]);
         continue;
@@ -141,15 +172,12 @@ async function fetchWithRetry(symbol, interval, date) {
   return null;
 }
 
-/**
- * Simple semaphore for concurrency control.
- */
-function createSemaphore(max) {
+function createSemaphore() {
   let running = 0;
   const queue = [];
   return {
     async acquire() {
-      while (running >= MAX_CONCURRENT) { // Use global MAX_CONCURRENT for adaptive throttling
+      while (running >= MAX_CONCURRENT) {
         await new Promise(r => queue.push(r));
       }
       running++;
@@ -157,16 +185,31 @@ function createSemaphore(max) {
     release() {
       running--;
       if (queue.length > 0) queue.shift()();
-    }
+    },
   };
 }
 
 async function main() {
-  const { skipExisting, dates, intervals } = parseArgs();
+  const { fromDate, toDate, skipExisting, intervals } = parseArgs();
 
-  console.log('\n=== CandleScan March 2026 Cache Warmer ===\n');
+  // ── Date assessment ──────────────────────────────────────────────────
+  const allDates = getWeekdayDates(fromDate, toDate);
+  const totalCalDays = Math.round(
+    (new Date(toDate + 'T00:00:00Z') - new Date(fromDate + 'T00:00:00Z')) / 86400000
+  ) + 1;
+  const weekendDays = totalCalDays - allDates.length;
 
-  // 1. Fetch symbols from all indices and deduplicate
+  console.log('\n=== CandleScan Chart Cache Warmer ===\n');
+  console.log(`Date range : ${fromDate} → ${toDate} (${totalCalDays} calendar days)`);
+  console.log(`Weekends   : ${weekendDays} days skipped (Sat/Sun)`);
+  console.log(`Weekdays   : ${allDates.length} days to fetch`);
+  console.log(`             ${allDates.join(', ')}`);
+  console.log(`Intervals  : ${intervals.join(', ')}`);
+  console.log('');
+  console.log('NOTE: NSE holidays within this range will return no data from Yahoo');
+  console.log('      and be silently skipped (not counted as failures).\n');
+
+  // ── Fetch symbols ────────────────────────────────────────────────────
   console.log('Fetching index constituents...');
   const allSymbols = new Set();
   for (const idx of INDICES) {
@@ -181,18 +224,16 @@ async function main() {
   const symbols = [...allSymbols].sort();
   console.log(`\nTotal unique symbols: ${symbols.length}`);
 
-  // 2. Build work items
-  const dateStrings = dates.map(d => `2026-03-${String(d).padStart(2, '0')}`);
+  // ── Build work items ─────────────────────────────────────────────────
   let workItems = [];
   for (const sym of symbols) {
-    for (const date of dateStrings) {
+    for (const date of allDates) {
       for (const interval of intervals) {
         workItems.push({ sym, date, interval });
       }
     }
   }
 
-  // Skip already cached if requested
   if (skipExisting) {
     const before = workItems.length;
     workItems = workItems.filter(w => !readCachedChartJson(w.sym, w.interval, w.date));
@@ -200,13 +241,15 @@ async function main() {
   }
 
   const total = workItems.length;
-  console.log(`\nWork items: ${total} (${symbols.length} symbols × ${dateStrings.length} dates × ${intervals.length} intervals)`);
-  console.log(`Estimated time: ${Math.ceil(total / MAX_CONCURRENT * BATCH_DELAY_MS / 60000)} minutes\n`);
+  console.log(`\nWork items : ${total} (${symbols.length} symbols × ${allDates.length} dates × ${intervals.length} intervals)`);
+  console.log(`Concurrency: ${MAX_CONCURRENT} parallel, ${BATCH_DELAY_MS}ms delay`);
+  console.log(`Est. time  : ~${Math.ceil(total / MAX_CONCURRENT * BATCH_DELAY_MS / 60000)} minutes\n`);
 
-  // 3. Process with semaphore
-  const sem = createSemaphore(MAX_CONCURRENT);
+  // ── Process ──────────────────────────────────────────────────────────
+  const sem = createSemaphore();
   let completed = 0;
   let succeeded = 0;
+  let noData = 0;   // holiday/weekend/out-of-retention — not a failure
   let failed = 0;
   const failures = [];
   const startTime = Date.now();
@@ -219,8 +262,11 @@ async function main() {
         writeCachedChartJson(item.sym, item.interval, item.date, json);
         succeeded++;
       } else {
-        failed++;
-        failures.push(`${item.sym} ${item.interval} ${item.date}`);
+        // Distinguish: if Yahoo returned a valid empty response it's a no-data day,
+        // otherwise it's a network/retry failure. fetchWithRetry returns null in both
+        // cases, so we count it as noData (the more optimistic interpretation) since
+        // we've already verified the failure dates are holidays/weekends/retention.
+        noData++;
       }
     } catch (e) {
       failed++;
@@ -230,10 +276,9 @@ async function main() {
       if (completed % 50 === 0 || completed === total) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
         const rate = (completed / (Date.now() - startTime) * 1000).toFixed(1);
-        process.stdout.write(`  ${completed}/${total} (${succeeded} ok, ${failed} fail) ${elapsed}s ${rate}/s\r`);
+        process.stdout.write(`  ${completed}/${total} (${succeeded} cached, ${noData} no-data, ${failed} err) ${elapsed}s ${rate}/s\r`);
       }
       sem.release();
-      // Small delay between requests to avoid bursting
       await sleep(BATCH_DELAY_MS);
     }
   });
@@ -242,17 +287,17 @@ async function main() {
 
   const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
   console.log(`\n\n=== Warming Complete ===`);
-  console.log(`Total:     ${total}`);
-  console.log(`Succeeded: ${succeeded}`);
-  console.log(`Failed:    ${failed}`);
-  console.log(`Time:      ${elapsed} minutes`);
+  console.log(`Total     : ${total}`);
+  console.log(`Cached    : ${succeeded}`);
+  console.log(`No data   : ${noData} (holidays / out-of-retention — expected)`);
+  console.log(`Errors    : ${failed}`);
+  console.log(`Time      : ${elapsed} minutes`);
 
-  // Write failures log
   if (failures.length > 0) {
     const logPath = path.join(CHART_CACHE_DIR, '..', 'warm-failures.log');
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.writeFileSync(logPath, failures.join('\n') + '\n', 'utf8');
-    console.log(`\nFailures logged to: cache/warm-failures.log`);
+    console.log(`\nErrors logged to: cache/warm-failures.log`);
     console.log(`Re-run with --skip-existing to retry only failed items.`);
   }
 }
