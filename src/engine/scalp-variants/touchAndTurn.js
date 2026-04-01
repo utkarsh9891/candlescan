@@ -1,29 +1,38 @@
 /**
  * Touch & Turn scalp variant.
  *
- * Strategy (3 steps):
+ * PURE RULE-BASED — no confidence scoring. All 3 conditions met = trade.
+ *
+ * Rules (from transcript):
  * 1. Fibonacci the 15-min opening range (ORB high/low)
  * 2. Confirm liquidity candle (range ≥ 25% of 14-day ATR)
- * 3. Place limit order at range edge OPPOSITE to manipulation direction
- *    - Red ORB → buy at ORB low (touch and turn up)
- *    - Green ORB → sell at ORB high (touch and turn down)
- *    - Target: 38.2% Fibonacci level
- *    - SL: half of target distance (2:1 R:R)
+ * 3. Place limit order at range edge OPPOSITE to manipulation direction:
+ *    - Red/bearish ORB → BUY when price touches ORB low
+ *    - Green/bullish ORB → SELL when price touches ORB high
+ * 4. Target: 38.2% Fibonacci level (from edge toward center)
+ * 5. SL: half of target distance (gives 2:1 R:R)
+ * 6. Only within first 90 minutes
  *
- * Win rate logic: 3 of 4 daily scenarios pass through the target:
- *   1. Price retests range edge before breaking through → WIN
- *   2. Price stays within range (bounces) → WIN
- *   3. Full reversal → WIN
- *   4. Price breaks through on first touch → LOSS (only losing scenario)
- *
- * Source: "Touch and Turn Scalper" — limit order at range edge with fib target.
+ * Win rate logic: 3 of 4 daily scenarios hit the target:
+ *   Scenario 1: Retest before breakout → passes through target → WIN
+ *   Scenario 2: Stays in range (bounces) → passes through target → WIN
+ *   Scenario 3: Full reversal → passes through target → WIN
+ *   Scenario 4: Breaks through on first touch → LOSS
  *
  * === HARD CONSTRAINTS ===
  * - maxHoldBars: 15 (scalp limit)
- * - Timeframe: 1m
  */
 
-import { atrLike, isLiquidityCandle, fibLevels, avgVolume, noTrade, buildConfidence, confidenceToAction } from './shared.js';
+function _atr(candles, n = 14) {
+  if (candles.length < 2) return 0;
+  let s = 0;
+  const m = Math.min(n, candles.length - 1);
+  for (let i = candles.length - m; i < candles.length; i++) {
+    const c = candles[i], p = candles[i - 1];
+    s += Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c));
+  }
+  return s / m;
+}
 
 /* ── Pattern Detection ───────────────────────────────────────── */
 
@@ -36,123 +45,102 @@ export function detectPatterns(candles, opts = {}) {
   if (!orbHigh || !orbLow || orbHigh <= orbLow) return [];
 
   const orbRange = orbHigh - orbLow;
-  const atr14 = atrLike(candles, 14);
+  const atr14 = _atr(candles);
 
-  // Step 2: Confirm liquidity candle
-  if (!isLiquidityCandle(orbRange, atr14)) return [];
+  // Step 2: Liquidity candle confirmation
+  if (atr14 <= 0 || orbRange < atr14 * 0.25) return [];
 
   // Only within first 90 bars
   if (barIndex > 90) return [];
 
-  // Determine ORB direction (same heuristic as Quick Flip)
+  // Determine ORB direction
   const orbMid = (orbHigh + orbLow) / 2;
-  const firstBars = candles.slice(-Math.min(candles.length, barIndex + 1));
-  const orbFirstBar = firstBars.length > 15 ? firstBars[firstBars.length - barIndex] : null;
-  const orbDirection = orbFirstBar ? (orbFirstBar.c > orbFirstBar.o ? 'bullish' : 'bearish') : (cur.c > orbMid ? 'bullish' : 'bearish');
+  const firstCandle = candles.length > 20 ? candles[candles.length - barIndex - 1] : null;
+  const orbBullish = firstCandle ? firstCandle.c > firstCandle.o : cur.c > orbMid;
 
-  const patterns = [];
+  // Touch tolerance: price must be within 3% of ORB range from the edge
+  const touchTol = orbRange * 0.03;
 
-  // Touch and Turn: price touches range edge opposite to manipulation
-  const touchTolerance = orbRange * 0.05; // 5% of range tolerance for "touching"
-
-  if (orbDirection === 'bearish') {
-    // Red ORB → buy when price touches/near ORB low
-    if (cur.c <= orbLow + touchTolerance) {
-      const proximity = Math.min(1, Math.max(0, 1 - (cur.c - orbLow) / touchTolerance));
-      patterns.push({
-        name: 'Touch & Turn (Long)',
+  if (!orbBullish) {
+    // Red ORB → buy when price touches ORB low
+    if (cur.l <= orbLow + touchTol) {
+      return [{
+        name: 'Touch & Turn Long',
         direction: 'bullish',
-        strength: 0.70 + proximity * 0.25,
+        strength: 0.80,
         reliability: 0.75,
         category: 'touch_and_turn',
-      });
+      }];
     }
   }
 
-  if (orbDirection === 'bullish') {
-    // Green ORB → sell when price touches/near ORB high
-    if (cur.c >= orbHigh - touchTolerance) {
-      const proximity = Math.min(1, Math.max(0, 1 - (orbHigh - cur.c) / touchTolerance));
-      patterns.push({
-        name: 'Touch & Turn (Short)',
+  if (orbBullish) {
+    // Green ORB → sell when price touches ORB high
+    if (cur.h >= orbHigh - touchTol) {
+      return [{
+        name: 'Touch & Turn Short',
         direction: 'bearish',
-        strength: 0.70 + proximity * 0.25,
+        strength: 0.80,
         reliability: 0.75,
         category: 'touch_and_turn',
-      });
+      }];
     }
   }
 
-  return patterns;
+  return [];
 }
 
 /* ── Liquidity Box ───────────────────────────────────────────── */
 
 export function detectLiquidityBox(candles) {
-  return null; // Touch & Turn uses ORB + Fibonacci directly
+  return null;
 }
 
-/* ── Risk Scoring ────────────────────────────────────────────── */
+/* ── Risk Scoring — rule-based ───────────────────────────────── */
 
 export function computeRiskScore({ candles, patterns, box, opts }) {
   const cur = candles[candles.length - 1];
   const top = patterns?.[0];
-  if (!top) return noTrade(cur, candles);
+  if (!top) return _noTrade(cur);
 
   const orbHigh = opts?.orbHigh;
   const orbLow = opts?.orbLow;
-  if (!orbHigh || !orbLow) return noTrade(cur, candles);
-
-  // Volume gate
-  const vol = avgVolume(candles, 10);
-  if (vol < 5000) return noTrade(cur, candles);
+  if (!orbHigh || !orbLow) return _noTrade(cur);
 
   const direction = top.direction === 'bearish' ? 'short' : 'long';
-  const entry = direction === 'long' ? cur.c * 1.0015 : cur.c * 0.9985;
+  const orbRange = orbHigh - orbLow;
 
-  // Fibonacci levels
-  const fib = fibLevels(orbHigh, orbLow);
+  // Entry at range edge (limit-order style, triggered on touch)
+  const entry = direction === 'long' ? orbLow * 1.001 : orbHigh * 0.999;
 
-  // Target: 38.2% fib level (from the edge toward center)
-  let targetPrice;
-  if (direction === 'long') {
-    targetPrice = fib.fib382; // from low toward 38.2% = low + 38.2% of range
-    if (targetPrice <= entry) targetPrice = entry + (orbHigh - orbLow) * 0.382;
-  } else {
-    targetPrice = fib.fib618; // from high toward 61.8% = high - 38.2% of range
-    if (targetPrice >= entry) targetPrice = entry - (orbHigh - orbLow) * 0.382;
-  }
-
-  const targetDist = Math.abs(targetPrice - entry);
-
-  // SL: half of target distance (2:1 R:R)
-  const slDist = Math.max(targetDist * 0.5, entry * 0.003);
-
-  const sl = direction === 'long' ? entry - slDist : entry + slDist;
+  // Target: 38.2% Fibonacci level from the edge toward center
+  const targetDist = orbRange * 0.382;
   const target = direction === 'long' ? entry + targetDist : entry - targetDist;
-  const rr = targetDist / Math.max(slDist, 1e-9);
 
-  // Score
-  const signalClarity = Math.min(25, top.strength * 25);
-  const patternRel = top.reliability * 15;
-  const rrScore = 22; // 2:1 R:R is excellent
+  // SL: half of target distance → 2:1 R:R (from transcript)
+  const slDist = Math.max(targetDist * 0.5, entry * 0.003);
+  const sl = direction === 'long' ? entry - slDist : entry + slDist;
 
-  // Touch confirmation: multiple touches = stronger
-  const touchCount = candles.slice(-10).filter(c =>
-    direction === 'long' ? c.l <= orbLow + (orbHigh - orbLow) * 0.05 : c.h >= orbHigh - (orbHigh - orbLow) * 0.05
-  ).length;
-  const touchBonus = Math.min(10, touchCount * 3);
-
-  const raw = signalClarity + rrScore + patternRel + touchBonus;
-  const confidence = buildConfidence(raw);
-  const action = confidenceToAction(confidence, direction);
-
+  // All conditions met → trade is ON
   return {
-    total: Math.round(raw), confidence,
-    breakdown: { signalClarity: Math.round(signalClarity), lowNoise: 0, riskReward: rrScore, patternReliability: Math.round(patternRel), confluence: touchBonus },
-    level: confidence >= 75 ? 'high' : confidence >= 60 ? 'moderate' : 'low',
-    action, entry, sl, target, rr, direction,
+    total: 80, confidence: 85,
+    breakdown: { signalClarity: 20, lowNoise: 15, riskReward: 20, patternReliability: 15, confluence: 10 },
+    level: 'high',
+    action: direction === 'long' ? 'STRONG BUY' : 'STRONG SHORT',
+    entry, sl, target,
+    rr: targetDist / Math.max(slDist, 1e-9),
+    direction,
     context: direction === 'long' ? 'at_support' : 'at_resistance',
     maxHoldBars: 15,
+  };
+}
+
+function _noTrade(cur) {
+  return {
+    total: 0, confidence: 20,
+    breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
+    level: 'low', action: 'NO TRADE',
+    entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long',
+    context: 'mid_range', maxHoldBars: 15,
   };
 }
