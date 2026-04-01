@@ -1,11 +1,31 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Cache
 cache/
+.vite/
+
+# Test coverage
 coverage/
 
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
 .DS_Store
 *.log
 *.swp
 *.swo
 *~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Claude Code
 .claude/
