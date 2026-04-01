@@ -24,6 +24,52 @@ Only works when `import.meta.env.DEV === true`. Production builds ignore this fl
 
 ---
 
+## Project Principles & Guardrails
+
+### Engine Identity
+Three engines represent fundamentally different trading models — NOT tunable variations of each other:
+
+| Engine | Timeframe | Hold Duration | Window | Key Property |
+|--------|-----------|---------------|--------|-------------|
+| **Scalp** | 1m | 5-15 min (maxHoldBars ≤ 15) | 09:30-11:00 IST | Quick in-and-out |
+| **Intraday** | 5m/15m | Full day | 09:15-15:30 IST | ATR-based risk |
+| **Classic** | 1d | 3-4 day swing | Multi-day | Gap-risk aware |
+
+- Tests enforce hard constraints (`risk-scalp.test.js` asserts `maxHoldBars ≤ 15`)
+- If P&L tuning pushes a parameter past a hard limit, the **engine design** needs rethinking, not the limit
+- Scalp variants (Momentum, Box Theory, Quick Flip, Touch & Turn, Fusion) are independent strategies — zero cross-pollination between them
+- All variants respect the 3-function interface: `detectPatterns`, `detectLiquidityBox`, `computeRiskScore`
+
+### Scalping Philosophy
+- Scalping = quick in-and-out, NOT holding for max profit from one stock
+- Take a decent cut and move to the next opportunity
+- SL is a wide catastrophic safety net (2%), rarely hit — TIME exit at 15 bars is the real loss limiter
+- Target is tight (0.3%), hit in 1-13 minutes — win rate matters, not R:R
+- R:R scoring is flat for scalp (win rate > R:R ratio for this style)
+- maxHoldBars = 15 is a HARD limit, not a target hold time — bail out early when possible
+
+### Simulation Workflow
+- Browser simulation is **authoritative** — never claim results without browser verification
+- Delete cache before major testing sessions for fresh data
+- Workflow: browser first → CLI matches → tune via CLI → re-verify browser → commit
+- CLI uses cached data; browser fetches live data and populates cache
+- Three code paths (CLI `simulate-day.mjs`, browser `simulateDay.js`, batch `batchScan.js`) must stay in sync
+- Best-signal-first: both CLI and browser sort candidates by confidence descending at each bar
+
+### Versioning & Deployment
+- Auto-tagger on GitHub Actions creates patch versions on PR merge to main
+- **NEVER** manually run `git tag` after merging a PR — auto-tagger handles it
+- For minor/major bumps: tag the PR branch BEFORE merge so auto-tagger skips
+- All changes go through PRs (branch protection on main)
+- Merge method: `--merge` only (no `--squash`, no `--rebase`)
+
+### Development Practices
+- Never produce empty/stalling responses — always proceed or explain next step
+- Before merging any signal/scoring change, grep all three code paths to verify parity
+- Run `npm test` before every commit
+
+---
+
 ## Architecture
 
 - **Framework**: React 18, Vite 6, no external charting library
