@@ -70,16 +70,13 @@ export default function UpdatePrompt() {
     return () => window.removeEventListener('candlescan:check-update', onManualCheck);
   }, []);
 
-  // Try to fetch the new version string from the deployed index.html
+  // Fetch the new version from the <meta name="app-version"> tag in the deployed index.html
   const fetchNewVersion = async () => {
     try {
       const res = await fetch(window.location.pathname + '?_=' + Date.now(), { cache: 'no-store' });
       const html = await res.text();
-      // The version is baked into the JS bundle filename or can be in a meta tag
-      // Easiest: fetch the new main JS bundle and look for __APP_VERSION__
-      // Alternative: look for the version in the SW scope
-      const match = html.match(/v\d+\.\d+\.\d+(?:-\d+-g[a-f0-9]+)?/);
-      if (match) setNewVersion(match[0]);
+      const match = html.match(/<meta\s+name="app-version"\s+content="([^"]+)"/);
+      if (match) setNewVersion(match[1]);
     } catch { /* ignore */ }
   };
 

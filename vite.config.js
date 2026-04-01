@@ -14,13 +14,22 @@ function gitVersion() {
   }
 }
 
+const appVersion = gitVersion();
+
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(gitVersion()),
+    __APP_VERSION__: JSON.stringify(appVersion),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   plugins: [
     react(),
+    // Inject app version into index.html as a <meta> tag so UpdatePrompt can read it
+    {
+      name: 'inject-version-meta',
+      transformIndexHtml() {
+        return [{ tag: 'meta', attrs: { name: 'app-version', content: appVersion }, injectTo: 'head' }];
+      },
+    },
     chartCacheDevPlugin(),
     VitePWA({
       registerType: 'prompt',
