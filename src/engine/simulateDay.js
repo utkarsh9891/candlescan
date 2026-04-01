@@ -113,7 +113,7 @@ export async function runSimulation({
     await Promise.allSettled(chunk.map(async (sym) => {
       if (signal?.aborted) return;
       try {
-        const result = await fetchOHLCV(sym, timeframe, { batchToken });
+        const result = await fetchOHLCV(sym, timeframe, { batchToken, date });
         const allCandles = result.candles;
         if (!allCandles?.length) return;
 

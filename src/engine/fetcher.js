@@ -52,6 +52,23 @@ function buildDevProxyUrl(symbol, interval, range) {
   return `/__candlescan-yahoo${path}`;
 }
 
+/**
+ * Build dev proxy URL with period1/period2 for date-specific cache.
+ * @param {string} symbol Yahoo symbol
+ * @param {string} interval e.g. '1m'
+ * @param {string} date YYYY-MM-DD (IST date)
+ */
+function buildDevProxyUrlForDate(symbol, interval, date) {
+  // IST trading day: 09:15 IST = 03:45 UTC, 15:30 IST = 10:00 UTC
+  const [y, m, d] = date.split('-').map(Number);
+  const dayStart = new Date(Date.UTC(y, m - 1, d, 3, 45, 0));
+  const dayEnd = new Date(Date.UTC(y, m - 1, d, 10, 0, 0));
+  const p1 = Math.floor(dayStart.getTime() / 1000);
+  const p2 = Math.floor(dayEnd.getTime() / 1000);
+  const path = `/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&period1=${p1}&period2=${p2}`;
+  return `/__candlescan-yahoo${path}`;
+}
+
 function isViteDev() {
   try {
     return import.meta.env && import.meta.env.DEV === true;
@@ -199,14 +216,19 @@ async function fetchWithFallbacks(symbol, interval, range, options) {
   const enc = encodeURIComponent(yahooUrl);
   // Token is auto-read from localStorage by cfProxy.js if not explicitly passed
   const batchToken = options?.batchToken || '';
+  const date = options?.date || null;
 
   const attempts = [];
 
   /* Same-origin proxy: Vite dev or local Node server (never CORS issues) */
   if (typeof window !== 'undefined') {
     if (isViteDev() || isProdHttpLoopback()) {
+      // Prefer date-specific URL for cache hit when date is provided
+      const proxyUrl = date
+        ? buildDevProxyUrlForDate(symbol, interval, date)
+        : buildDevProxyUrl(symbol, interval, range);
       attempts.push(() =>
-        tryFetch(new URL(buildDevProxyUrl(symbol, interval, range), window.location.origin).href)
+        tryFetch(new URL(proxyUrl, window.location.origin).href)
       );
     }
   }
@@ -346,7 +368,7 @@ export function generateSimulatedCandles(symbol, count = 80) {
 /**
  * @param {string} inputSymbol
  * @param {string} timeframeKey
- * @param {{ batchToken?: string }} [options]
+ * @param {{ batchToken?: string, date?: string }} [options] date is YYYY-MM-DD for date-partitioned cache
  * @returns {{ candles: Array, live: boolean, simulated: boolean, error?: string, yahooSymbol: string, displaySymbol: string, companyName: string }}
  */
 export async function fetchOHLCV(inputSymbol, timeframeKey, options) {

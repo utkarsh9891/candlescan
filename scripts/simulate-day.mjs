@@ -26,13 +26,13 @@ import { computeRiskScore as computeRiskScoreScalp } from '../src/engine/risk-sc
 import { getScalpVariantFns } from '../src/engine/scalp-variants/registry.js';
 import { trimTrailingFlatCandles } from '../src/engine/fetcher.js';
 import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
-import { readCachedChartJson, writeCachedChartJson } from './lib/chart-cache-fs.mjs';
+import { readCachedChartJson, writeCachedChartJson, listCachedDates, listCachedSymbols } from './lib/chart-cache-fs.mjs';
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
 
 const TIMEFRAME_MAP = {
-  '1m': { interval: '1m', range: '5d' },
-  '5m': { interval: '5m', range: '5d' },
-  '15m': { interval: '15m', range: '5d' },
+  '1m': { interval: '1m' },
+  '5m': { interval: '5m' },
+  '15m': { interval: '15m' },
 };
 
 const TX_COST_PCT = 0.0005; // 0.05% per side
@@ -89,8 +89,20 @@ function parseChartJson(data) {
   return candles.length ? { candles, companyName } : null;
 }
 
-async function fetchYahooChart(symbol, interval, range) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
+/**
+ * Fetch Yahoo chart for a specific date using period1/period2.
+ * @param {string} symbol Yahoo symbol
+ * @param {string} interval e.g. '1m'
+ * @param {string} date YYYY-MM-DD
+ */
+async function fetchYahooChartForDate(symbol, interval, date) {
+  const [y, m, d] = date.split('-').map(Number);
+  // IST trading day: 09:15 IST = 03:45 UTC, 15:30 IST = 10:00 UTC
+  const dayStart = new Date(Date.UTC(y, m - 1, d, 3, 45, 0));
+  const dayEnd = new Date(Date.UTC(y, m - 1, d, 10, 0, 0));
+  const p1 = Math.floor(dayStart.getTime() / 1000);
+  const p2 = Math.floor(dayEnd.getTime() / 1000);
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&period1=${p1}&period2=${p2}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
     signal: AbortSignal.timeout(15000),
@@ -99,17 +111,46 @@ async function fetchYahooChart(symbol, interval, range) {
   return res.json();
 }
 
-async function getCandles(symbol, interval, range) {
-  // Try cache first
-  let json = readCachedChartJson(symbol, interval, range, 0); // 0 = ignore age
+/**
+ * Get candles for a specific date from cache, falling back to Yahoo.
+ * @param {string} symbol Yahoo symbol
+ * @param {string} interval e.g. '1m'
+ * @param {string} date YYYY-MM-DD
+ */
+async function getCandles(symbol, interval, date) {
+  let json = readCachedChartJson(symbol, interval, date);
   if (!json) {
-    console.log(`  Cache miss for ${symbol}, fetching from Yahoo...`);
-    json = await fetchYahooChart(symbol, interval, range);
-    writeCachedChartJson(symbol, interval, range, json);
+    console.log(`  Cache miss for ${symbol} ${date}, fetching from Yahoo...`);
+    json = await fetchYahooChartForDate(symbol, interval, date);
+    writeCachedChartJson(symbol, interval, date, json);
   }
   const parsed = parseChartJson(json);
   if (!parsed?.candles?.length) return null;
   return trimTrailingFlatCandles(parsed.candles);
+}
+
+/**
+ * Get the previous trading date before a given date (skips weekends).
+ * @param {string} date YYYY-MM-DD
+ * @returns {string} YYYY-MM-DD
+ */
+function getPrevTradingDate(date) {
+  const d = new Date(date + 'T12:00:00Z');
+  d.setDate(d.getDate() - 1);
+  // Skip weekends
+  while (d.getDay() === 0 || d.getDay() === 6) {
+    d.setDate(d.getDate() - 1);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Get the latest available date in cache for a symbol+interval.
+ * Used when --date is not specified.
+ */
+function getLatestCachedDate(symbol, interval) {
+  const dates = listCachedDates(symbol, interval);
+  return dates.length ? dates[dates.length - 1] : null;
 }
 
 const IST_OFFSET = 19800; // +5:30 in seconds
@@ -386,40 +427,59 @@ async function main() {
     symbols = await fetchNseIndexSymbolsNode(indexName);
   } catch (e) {
     console.log(`NSE API failed (${e.message}), falling back to cached symbols...`);
-    // Derive symbols from cached 1m files
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const cacheDir = path.default.resolve(new URL('.', import.meta.url).pathname, '../cache/charts');
-    const files = fs.default.readdirSync(cacheDir).filter(f => f.endsWith(`_${tf.interval}_${tf.range}.json`) && !f.startsWith('^'));
-    symbols = files.map(f => f.replace(`.NS_${tf.interval}_${tf.range}.json`, ''));
+    // Derive symbols from cached directory names
+    symbols = listCachedSymbols()
+      .filter(s => s.endsWith('.NS') && !s.startsWith('^'))
+      .map(s => s.replace(/\.NS$/, ''));
   }
   console.log(`Got ${symbols.length} symbols\n`);
 
-  // 2. Load candle data (cache only) — load full day for all stocks
-  console.log('Loading candle data from cache...');
+  // 2. Resolve target date — use explicit date or latest cached
+  let resolvedDate = targetDate;
+  if (!resolvedDate) {
+    // Find latest cached date from first available symbol
+    for (const sym of symbols) {
+      const yahooSym = `${sym}.NS`;
+      const latest = getLatestCachedDate(yahooSym, tf.interval);
+      if (latest) { resolvedDate = latest; break; }
+    }
+    if (!resolvedDate) {
+      console.log('No cached data found. Run cache warming first: npm run cache:march');
+      process.exit(0);
+    }
+  }
+  const prevDate = getPrevTradingDate(resolvedDate);
+
+  // 3. Load candle data (cache only) — one file per symbol per date
+  console.log(`Loading candle data from cache for ${resolvedDate}...`);
   const allStockBase = {};
   let loaded = 0;
-  const filterStats = { total: symbols.length, noCache: 0, noCandles: 0, noDate: 0, loaded: 0 };
+  const filterStats = { total: symbols.length, noCache: 0, noCandles: 0, loaded: 0 };
   for (const sym of symbols) {
     const yahooSym = `${sym}.NS`;
     try {
-      const cached = readCachedChartJson(yahooSym, tf.interval, tf.range, 0);
+      // Read target date's cache
+      const cached = readCachedChartJson(yahooSym, tf.interval, resolvedDate);
       if (!cached) { filterStats.noCache++; continue; }
       const parsed = parseChartJson(cached);
       if (!parsed?.candles?.length) { filterStats.noCandles++; continue; }
-      const allCandles = trimTrailingFlatCandles(parsed.candles);
-      if (!allCandles?.length) { filterStats.noCandles++; continue; }
+      const dayCandles = trimTrailingFlatCandles(parsed.candles);
+      if (!dayCandles?.length || dayCandles.length < 5) { filterStats.noCandles++; continue; }
 
-      const dayCandles = filterByDate(allCandles, targetDate);
-      if (dayCandles.length < 5) { filterStats.noDate++; continue; }
-
-      const dayStart = allCandles.indexOf(dayCandles[0]);
-      const priorCandles = allCandles.slice(Math.max(0, dayStart - 20), dayStart);
-
-      const targetDateStr = istDateStr(dayCandles[0].t);
-      const prevDayCandles = allCandles.filter(c => istDateStr(c.t) < targetDateStr);
-      const prevDayHigh = prevDayCandles.length ? Math.max(...prevDayCandles.map(c => c.h)) : null;
-      const prevDayLow = prevDayCandles.length ? Math.min(...prevDayCandles.map(c => c.l)) : null;
+      // Read previous trading day for prior candles, prevDayHigh/Low
+      let priorCandles = [];
+      let prevDayHigh = null;
+      let prevDayLow = null;
+      const prevCached = readCachedChartJson(yahooSym, tf.interval, prevDate);
+      if (prevCached) {
+        const prevParsed = parseChartJson(prevCached);
+        if (prevParsed?.candles?.length) {
+          const prevCandles = trimTrailingFlatCandles(prevParsed.candles);
+          priorCandles = prevCandles.slice(-20); // last 20 bars of previous day
+          prevDayHigh = Math.max(...prevCandles.map(c => c.h));
+          prevDayLow = Math.min(...prevCandles.map(c => c.l));
+        }
+      }
 
       const orbBars = dayCandles.slice(0, 15);
       const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
@@ -432,18 +492,16 @@ async function main() {
   filterStats.loaded = loaded;
   console.log(`\n── Stock Filter Pipeline ──`);
   console.log(`  ${filterStats.total} symbols in index`);
-  console.log(`  ${filterStats.noCache} filtered: no cache data`);
+  console.log(`  ${filterStats.noCache} filtered: no cache data for ${resolvedDate}`);
   console.log(`  ${filterStats.noCandles} filtered: no valid candles`);
-  console.log(`  ${filterStats.noDate} filtered: no data for target date`);
   console.log(`  ${filterStats.loaded} passed → loaded for simulation`);
 
   if (!loaded) {
-    console.log('No data available. Try warming the cache: npm run cache:charts');
+    console.log(`No data available for ${resolvedDate}. Try warming the cache: npm run cache:march`);
     process.exit(0);
   }
 
-  const firstStock = Object.values(allStockBase)[0];
-  const simDate = istDateStr(firstStock.dayCandles[0].t);
+  const simDate = resolvedDate;
   console.log(`Simulation date: ${simDate}`);
   console.log('─'.repeat(100));
 
@@ -456,7 +514,7 @@ async function main() {
   let indexDirection = { direction: 'neutral', strength: 0 };
   if (engine === 'scalp') {
     const niftySym = INDEX_SYMBOL_MAP[indexName] || '^NSEI';
-    const niftyJson = readCachedChartJson(niftySym, tf.interval, tf.range, 0);
+    const niftyJson = readCachedChartJson(niftySym, tf.interval, resolvedDate);
     if (niftyJson) {
       const niftyParsed = parseChartJson(niftyJson);
       if (niftyParsed?.candles?.length >= 20) {
