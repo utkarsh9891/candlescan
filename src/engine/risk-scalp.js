@@ -92,30 +92,20 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const cur = candles[candles.length - 1];
   const barIndex = opts?.barIndex ?? candles.length;
 
-  // Hard gate: skip first 25 bars (9:15–9:40) — let market settle
-  if (barIndex < 25) return noTrade(cur, candles, box);
+  // Hard gate: skip first 12 bars (9:15–9:27) — opening range chaos
+  if (barIndex < 12) return noTrade(cur, candles, box);
 
   // Volume gate: use average of recent 5 candles (last candle often has 0 in Yahoo 1m data)
   const recentVols = candles.slice(-6, -1).map(c => c.v || 0);
   const recentAvgVol = recentVols.length ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length : 0;
   if (recentAvgVol < 5000) return noTrade(cur, candles, box);
 
-  // Extreme mover filter: only trade stocks showing 1.5%+ intraday move
-  // Mirrors real edge — riding top gainers or shorting extremes
+  // Extreme mover filter: boost confidence for stocks with big intraday moves
+  // Applied as soft bonus rather than hard gate — let the scoring discriminate
   const dayStartIdx = Math.max(0, candles.length - barIndex);
   const dayOpen = candles[dayStartIdx]?.o || cur.c;
   const intradayPct = (cur.c - dayOpen) / dayOpen;
   const absIntradayPct = Math.abs(intradayPct);
-  if (absIntradayPct < 0.015) return noTrade(cur, candles, box);
-
-  // Direction alignment with intraday move:
-  //   Longs: only on stocks already UP (ride the momentum)
-  //   Shorts: stocks already DOWN (momentum) OR stocks UP at extreme (mean reversion)
-  if (top?.direction === 'bullish' && intradayPct < 0.01) return noTrade(cur, candles, box);
-
-  // ATR minimum: skip stocks that can't generate enough movement
-  const atrPrelim = atrLike(candles, 14);
-  if (atrPrelim < cur.c * 0.001) return noTrade(cur, candles, box);
 
   /* ── 1. Signal clarity (max 25) — volume-weighted ──────────── */
   const vols = candles.slice(-11, -1).map(c => c.v || 0);
@@ -225,7 +215,13 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 15;
   }
 
-  // Time-of-day filter: first 12 bars already hard-gated above; soft penalty removed
+  // Extreme mover bonus: reward stocks with big intraday moves (your edge)
+  if (absIntradayPct >= 0.02) confidence += 8;        // 2%+ move: strong bonus
+  else if (absIntradayPct >= 0.015) confidence += 5;   // 1.5%+ move: moderate bonus
+  else if (absIntradayPct >= 0.01) confidence += 2;    // 1%+ move: small bonus
+  // Direction alignment bonus
+  if (top?.direction === 'bullish' && intradayPct > 0.01) confidence += 3; // riding the rise
+  if (top?.direction === 'bearish' && intradayPct < -0.01) confidence += 3; // momentum short
 
   // Day-of-week awareness
   const dow = opts?.dayOfWeek;
