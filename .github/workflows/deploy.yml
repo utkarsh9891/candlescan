@@ -3,6 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -10,6 +11,7 @@ permissions:
   pages: write
   id-token: write
 
+# Manual tag push cancels any running main-merge build
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -23,23 +25,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
-          fetch-depth: 0  # full history for git describe --tags
+          # For tag pushes: check out the tagged commit
+          # For branch pushes: check out main HEAD
+          ref: ${{ github.ref }}
+          fetch-depth: 0
 
-      # Auto-tag: every main push gets a version tag automatically.
-      # - If HEAD already has a tag (manual minor/major bump) → skip
-      # - Otherwise → increment patch from latest tag
-      # The build step ALWAYS runs after this, so git describe picks up the new tag.
-      - name: Auto-tag version
+      # Auto-tag patch on branch push only (tag pushes already have a tag)
+      - name: Auto-tag patch version
+        if: startsWith(github.ref, 'refs/heads/')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch --tags --force
 
+          # Skip if HEAD already has a version tag (e.g. manual minor/major tag pushed before merge)
           EXISTING=$(git tag --points-at HEAD 2>/dev/null | grep '^v' | head -1)
           if [ -n "$EXISTING" ]; then
             echo "HEAD already tagged: $EXISTING"
-            echo "version=$EXISTING" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -52,8 +54,14 @@ jobs:
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
           echo "Auto-tagged: $NEW_TAG"
-          echo "version=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      # Log the version that will be baked into the build
+      - name: Resolve build version
         id: version
+        run: |
+          VERSION=$(git describe --tags --always)
+          echo "Building version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - uses: actions/setup-node@v4
         with:
@@ -62,16 +70,17 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Smoke check — verify dist contains app
+
+      - name: Verify version in build
         run: |
-          test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
-          grep -q "CandleScan" dist/index.html || { echo "index.html does not contain CandleScan"; exit 1; }
-          # Verify version in built HTML
           VERSION="${{ steps.version.outputs.version }}"
-          if [ -n "$VERSION" ]; then
-            grep -q "$VERSION" dist/index.html && echo "Version $VERSION found in build" || echo "Warning: $VERSION not in index.html meta"
-          fi
-          echo "Smoke check passed"
+          echo "Expected version: $VERSION"
+          echo "index.html meta:"
+          grep 'app-version' dist/index.html || true
+          test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
+          grep -q "CandleScan" dist/index.html || { echo "CandleScan not in index.html"; exit 1; }
+          echo "Build OK"
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
