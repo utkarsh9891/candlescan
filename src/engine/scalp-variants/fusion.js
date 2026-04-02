@@ -12,6 +12,7 @@
 import { detectPatterns as boxPatterns, computeRiskScore as boxRisk } from './boxTheory.js';
 import { detectPatterns as qfPatterns, computeRiskScore as qfRisk } from './quickFlip.js';
 import { detectPatterns as tatPatterns, computeRiskScore as tatRisk } from './touchAndTurn.js';
+import { isMarginEligible } from '../../data/marginData.js';
 
 const STRATEGIES = [
   { name: 'Box Theory', detect: boxPatterns, risk: boxRisk },
@@ -97,6 +98,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   }
 
   if (!bestRisk) return _noTrade(cur);
+
+  // Margin eligibility check
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    return _noTrade(cur);
+  }
 
   const direction = top.direction === 'bearish' ? 'short' : 'long';
 

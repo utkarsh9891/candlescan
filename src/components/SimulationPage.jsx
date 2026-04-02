@@ -13,6 +13,7 @@ import { getScalpVariantFns, SCALP_VARIANTS, DEFAULT_SCALP_VARIANT } from '../en
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { getBatchToken } from '../utils/batchAuth.js';
+import { MARGIN_MULTIPLIER, fetchMarginMap } from '../data/marginData.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -98,6 +99,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
   const [positionSize, setPositionSize] = useState(300000);
   const [maxConcurrent, setMaxConcurrent] = useState(preset.maxOpen);
   const [maxTotalTrades, setMaxTotalTrades] = useState(preset.maxTrades);
+  const [margin, setMargin] = useState(true);
 
   // Update presets when engine changes
   const handleEngineChange = (eng) => {
@@ -117,9 +119,10 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
   const handleRun = useCallback(async () => {
     if (running) { abortRef.current?.abort(); return; }
 
-    // Validation
-    if (positionSize * maxConcurrent > capital) {
-      setError(`Position size (${(positionSize/1000).toFixed(0)}K) × max concurrent (${maxConcurrent}) exceeds capital (${(capital/100000).toFixed(0)}L)`);
+    // Validation — with margin, buying power = capital × multiplier
+    const effectiveCapital = margin ? capital * MARGIN_MULTIPLIER : capital;
+    if (positionSize * maxConcurrent > effectiveCapital) {
+      setError(`Position size (${(positionSize/1000).toFixed(0)}K) × max concurrent (${maxConcurrent}) exceeds ${margin ? 'margin-adjusted ' : ''}capital (${(effectiveCapital/100000).toFixed(1)}L)`);
       return;
     }
 
@@ -147,6 +150,8 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       }
 
       const simTimeframe = localEngine === 'scalp' ? '1m' : '5m';
+      // Fetch margin eligibility data if margin trading is enabled
+      const marginMap = margin ? await fetchMarginMap() : null;
       const res = await runSimulation({
         indexName: nseIndex,
         timeframe: simTimeframe,
@@ -154,6 +159,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
         engineFns,
         indexDirection: idxDir,
         capital, positionSize, maxConcurrent, maxTotalTrades,
+        margin, marginMap,
         batchToken: getBatchToken(),
         onProgress: (phase, completed, total, current) => {
           setProgress({ phase, completed, total, current });
@@ -167,7 +173,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       setRunning(false);
       abortRef.current = null;
     }
-  }, [running, date, startTime, endTime, nseIndex, localEngine, capital, positionSize, maxConcurrent, maxTotalTrades]);
+  }, [running, date, startTime, endTime, nseIndex, localEngine, capital, positionSize, maxConcurrent, maxTotalTrades, margin]);
 
   const pct = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0;
   const s = results?.summary;
@@ -281,6 +287,17 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
             onBlur={e => { if (!e.target.value) setMaxTotalTrades(5); }}
             min={1} max={15} disabled={running} style={{ ...inputStyle, width: '100%' }} />
         </div>
+      </div>
+
+      {/* Margin toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, color: '#444' }}>
+          <input type="checkbox" checked={margin} onChange={e => setMargin(e.target.checked)} disabled={running} />
+          <span style={{ fontWeight: 600 }}>5× Margin (MIS)</span>
+        </label>
+        {margin && <span style={{ fontSize: 11, color: '#6b7280' }}>
+          Buying power: {((capital * MARGIN_MULTIPLIER) / 100000).toFixed(1)}L
+        </span>}
       </div>
 
       {/* Run button */}

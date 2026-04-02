@@ -1,3 +1,5 @@
+import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
+
 /**
  * Classic (Swing) risk scoring engine.
  * Optimized for 3-4 day holds on daily candles.
@@ -54,7 +56,7 @@ export function detectContext(candles, box) {
   return 'mid_range';
 }
 
-export function computeRiskScore({ candles, patterns, box }) {
+export function computeRiskScore({ candles, patterns, box, opts }) {
   const top = patterns?.length ? patterns[0] : null;
   const cur = candles[candles.length - 1];
 
@@ -149,7 +151,13 @@ export function computeRiskScore({ candles, patterns, box }) {
   /* ── Raw → Confidence ──────────────────────────────────────── */
   const raw = signalClarity + lowNoise + rrScore + patternRel + Math.min(15, confluence);
   const rawClamped = Math.min(100, Math.round(raw));
-  const confidence = Math.round(30 + (rawClamped / 100) * 70);
+  let confidence = Math.round(30 + (rawClamped / 100) * 70);
+
+  // Margin eligibility penalty
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    confidence += MARGIN_PENALTY;
+    confidence = Math.max(30, Math.min(100, confidence));
+  }
 
   const breakdown = {
     signalClarity: Math.round(signalClarity),

@@ -1,3 +1,5 @@
+import { isMarginEligible } from '../../data/marginData.js';
+
 /**
  * Box Theory scalp variant.
  *
@@ -94,6 +96,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     ? Math.max(entry - prevLow + range * 0.05, entry * 0.015)
     : Math.max(prevHigh - entry + range * 0.05, entry * 0.015);
   const sl = direction === 'long' ? entry - slDist : entry + slDist;
+
+  // Margin eligibility check
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    return _noTrade(cur);
+  }
 
   // Conditions met → trade is ON. Fixed high confidence.
   return {

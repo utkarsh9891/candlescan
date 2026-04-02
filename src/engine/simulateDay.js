@@ -86,6 +86,8 @@ export async function runSimulation({
   skipFirstBars = 0,
   minAvgVolume = 0,
   indexDirection,
+  margin = false,
+  marginMap = null,
   batchToken,
   onProgress,
   signal,
@@ -278,7 +280,7 @@ export async function runSimulation({
         prevDayLow: sd.prevDayLow,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexDirection || null, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexDirection || null, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin, marginMap, sym } });
 
       if (risk.confidence < minConfidence) continue;
       if (!ACTIONABLE.has(risk.action)) continue;

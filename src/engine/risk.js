@@ -11,6 +11,8 @@
  *   NO TRADE                   — below 50 or no pattern
  */
 
+import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
+
 /** Max points per component (sum = 100). */
 export const RISK_SIGNAL_DEFINITIONS = [
   {
@@ -106,7 +108,7 @@ export function detectContext(candles, box) {
  * @param {Array} params.patterns
  * @param {object|null} params.box
  */
-export function computeRiskScore({ candles, patterns, box }) {
+export function computeRiskScore({ candles, patterns, box, opts }) {
   const top = patterns?.length ? patterns[0] : null;
   const cur = candles[candles.length - 1];
 
@@ -238,7 +240,13 @@ export function computeRiskScore({ candles, patterns, box }) {
   const rawClamped = Math.min(100, Math.round(raw));
 
   // Rescale: raw 0–100 → confidence 40–100
-  const confidence = Math.round(40 + (rawClamped / 100) * 60);
+  let confidence = Math.round(40 + (rawClamped / 100) * 60);
+
+  // Margin eligibility penalty
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    confidence += MARGIN_PENALTY;
+    confidence = Math.max(40, Math.min(100, confidence));
+  }
 
   const breakdown = {
     signalClarity: Math.round(signalClarity),

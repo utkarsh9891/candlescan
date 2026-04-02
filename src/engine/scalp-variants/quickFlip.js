@@ -1,3 +1,5 @@
+import { isMarginEligible } from '../../data/marginData.js';
+
 /**
  * Quick Flip scalp variant.
  *
@@ -160,6 +162,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     ? Math.max(entry - recentLow, entry * 0.005)
     : Math.max(recentHigh - entry, entry * 0.005);
   const sl = direction === 'long' ? entry - slDist : entry + slDist;
+
+  // Margin eligibility check
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    return _noTrade(cur);
+  }
 
   // All 3 conditions met → trade is ON
   return {
