@@ -26,6 +26,7 @@ const SETTINGS_KEY = 'candlescan_paper_settings';
 const NOTIF_DISMISS_MS = 12000;
 
 const POLL_OPTIONS = [
+  { label: '1s', ms: 1000 },
   { label: '5s', ms: 5000 },
   { label: '10s', ms: 10000 },
   { label: '30s', ms: 30000 },
@@ -462,7 +463,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
           <div style={{ fontSize: 40, marginBottom: 8 }}>&#128200;</div>
           <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d26', marginBottom: 4 }}>Paper Trading</div>
           <div style={{ fontSize: 13, lineHeight: 1.5 }}>Run a live scan, pick signals, and track simulated trades.<br />Prices auto-refresh. Push notifications on TARGET/SL hits.</div>
-          <div style={{ fontSize: 11, color: '#d97706', marginTop: 12 }}>Prices delayed ~15 min (Yahoo Finance)</div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 12 }}>Prices ~1-2 min delayed during market hours (Yahoo Finance API)</div>
         </div>
       )}
       <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
