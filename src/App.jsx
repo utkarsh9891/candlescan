@@ -23,6 +23,7 @@ import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
 import BatchScanPage from './components/BatchScanPage.jsx';
 import SimulationPage from './components/SimulationPage.jsx';
+import PaperTradingPage from './components/PaperTradingPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
@@ -427,14 +428,16 @@ export default function App() {
           onFiltersChange={setActiveFilters}
           navAction={view === 'main'
             ? { label: 'Index Scanner', onClick: () => setView('batch') }
-            : view === 'batch'
-            ? { label: 'Stock Scanner', onClick: () => setView('main') }
             : { label: 'Stock Scanner', onClick: () => setView('main') }
           }
           simulationAction={hasBatchToken() ? {
             label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
             onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
           } : null}
+          paperTradingAction={{
+            label: view === 'paper' ? 'Index Scanner' : 'Paper Trading',
+            onClick: () => setView(view === 'paper' ? 'batch' : 'paper'),
+          }}
           customIndices={customIndices}
           onAddCustomIndex={handleAddCustomIndex}
           onRemoveCustomIndex={handleRemoveCustomIndex}
@@ -480,6 +483,16 @@ export default function App() {
           engineVersion={engineVersion}
           scalpVariant={scalpVariant}
           onScalpVariantChange={setScalpVariant}
+        />
+      </div>
+
+      {/* Paper trading page — always mounted, hidden when not active */}
+      <div style={{ display: view === 'paper' ? 'block' : 'none' }}>
+        <PaperTradingPage
+          savedIndex={nseIndex}
+          indexOptions={allIndexOptions}
+          engineVersion={engineVersion}
+          scalpVariant={scalpVariant}
         />
       </div>
 
