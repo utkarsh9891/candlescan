@@ -3,7 +3,6 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main, master]
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -27,20 +26,20 @@ jobs:
           ref: main
           fetch-depth: 0  # full history for git describe --tags
 
-      # Auto-tag patch on branch push only (not on tag push)
-      - name: Auto-tag patch version
-        if: startsWith(github.ref, 'refs/heads/')
+      # Auto-tag: every main push gets a version tag automatically.
+      # - If HEAD already has a tag (manual minor/major bump) → skip
+      # - Otherwise → increment patch from latest tag
+      # The build step ALWAYS runs after this, so git describe picks up the new tag.
+      - name: Auto-tag version
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Fetch all tags to ensure we see manually pushed tags
           git fetch --tags --force
 
-          # Skip if HEAD is already tagged (manual tag like v0.7.0 already exists)
-          EXISTING=$(git tag --points-at HEAD 2>/dev/null | head -1)
+          EXISTING=$(git tag --points-at HEAD 2>/dev/null | grep '^v' | head -1)
           if [ -n "$EXISTING" ]; then
-            echo "HEAD already tagged: $EXISTING — skipping auto-tag"
+            echo "HEAD already tagged: $EXISTING"
+            echo "version=$EXISTING" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -53,6 +52,8 @@ jobs:
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
           echo "Auto-tagged: $NEW_TAG"
+          echo "version=$NEW_TAG" >> $GITHUB_OUTPUT
+        id: version
 
       - uses: actions/setup-node@v4
         with:
@@ -65,6 +66,11 @@ jobs:
         run: |
           test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
           grep -q "CandleScan" dist/index.html || { echo "index.html does not contain CandleScan"; exit 1; }
+          # Verify version in built HTML
+          VERSION="${{ steps.version.outputs.version }}"
+          if [ -n "$VERSION" ]; then
+            grep -q "$VERSION" dist/index.html && echo "Version $VERSION found in build" || echo "Warning: $VERSION not in index.html meta"
+          fi
           echo "Smoke check passed"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
