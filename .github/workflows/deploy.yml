@@ -34,9 +34,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Skip if HEAD is already tagged
-          if [ "$(git tag --points-at HEAD)" != "" ]; then
-            echo "HEAD already tagged: $(git tag --points-at HEAD)"
+          # Fetch all tags to ensure we see manually pushed tags
+          git fetch --tags --force
+
+          # Skip if HEAD is already tagged (manual tag like v0.7.0 already exists)
+          EXISTING=$(git tag --points-at HEAD 2>/dev/null | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "HEAD already tagged: $EXISTING — skipping auto-tag"
             exit 0
           fi
 
