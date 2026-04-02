@@ -454,36 +454,52 @@ async function main() {
   }
   const prevDate = getPrevTradingDate(resolvedDate);
 
-  // 3. Load candle data (cache only) — one file per symbol per date
-  console.log(`Loading candle data from cache for ${resolvedDate}...`);
+  // 3. Load candle data — cache-first, auto-fetch on miss for past dates, live for today
+  const todayIst = istDateStr(Math.floor(Date.now() / 1000));
+  const isToday = resolvedDate === todayIst;
+  console.log(`Loading candle data for ${resolvedDate}${isToday ? ' (TODAY — live fetch)' : ' (cache-first, auto-fetch on miss)'}...`);
   const allStockBase = {};
   let loaded = 0;
-  const filterStats = { total: symbols.length, noCache: 0, noCandles: 0, loaded: 0 };
+  let fetchedLive = 0;
+  const filterStats = { total: symbols.length, noCandles: 0, loaded: 0 };
   for (const sym of symbols) {
     const yahooSym = `${sym}.NS`;
     try {
-      // Read target date's cache
-      const cached = readCachedChartJson(yahooSym, tf.interval, resolvedDate);
-      if (!cached) { filterStats.noCache++; continue; }
-      const parsed = parseChartJson(cached);
-      if (!parsed?.candles?.length) { filterStats.noCandles++; continue; }
-      const dayCandles = trimTrailingFlatCandles(parsed.candles);
+      let dayCandles;
+      if (isToday) {
+        // Today: always fetch live, write to cache for the session
+        try {
+          const json = await fetchYahooChartForDate(yahooSym, tf.interval, resolvedDate);
+          writeCachedChartJson(yahooSym, tf.interval, resolvedDate, json);
+          const parsed = parseChartJson(json);
+          dayCandles = parsed?.candles?.length ? trimTrailingFlatCandles(parsed.candles) : null;
+          fetchedLive++;
+          await new Promise(r => setTimeout(r, 200)); // throttle live fetches
+        } catch { dayCandles = null; }
+      } else {
+        // Past date: cache-first, auto-fetch on miss and cache the result
+        const hadCache = !!readCachedChartJson(yahooSym, tf.interval, resolvedDate);
+        dayCandles = await getCandles(yahooSym, tf.interval, resolvedDate);
+        if (dayCandles && !hadCache) {
+          fetchedLive++;
+          await new Promise(r => setTimeout(r, 200)); // throttle fetches
+        }
+      }
       if (!dayCandles?.length || dayCandles.length < 5) { filterStats.noCandles++; continue; }
 
       // Read previous trading day for prior candles, prevDayHigh/Low
       let priorCandles = [];
       let prevDayHigh = null;
       let prevDayLow = null;
-      const prevCached = readCachedChartJson(yahooSym, tf.interval, prevDate);
-      if (prevCached) {
-        const prevParsed = parseChartJson(prevCached);
-        if (prevParsed?.candles?.length) {
-          const prevCandles = trimTrailingFlatCandles(prevParsed.candles);
-          priorCandles = prevCandles.slice(-20); // last 20 bars of previous day
+      // For prev day, also auto-fetch on miss (but don't fail if unavailable)
+      try {
+        const prevCandles = await getCandles(yahooSym, tf.interval, prevDate);
+        if (prevCandles?.length) {
+          priorCandles = prevCandles.slice(-20);
           prevDayHigh = Math.max(...prevCandles.map(c => c.h));
           prevDayLow = Math.min(...prevCandles.map(c => c.l));
         }
-      }
+      } catch { /* prev day unavailable — ok */ }
 
       const orbBars = dayCandles.slice(0, 15);
       const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
@@ -496,12 +512,12 @@ async function main() {
   filterStats.loaded = loaded;
   console.log(`\n── Stock Filter Pipeline ──`);
   console.log(`  ${filterStats.total} symbols in index`);
-  console.log(`  ${filterStats.noCache} filtered: no cache data for ${resolvedDate}`);
+  if (fetchedLive) console.log(`  ${fetchedLive} fetched live from Yahoo (auto-cached)`);
   console.log(`  ${filterStats.noCandles} filtered: no valid candles`);
   console.log(`  ${filterStats.loaded} passed → loaded for simulation`);
 
   if (!loaded) {
-    console.log(`No data available for ${resolvedDate}. Try warming the cache: npm run cache:march`);
+    console.log(`No data available for ${resolvedDate}.`);
     process.exit(0);
   }
 
