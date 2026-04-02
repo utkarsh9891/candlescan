@@ -33,12 +33,23 @@ const POLL_OPTIONS = [
   { label: '1m', ms: 60000 },
 ];
 
-const CHARGES = {
+// Regular plan: standard NSE charges
+const CHARGES_REGULAR = {
   BROKERAGE_PER_ORDER: 20,
-  STT_SELL_PCT: 0.00025,
-  EXCHANGE_TURNOVER_PCT: 0.0000345,
-  SEBI_PCT: 0.000001,
-  STAMP_DUTY_BUY_PCT: 0.00003,
+  STT_SELL_PCT: 0.00025,             // 0.025% sell side
+  EXCHANGE_TURNOVER_PCT: 0.0000345,  // 0.00345%
+  SEBI_PCT: 0.000001,               // Rs.10 per crore
+  STAMP_DUTY_BUY_PCT: 0.00003,      // 0.003% buy side
+  GST_PCT: 0.18,
+};
+
+// Premium plan: lower exchange turnover (reverse-engineered from actual broker statement)
+const CHARGES_PREMIUM = {
+  BROKERAGE_PER_ORDER: 20,
+  STT_SELL_PCT: 0.00025,             // 0.025% sell side
+  EXCHANGE_TURNOVER_PCT: 0.0000307,  // 0.00307% (actual from broker)
+  SEBI_PCT: 0.000001,               // Rs.10 per crore
+  STAMP_DUTY_BUY_PCT: 0.00003,      // 0.003% buy side
   GST_PCT: 0.18,
 };
 
@@ -73,27 +84,28 @@ function formatTime(ts) { return new Date(ts).toLocaleTimeString('en-IN', { hour
 function formatDuration(ms) { const m = Math.floor(ms / 60000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`; }
 function fmtRs(n) { return (n >= 0 ? '+' : '-') + 'Rs.' + Math.round(Math.abs(n)).toLocaleString('en-IN'); }
 
-function computeCharges(trade) {
+function computeCharges(trade, chargePlan = CHARGES_REGULAR) {
   const { entry, exitPrice, shares, direction } = trade;
   if (!exitPrice) return null;
+  const C = chargePlan;
   const buyPrice = direction === 'long' ? entry : exitPrice;
   const sellPrice = direction === 'long' ? exitPrice : entry;
   const buyValue = buyPrice * shares, sellValue = sellPrice * shares, turnover = buyValue + sellValue;
-  const brokerage = CHARGES.BROKERAGE_PER_ORDER * 2;
-  const stt = sellValue * CHARGES.STT_SELL_PCT;
-  const exchangeTurnover = turnover * CHARGES.EXCHANGE_TURNOVER_PCT;
-  const sebiCharges = turnover * CHARGES.SEBI_PCT;
-  const stampDuty = buyValue * CHARGES.STAMP_DUTY_BUY_PCT;
-  const gst = (brokerage + exchangeTurnover + sebiCharges) * CHARGES.GST_PCT;
+  const brokerage = C.BROKERAGE_PER_ORDER * 2;
+  const stt = sellValue * C.STT_SELL_PCT;
+  const exchangeTurnover = turnover * C.EXCHANGE_TURNOVER_PCT;
+  const sebiCharges = turnover * C.SEBI_PCT;
+  const stampDuty = buyValue * C.STAMP_DUTY_BUY_PCT;
+  const gst = (brokerage + exchangeTurnover + sebiCharges) * C.GST_PCT;
   const totalCharges = brokerage + stt + exchangeTurnover + sebiCharges + stampDuty + gst;
   const grossPnl = direction === 'long' ? (exitPrice - entry) * shares : (entry - exitPrice) * shares;
   return { buyValue, sellValue, turnover, brokerage, stt, exchangeTurnover, sebiCharges, stampDuty, gst, totalCharges, grossPnl, netPnl: grossPnl - totalCharges };
 }
 
-function computeDaySummary(allTrades) {
+function computeDaySummary(allTrades, chargePlan) {
   const closed = allTrades.filter(t => t.status === 'closed' && t.exitPrice);
   if (!closed.length) return null;
-  const all = closed.map(t => ({ trade: t, c: computeCharges(t) })).filter(x => x.c);
+  const all = closed.map(t => ({ trade: t, c: computeCharges(t, chargePlan) })).filter(x => x.c);
   const wins = all.filter(x => x.c.netPnl > 0).length;
   const holdTimes = all.map(x => x.trade.exitTime - x.trade.entryTime);
   let maxStreak = 0, streak = 0;
@@ -154,7 +166,8 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
   const [capital, setCapital] = useState(savedSettings.current.capital || 300000);
   const [margin, setMargin] = useState(savedSettings.current.margin !== false);
   const [maxPositions, setMaxPositions] = useState(savedSettings.current.maxPositions || 1);
-  const [pollMs, setPollMs] = useState(savedSettings.current.pollMs || 30000);
+  const [pollMs, setPollMs] = useState(savedSettings.current.pollMs || 1000);
+  const [premiumCharges, setPremiumCharges] = useState(savedSettings.current.premiumCharges !== false);
 
   const [trades, setTrades] = useState(() => {
     try { const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); return Array.isArray(s) ? s : []; } catch { return []; }
@@ -168,8 +181,8 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
   // Persist
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(trades)); } catch {} }, [trades]);
   useEffect(() => {
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ capital, margin, maxPositions, pollMs })); } catch {}
-  }, [capital, margin, maxPositions, pollMs]);
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ capital, margin, maxPositions, pollMs, premiumCharges })); } catch {}
+  }, [capital, margin, maxPositions, pollMs, premiumCharges]);
   useEffect(() => { requestNotifPermission(); }, []);
   useEffect(() => {
     if (!notifications.length) return;
@@ -182,7 +195,8 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
   const perTrade = Math.floor(effectiveCapital / maxPositions);
   const activeTrades = trades.filter(t => t.status === 'active');
   const closedTrades = trades.filter(t => t.status === 'closed');
-  const summary = computeDaySummary(trades);
+  const chargePlan = premiumCharges ? CHARGES_PREMIUM : CHARGES_REGULAR;
+  const summary = computeDaySummary(trades, chargePlan);
   const activeSymbols = new Set(activeTrades.map(t => t.symbol));
   const capitalInUse = activeTrades.reduce((s, t) => s + t.entry * t.shares, 0);
   const capitalFree = effectiveCapital - capitalInUse;
@@ -229,12 +243,15 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
   }, [canEnterMore, trades, perTrade]);
 
   // ── Close trade ──────────────────────────────────────────────────────────
+  const chargePlanRef = useRef(premiumCharges ? CHARGES_PREMIUM : CHARGES_REGULAR);
+  chargePlanRef.current = premiumCharges ? CHARGES_PREMIUM : CHARGES_REGULAR;
+
   const closeTrade = useCallback((id, price, reason = 'MANUAL') => {
     setTrades(prev => prev.map(t => {
       if (t.id !== id || t.status !== 'active') return t;
       const exitPrice = price || t.currentPrice || t.entry;
       const closed = { ...t, status: 'closed', exitPrice, exitTime: Date.now(), exitReason: reason };
-      const ch = computeCharges(closed);
+      const ch = computeCharges(closed, chargePlanRef.current);
       const msg = `${t.symbol} ${reason} at ${exitPrice.toFixed(2)} (${ch ? fmtRs(ch.netPnl) : ''})`;
       const type = reason === 'TARGET' ? 'success' : reason === 'SL' ? 'error' : 'warning';
       setNotifications(prev => [...prev, { id: Date.now(), message: msg, type, createdAt: Date.now() }]);
@@ -321,18 +338,19 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
             {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
-        <div style={{ flex: '0 0 70px' }}>
-          <div style={labelStyle}>Refresh</div>
-          <select value={pollMs} onChange={e => setPollMs(+e.target.value)} style={{ ...inputStyle, width: '100%', cursor: 'pointer' }}>
-            {POLL_OPTIONS.map(o => <option key={o.ms} value={o.ms}>{o.label}</option>)}
-          </select>
-        </div>
-        <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'flex-end', paddingBottom: 2 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12 }}>
-            <input type="checkbox" checked={margin} onChange={e => setMargin(e.target.checked)} disabled={scanning} />
-            <span style={{ fontWeight: 600 }}>5x</span>
-          </label>
-        </div>
+      </div>
+
+      {/* Toggles row */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12 }}>
+          <input type="checkbox" checked={margin} onChange={e => setMargin(e.target.checked)} disabled={scanning} />
+          <span style={{ fontWeight: 600 }}>5x Margin (MIS)</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12 }}>
+          <input type="checkbox" checked={premiumCharges} onChange={e => setPremiumCharges(e.target.checked)} />
+          <span style={{ fontWeight: 600 }}>Premium Plan</span>
+          <span style={{ fontSize: 10, color: '#8892a8' }}>{premiumCharges ? '(lower exchange fees)' : '(standard fees)'}</span>
+        </label>
       </div>
 
       <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, display: 'flex', gap: 12 }}>
@@ -372,9 +390,12 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       {activeTrades.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           {sectionHeader(() => setActiveOpen(!activeOpen), activeOpen, 'Active Trades', activeTrades.length,
-            <span style={{ fontSize: 10, color: '#8892a8', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }} onClick={e => e.stopPropagation()}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#16a34a', display: 'inline-block', animation: 'pulse 2s infinite' }} />
-              {POLL_OPTIONS.find(o => o.ms === pollMs)?.label || '30s'}
+              <select value={pollMs} onChange={e => { e.stopPropagation(); setPollMs(+e.target.value); }}
+                style={{ fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid #e2e5eb', background: '#fff', color: '#4a5068', cursor: 'pointer' }}>
+                {POLL_OPTIONS.map(o => <option key={o.ms} value={o.ms}>{o.label}</option>)}
+              </select>
             </span>
           )}
           {activeOpen && activeTrades.map(t => {
@@ -448,7 +469,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       {closedTrades.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           {sectionHeader(() => setClosedOpen(!closedOpen), closedOpen, 'Closed Trades', closedTrades.length, null)}
-          {closedOpen && closedTrades.map(t => { const ch = computeCharges(t); return ch ? <ClosedTradeCard key={t.id} trade={t} charges={ch} /> : null; })}
+          {closedOpen && closedTrades.map(t => { const ch = computeCharges(t, chargePlan); return ch ? <ClosedTradeCard key={t.id} trade={t} charges={ch} /> : null; })}
         </div>
       )}
 
