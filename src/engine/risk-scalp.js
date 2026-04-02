@@ -18,6 +18,8 @@
  *  - Confidence floor 20 (wider range for discrimination)
  */
 
+import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
+
 export const RISK_SIGNAL_DEFINITIONS = [
   { key: 'signalClarity', label: 'Signal clarity', max: 25, meaning: 'Pattern strength × volume factor × 25.' },
   { key: 'lowNoise', label: 'Low noise', max: 20, meaning: 'ATR vs body size; clean moves score higher.' },
@@ -90,19 +92,30 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const cur = candles[candles.length - 1];
   const barIndex = opts?.barIndex ?? candles.length;
 
+  // Hard gate: skip first 25 bars (9:15–9:40) — let market settle
+  if (barIndex < 25) return noTrade(cur, candles, box);
+
   // Volume gate: use average of recent 5 candles (last candle often has 0 in Yahoo 1m data)
   const recentVols = candles.slice(-6, -1).map(c => c.v || 0);
   const recentAvgVol = recentVols.length ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length : 0;
   if (recentAvgVol < 5000) return noTrade(cur, candles, box);
 
-  // Micro-trend filter: reject signals against the stock's own recent trend (20-bar)
-  if (candles.length >= 20 && top) {
-    const recent = candles.slice(-20);
-    const trendSlope = (recent[recent.length - 1].c - recent[0].c) / recent[0].c;
-    // Counter-trend: reject if stock trend opposes the signal
-    if (top.direction === 'bullish' && trendSlope < -0.001) return noTrade(cur, candles, box);
-    if (top.direction === 'bearish' && trendSlope > 0.001) return noTrade(cur, candles, box);
-  }
+  // Extreme mover filter: only trade stocks showing 1.5%+ intraday move
+  // Mirrors real edge — riding top gainers or shorting extremes
+  const dayStartIdx = Math.max(0, candles.length - barIndex);
+  const dayOpen = candles[dayStartIdx]?.o || cur.c;
+  const intradayPct = (cur.c - dayOpen) / dayOpen;
+  const absIntradayPct = Math.abs(intradayPct);
+  if (absIntradayPct < 0.015) return noTrade(cur, candles, box);
+
+  // Direction alignment with intraday move:
+  //   Longs: only on stocks already UP (ride the momentum)
+  //   Shorts: stocks already DOWN (momentum) OR stocks UP at extreme (mean reversion)
+  if (top?.direction === 'bullish' && intradayPct < 0.01) return noTrade(cur, candles, box);
+
+  // ATR minimum: skip stocks that can't generate enough movement
+  const atrPrelim = atrLike(candles, 14);
+  if (atrPrelim < cur.c * 0.001) return noTrade(cur, candles, box);
 
   /* ── 1. Signal clarity (max 25) — volume-weighted ──────────── */
   const vols = candles.slice(-11, -1).map(c => c.v || 0);
@@ -123,45 +136,36 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const direction = top?.direction === 'bearish' ? 'short' : top?.direction === 'bullish' ? 'long' : 'long';
   const atrVal = atrLike(candles, 14);
 
-  // Wider slippage for 1m scalping (0.15%)
-  const rawEntry = cur.c;
-  const entry = direction === 'long' ? rawEntry * 1.0015 : rawEntry * 0.9985;
+  // Zero slippage — entry at candle close (NIFTY 200 stocks are institutional-grade liquid)
+  const entry = cur.c;
 
-  // SL: wide catastrophic stop — 2% minimum. Rarely hit; TIME exit is the real loss limiter.
+  // SL: tight — exit losers before TIME exit catches them with bigger loss
   const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
-  const slDist = Math.max(atrVal * 3.0, avgBarRange * 5, entry * 0.020);
-  // Target: aggressive, reachable in a few bars — take the cut and move on
+  const slDist = Math.max(atrVal * 1.5, avgBarRange * 3, entry * 0.01);
+  const targetFloor = entry * 0.007; // 0.7% minimum
+
   let targetDist;
   let sl, target;
 
-  const targetFloor = entry * 0.003; // 0.3% minimum = Rs.900 on Rs.3L
-
   if (direction === 'long') {
     sl = entry - slDist;
-    const resistance = Math.max(...candles.slice(-15).map(c => c.h));
-    const resistanceDist = resistance - entry;
-    targetDist = resistanceDist > entry * 0.003 ? Math.min(resistanceDist, atrVal * 1.0) : atrVal * 1.0;
-    targetDist = Math.max(targetDist, targetFloor);
+    const resistanceDist = box?.high ? Math.max(0, box.high - entry) : Infinity;
+    targetDist = Math.max(Math.min(resistanceDist, atrVal * 2.0), targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
-    const support = Math.min(...candles.slice(-15).map(c => c.l));
-    const supportDist = entry - support;
-    targetDist = supportDist > entry * 0.003 ? Math.min(supportDist, atrVal * 1.0) : atrVal * 1.0;
-    targetDist = Math.max(targetDist, targetFloor);
+    const supportDist = box?.low ? Math.max(0, entry - box.low) : Infinity;
+    targetDist = Math.max(Math.min(supportDist, atrVal * 2.0), targetFloor);
     target = entry - targetDist;
   }
 
   const rr = targetDist / Math.max(slDist, 1e-9);
   const rrClamped = Math.min(9, Math.max(0.1, rr));
-  // Scalp R:R scoring: flat — R:R is irrelevant for scalping, win rate matters
-  // Any valid setup gets 20/25; only truly degenerate R:R (<0.1) gets penalized
-  const rrScore = Math.max(20, Math.round(25 * (1 - Math.exp(-2.5 * rrClamped))));
+  // R:R scoring: continuous, favoring higher R:R
+  const rrScore = Math.round(25 * (1 - Math.exp(-2.5 * rrClamped)));
 
-  // No R:R gate — scalping relies on win rate + tight targets, not R:R
-
-  // Min target 0.3% of entry — ensures Rs.900+ gain per trade on Rs.3L
-  if (targetDist < entry * 0.003) return noTrade(cur, candles, box);
+  // Min target 0.2% of entry
+  if (targetDist < entry * 0.002) return noTrade(cur, candles, box);
 
   /* ── 4. Pattern reliability (max 15) ───────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;
@@ -188,8 +192,8 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   if (vwap != null) {
     if (direction === 'long' && cur.c > vwap) confluence += 3;
     else if (direction === 'short' && cur.c < vwap) confluence += 3;
-    else if (direction === 'long' && cur.c < vwap) confluence -= 2;
-    else if (direction === 'short' && cur.c > vwap) confluence -= 2;
+    else if (direction === 'long' && cur.c < vwap) confluence -= 5;
+    else if (direction === 'short' && cur.c > vwap) confluence -= 5;
   }
 
   // Context
@@ -221,8 +225,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 15;
   }
 
-  // Time-of-day filter: first 10 bars (9:15-9:25) = skip
-  if (barIndex < 10) confidence = Math.max(20, confidence - 30);
+  // Time-of-day filter: first 12 bars already hard-gated above; soft penalty removed
 
   // Day-of-week awareness
   const dow = opts?.dayOfWeek;
@@ -230,6 +233,12 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   if (dow === 5 && barIndex > 75) confidence = Math.max(20, confidence - 10); // Friday late
 
   confidence = Math.max(20, Math.min(100, confidence));
+
+  // Margin eligibility penalty: penalize non-margin stocks when margin trading is enabled
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    confidence += MARGIN_PENALTY;
+    confidence = Math.max(20, Math.min(100, confidence));
+  }
 
   const breakdown = {
     signalClarity: Math.round(signalClarity),
@@ -255,7 +264,7 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 15, // 15 minutes on 1m = hard scalp limit
+    maxHoldBars: 20, // 20 minutes — optimal
   };
 }
 
@@ -265,6 +274,6 @@ function noTrade(cur, candles, box) {
     total: 0, confidence: 20, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
-    maxHoldBars: 15,
+    maxHoldBars: 20,
   };
 }

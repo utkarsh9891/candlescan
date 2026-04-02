@@ -28,6 +28,7 @@ import { trimTrailingFlatCandles } from '../src/engine/fetcher.js';
 import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
 import { readCachedChartJson, writeCachedChartJson, listCachedDates, listCachedSymbols } from './lib/chart-cache-fs.mjs';
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
+import { fetchMarginMapNode, MARGIN_MULTIPLIER } from '../src/data/marginData.js';
 
 const TIMEFRAME_MAP = {
   '1m': { interval: '1m' },
@@ -53,6 +54,7 @@ function parseArgs() {
   let fromTime = '09:30';
   let toTime = '11:00';
   let multiWindow = false;
+  let margin = true;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -66,10 +68,12 @@ function parseArgs() {
     if (args[i] === '--from' && args[i + 1]) { fromTime = args[++i]; continue; }
     if (args[i] === '--to' && args[i + 1]) { toTime = args[++i]; continue; }
     if (args[i] === '--multi-window') { multiWindow = true; continue; }
+    if (args[i] === '--no-margin') { margin = false; continue; }
+    if (args[i] === '--margin') { margin = true; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, variant, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow };
+  return { timeframe, indexName, date, engine, variant, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin };
 }
 
 function parseChartJson(data) {
@@ -188,7 +192,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap }) {
   const trades = [];
   const openPositions = [];
   const cooldownUntil = {}; // sym -> barIdx when cooldown expires (prevent whipsaw)
@@ -280,7 +284,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         prevDayLow: sd.prevDayLow,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym } });
 
       if (risk.confidence < MIN_CONFIDENCE) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
@@ -396,7 +400,7 @@ function buildWindowStockData(allStockBase, wFrom, wTo) {
 }
 
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, variant, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, variant, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
@@ -417,7 +421,7 @@ async function main() {
   console.log(`\n=== CandleScan ${engine}${variantLabel} Simulation${multiWindow ? ' (Multi-Window)' : ''} ===`);
   console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
   console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${maxPositions} | Per trade: Rs.${positionSize.toLocaleString()} | Max trades: ${maxTotalTrades}`);
-  console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Volume: auto (25th pctile)`);
+  console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Volume: auto (25th pctile) | Margin: ${margin ? MARGIN_MULTIPLIER + 'x' : 'Off'}`);
   console.log('');
 
   // 1. Fetch index constituents (with cache fallback)
@@ -533,7 +537,16 @@ async function main() {
     }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection };
+  // Fetch margin eligibility map if margin trading is enabled
+  let marginMap = null;
+  if (margin) {
+    try {
+      marginMap = await fetchMarginMapNode();
+      console.log(`Margin data loaded: ${marginMap.size} stocks`);
+    } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
+  }
+
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap };
 
   if (multiWindow) {
     // Multi-window mode: run 3 windows sequentially

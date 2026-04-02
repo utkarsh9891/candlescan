@@ -1,3 +1,5 @@
+import { isMarginEligible } from '../../data/marginData.js';
+
 /**
  * Touch & Turn scalp variant.
  *
@@ -120,6 +122,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   // SL: half of target distance → 2:1 R:R (from transcript)
   const slDist = Math.max(targetDist * 0.5, entry * 0.003);
   const sl = direction === 'long' ? entry - slDist : entry + slDist;
+
+  // Margin eligibility check
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    return _noTrade(cur);
+  }
 
   // All conditions met → trade is ON
   return {

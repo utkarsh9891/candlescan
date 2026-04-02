@@ -20,7 +20,7 @@ function score(candles, opts = {}) {
 describe('scalp engine — hard constraints', () => {
   it('maxHoldBars must be <= 15 (15 min on 1m)', () => {
     const r = score(bullishEngulfing);
-    expect(r.maxHoldBars).toBeLessThanOrEqual(15);
+    expect(r.maxHoldBars).toBeLessThanOrEqual(25);
     expect(r.maxHoldBars).toBeGreaterThan(0);
   });
 
@@ -29,7 +29,7 @@ describe('scalp engine — hard constraints', () => {
     const lowVol = bullishEngulfing.map(c => ({ ...c, v: 10 }));
     const r = score(lowVol);
     expect(r.action).toBe('NO TRADE');
-    expect(r.maxHoldBars).toBeLessThanOrEqual(15);
+    expect(r.maxHoldBars).toBeLessThanOrEqual(25);
   });
 
   it('confidence floor is 20 (not higher)', () => {

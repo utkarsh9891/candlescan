@@ -7,6 +7,9 @@ export const NSE_EQUITY_INDICES_BASE = 'https://www.nseindia.com/api/equity-stoc
 
 /** `index` query values exactly as NSE expects (space-separated names). */
 export const NSE_INDEX_OPTIONS = [
+  // Dynamic — live market movers (fetched from NSE live-analysis API)
+  { id: 'TOP GAINERS (Live)', label: 'TOP GAINERS (Live)', dynamic: true },
+  { id: 'TOP LOSERS (Live)', label: 'TOP LOSERS (Live)', dynamic: true },
   // 50 — large, mid, small
   { id: 'NIFTY 50', label: 'NIFTY 50' },
   { id: 'NIFTY MIDCAP 50', label: 'NIFTY MIDCAP 50' },

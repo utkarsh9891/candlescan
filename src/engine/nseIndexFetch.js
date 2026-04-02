@@ -53,10 +53,16 @@ async function tryAllOrigins(targetUrl) {
 }
 
 /**
- * @param {string} indexName e.g. "NIFTY 200"
+ * @param {string} indexName e.g. "NIFTY 200" or "TOP GAINERS (Live)"
  * @returns {Promise<string[]>}
  */
 export async function fetchNseIndexSymbolList(indexName) {
+  // Dynamic indices — fetch from NSE live-analysis API instead of equity-stockIndices
+  const { isDynamicIndex, fetchDynamicIndexSymbols } = await import('../data/dynamicIndices.js');
+  if (isDynamicIndex(indexName)) {
+    return fetchDynamicIndexSymbols(indexName);
+  }
+
   const target = buildNseUrl(indexName);
   const attempts = [];
 

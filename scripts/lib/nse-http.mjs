@@ -3,6 +3,7 @@
  */
 import { NSE_EQUITY_INDICES_BASE } from '../../src/config/nseIndices.js';
 import { parseNseIndexSymbols } from '../../src/engine/nseIndexParse.js';
+import { isDynamicIndex, fetchDynamicIndexSymbolsNode } from '../../src/data/dynamicIndices.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
@@ -13,6 +14,11 @@ export function buildNseIndexUrl(indexName) {
 }
 
 export async function fetchNseIndexSymbolsNode(indexName) {
+  // Dynamic indices — fetch from NSE live-analysis API
+  if (isDynamicIndex(indexName)) {
+    return fetchDynamicIndexSymbolsNode(indexName);
+  }
+
   const url = buildNseIndexUrl(indexName);
   const res = await fetch(url, {
     headers: {

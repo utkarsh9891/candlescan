@@ -1,3 +1,5 @@
+import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
+
 /**
  * Risk / confidence score v2.
  * Fixes from adversarial review:
@@ -218,6 +220,12 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
 
   // FIX: time-of-day penalty — first 15 min (3 bars on 5m) = -15 confidence
   if (barIndex < 3) confidence = Math.max(30, confidence - 15);
+
+  // Margin eligibility penalty
+  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
+    confidence += MARGIN_PENALTY;
+    confidence = Math.max(30, Math.min(100, confidence));
+  }
 
   const breakdown = {
     signalClarity: Math.round(signalClarity),
