@@ -70,27 +70,37 @@ export async function fetchDynamicIndexSymbols(indexId) {
 
 /**
  * Fetch with CORS fallbacks (browser).
- * Same pattern as nseIndexFetch.js — try direct, then CF worker, then allorigins.
+ * Uses the same proxy pattern as nseIndexFetch.js:
+ *   1. Dev/localhost: Vite proxy at /__candlescan-nse/api/...
+ *   2. Production: allorigins CORS proxy
+ *   3. Direct (unlikely to work due to CORS)
  */
 async function fetchWithFallbacks(url) {
-  // 1. Try dev proxy (Vite proxy rewrites /nse-api to nseindia.com)
-  const proxyPath = url.replace('https://www.nseindia.com', '');
-  try {
-    const res = await fetch(`/nse-api${proxyPath}`, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (res.ok) return res.json();
-  } catch { /* fallback */ }
+  const nseApiPath = url.replace('https://www.nseindia.com', '');
+
+  // 1. Try Vite dev proxy (same path used by nseIndexFetch.js)
+  if (typeof window !== 'undefined') {
+    try {
+      const base = (import.meta.env && import.meta.env.BASE_URL) || '/candlescan/';
+      const prefix = base.endsWith('/') ? base.slice(0, -1) : base;
+      const proxyUrl = `${prefix}/__candlescan-nse${nseApiPath}`;
+      const res = await fetch(proxyUrl, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) return res.json();
+    } catch { /* fallback */ }
+  }
 
   // 2. Try allorigins CORS proxy
   try {
     const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) });
+    const res = await fetch(proxyUrl, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
     if (res.ok) return res.json();
   } catch { /* fallback */ }
 
-  // 3. Try direct (may work in some environments)
+  // 3. Try direct (may work in Node or non-CORS environments)
   try {
     const res = await fetch(url, {
       headers: HEADERS,

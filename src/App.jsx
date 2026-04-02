@@ -434,10 +434,10 @@ export default function App() {
             label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
             onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
           } : null}
-          paperTradingAction={{
+          paperTradingAction={hasBatchToken() ? {
             label: view === 'paper' ? 'Index Scanner' : 'Paper Trading',
             onClick: () => setView(view === 'paper' ? 'batch' : 'paper'),
-          }}
+          } : null}
           customIndices={customIndices}
           onAddCustomIndex={handleAddCustomIndex}
           onRemoveCustomIndex={handleRemoveCustomIndex}
