@@ -85,8 +85,8 @@ export function detectPatterns(candles, opts) {
   const patterns = [];
   const vf = volFactor(candles, n);
 
-  // Require 2.7× average volume
-  if (vf < 2.7) return [];
+  // Require above-average volume
+  if (vf < 1.0) return [];
 
   const ab = avgBody(candles, 10);
   const vwap = vwapProxy(candles, 20);
@@ -96,9 +96,8 @@ export function detectPatterns(candles, opts) {
     const prevSide = prev.c > vwap ? 'above' : 'below';
     const curSide = cur.c > vwap ? 'above' : 'below';
 
-    // Bullish VWAP breakout: require strong body + prev bar confirmation
-    if (prevSide === 'below' && curSide === 'above' && cur.c > cur.o
-        && body(cur) > ab * 2.0 && prev.c > prev.o) {
+    // Bullish VWAP breakout: was below, now above
+    if (prevSide === 'below' && curSide === 'above' && cur.c > cur.o) {
       patterns.push({
         name: 'VWAP Breakout', direction: 'bullish',
         strength: Math.min(0.95, 0.65 * Math.min(2, vf)),
@@ -108,9 +107,8 @@ export function detectPatterns(candles, opts) {
         reliability: 0.72, candleIndices: [n - 1],
       });
     }
-    // Bearish VWAP breakdown: require strong body + prev bar confirmation
-    if (prevSide === 'above' && curSide === 'below' && cur.c < cur.o
-        && body(cur) > ab * 2.0 && prev.c < prev.o) {
+    // Bearish VWAP breakdown
+    if (prevSide === 'above' && curSide === 'below' && cur.c < cur.o) {
       patterns.push({
         name: 'VWAP Breakdown', direction: 'bearish',
         strength: Math.min(0.95, 0.63 * Math.min(2, vf)),
@@ -126,7 +124,7 @@ export function detectPatterns(candles, opts) {
   if (opts?.orbHigh != null && opts?.orbLow != null) {
     const orbRange = opts.orbHigh - opts.orbLow;
     if (orbRange > 0) {
-      if (cur.c > opts.orbHigh && cur.c > cur.o && body(cur) > orbRange * 0.5) {
+      if (cur.c > opts.orbHigh && cur.c > cur.o && body(cur) > orbRange * 0.3) {
         patterns.push({
           name: 'ORB Breakout (Bull)', direction: 'bullish',
           strength: Math.min(0.95, 0.70 * Math.min(2, vf)),
@@ -136,7 +134,7 @@ export function detectPatterns(candles, opts) {
           reliability: 0.75, candleIndices: [n - 1],
         });
       }
-      if (cur.c < opts.orbLow && cur.c < cur.o && body(cur) > orbRange * 0.5) {
+      if (cur.c < opts.orbLow && cur.c < cur.o && body(cur) > orbRange * 0.3) {
         patterns.push({
           name: 'ORB Breakdown (Bear)', direction: 'bearish',
           strength: Math.min(0.95, 0.68 * Math.min(2, vf)),
@@ -149,13 +147,82 @@ export function detectPatterns(candles, opts) {
     }
   }
 
-  // --- Volume Climax Reversal DISABLED ---
-  // iter_02 data: heavily negative across both directions, counter-trend signals unreliable
+  // --- 4. Volume Climax Reversal (lower reliability — counter-trend) ---
+  if (n >= 3 && vf >= 2.5) {
+    if (isBull(prev) && !isBull(cur) && body(cur) > ab * 0.8) {
+      patterns.push({
+        name: 'Volume Climax Reversal (Bear)', direction: 'bearish',
+        strength: Math.min(0.90, 0.65 * Math.min(2, vf / 2)),
+        category: 'volume-climax', emoji: '💥',
+        tip: 'Extreme volume exhaustion — buyers done, reversal likely',
+        description: 'Massive volume spike followed by bearish reversal.',
+        reliability: 0.55, candleIndices: [n - 2, n - 1],
+      });
+    }
+    if (!isBull(prev) && isBull(cur) && body(cur) > ab * 0.8) {
+      patterns.push({
+        name: 'Volume Climax Reversal (Bull)', direction: 'bullish',
+        strength: Math.min(0.90, 0.65 * Math.min(2, vf / 2)),
+        category: 'volume-climax', emoji: '💥',
+        tip: 'Extreme volume exhaustion — sellers done, bounce likely',
+        description: 'Massive volume spike followed by bullish reversal.',
+        reliability: 0.55, candleIndices: [n - 2, n - 1],
+      });
+    }
+  }
 
-  // --- Prev Day High/Low Break and Breakout Retest DISABLED ---
-  // iter_01 data: these patterns produced 75% of total losses
-  // Prev Day High Break: 30% win, -7922 | Breakout Retest (Bull): 15% win, -7471
-  // Prev Day Low Break: 18% win, -6157 | Breakout Retest (Bear): 14% win, -2193
+  // --- 6. Previous Day High/Low Breakout (lower reliability) ---
+  if (opts?.prevDayHigh != null && opts?.prevDayLow != null) {
+    if (cur.c > opts.prevDayHigh && cur.c > cur.o) {
+      patterns.push({
+        name: 'Prev Day High Break', direction: 'bullish',
+        strength: Math.min(0.92, 0.68 * Math.min(2, vf)),
+        category: 'prev-day', emoji: '📈',
+        tip: 'Broke above yesterday\'s high — fresh buying',
+        description: `Price exceeded previous day high (${opts.prevDayHigh.toFixed(1)}).`,
+        reliability: 0.55, candleIndices: [n - 1],
+      });
+    }
+    if (cur.c < opts.prevDayLow && cur.c < cur.o) {
+      patterns.push({
+        name: 'Prev Day Low Break', direction: 'bearish',
+        strength: Math.min(0.92, 0.66 * Math.min(2, vf)),
+        category: 'prev-day', emoji: '📉',
+        tip: 'Broke below yesterday\'s low — fresh selling',
+        description: `Price broke below previous day low (${opts.prevDayLow.toFixed(1)}).`,
+        reliability: 0.55, candleIndices: [n - 1],
+      });
+    }
+  }
+
+  // --- 7. Breakout Retest (lower reliability) ---
+  if (n >= 15) {
+    const lookback = candles.slice(-15, -3);
+    const recentHigh = Math.max(...lookback.map(c => c.h));
+    const recentLow = Math.min(...lookback.map(c => c.l));
+    const prev2 = candles[n - 3];
+    const prev1 = candles[n - 2];
+    if (prev2.c > recentHigh && prev1.l <= recentHigh * 1.002 && cur.c > recentHigh && isBull(cur)) {
+      patterns.push({
+        name: 'Breakout Retest (Bull)', direction: 'bullish',
+        strength: Math.min(0.92, 0.65 * Math.min(2, vf)),
+        category: 'breakout-retest', emoji: '🔁',
+        tip: 'Broke resistance, retested, now bouncing',
+        description: 'Classic breakout-retest-continuation.',
+        reliability: 0.55, candleIndices: [n - 3, n - 2, n - 1],
+      });
+    }
+    if (prev2.c < recentLow && prev1.h >= recentLow * 0.998 && cur.c < recentLow && !isBull(cur)) {
+      patterns.push({
+        name: 'Breakout Retest (Bear)', direction: 'bearish',
+        strength: Math.min(0.92, 0.63 * Math.min(2, vf)),
+        category: 'breakout-retest', emoji: '🔁',
+        tip: 'Broke support, retested, now rejecting',
+        description: 'Classic breakdown-retest-continuation.',
+        reliability: 0.55, candleIndices: [n - 3, n - 2, n - 1],
+      });
+    }
+  }
 
   patterns.sort((a, b) => b.strength - a.strength);
   return patterns;
