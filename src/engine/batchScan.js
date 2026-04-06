@@ -29,7 +29,7 @@ function istDate(t) {
  * @param {Object} params
  * @param {string[]} params.symbols — list of NSE symbols (without .NS)
  * @param {string}   params.timeframe — e.g. '5m'
- * @param {string}   params.batchToken — passphrase for auth
+ * @param {string}   params.gateToken — gate token for auth (also accepts batchToken for backward compat)
  * @param {{ detectPatterns: Function, detectLiquidityBox: Function, computeRiskScore: Function }} [params.engineFns]
  * @param {{ direction: string, strength: number }} [params.indexDirection]
  * @param {number}   [params.concurrency=5]
@@ -41,7 +41,8 @@ function istDate(t) {
 export async function batchScan({
   symbols,
   timeframe,
-  batchToken,
+  gateToken,
+  batchToken, // backward compat
   engineFns,
   indexDirection,
   concurrency = 5,
@@ -67,7 +68,7 @@ export async function batchScan({
       chunk.map(async (sym) => {
         if (signal?.aborted) return null;
         try {
-          const result = await fetchOHLCV(sym, timeframe, { batchToken });
+          const result = await fetchOHLCV(sym, timeframe, { gateToken: gateToken || batchToken });
           const { candles, companyName, displaySymbol, error } = result;
           if (error || !candles?.length) return null;
 

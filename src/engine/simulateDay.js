@@ -66,7 +66,7 @@ function timeToSecs(hhmm) {
  * @param {number} [params.minConfidence=75]
  * @param {number} [params.skipFirstBars=3]
  * @param {number} [params.minAvgVolume=50000]
- * @param {string} [params.batchToken]
+ * @param {string} [params.gateToken]
  * @param {(phase: string, completed: number, total: number, current: string) => void} [params.onProgress]
  * @param {AbortSignal} [params.signal]
  */
@@ -88,7 +88,8 @@ export async function runSimulation({
   indexDirection,
   margin = false,
   marginMap = null,
-  batchToken,
+  gateToken,
+  batchToken, // backward compat
   onProgress,
   signal,
 }) {
@@ -115,7 +116,7 @@ export async function runSimulation({
     await Promise.allSettled(chunk.map(async (sym) => {
       if (signal?.aborted) return;
       try {
-        const result = await fetchOHLCV(sym, timeframe, { batchToken, date });
+        const result = await fetchOHLCV(sym, timeframe, { gateToken: gateToken || batchToken, date });
         const allCandles = result.candles;
         if (!allCandles?.length) return;
 

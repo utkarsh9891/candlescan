@@ -9,7 +9,7 @@ import { NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan } from '../engine/batchScan.js';
 import { fetchYahooQuote } from '../engine/yahooQuote.js';
-import { getBatchToken } from '../utils/batchAuth.js';
+import { getGateToken } from '../utils/batchAuth.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { getScalpVariantFns, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
 import { detectPatterns as detectPatternsV2 } from '../engine/patterns-v2.js';
@@ -216,7 +216,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       const controller = new AbortController(); abortRef.current = controller;
       const results = await batchScan({
         symbols, timeframe: engineVersion === 'scalp' ? '1m' : '5m',
-        batchToken: getBatchToken(), engineFns: getEngineFns(engineVersion, scalpVariant),
+        gateToken: getGateToken(), engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection: idxDir,
         onProgress: (completed, total, current) => setScanProgress({ completed, total, current }),
         signal: controller.signal,

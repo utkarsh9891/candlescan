@@ -1,17 +1,22 @@
 /**
- * Cloudflare Worker — CORS proxy for Yahoo Finance v8 chart API + NSE API.
+ * Cloudflare Worker — CORS proxy for Yahoo Finance v8 chart API + NSE API + Zerodha Kite API.
  * Includes:
- *   - Batch auth via X-Batch-Token header (SHA-256 validated against env.BATCH_AUTH_HASH)
+ *   - Gate auth via X-Gate-Token header (SHA-256 validated against env.GATE_PASSPHRASE_HASH)
  *   - IP-based rate limiting via KV (20 req/day for unauthenticated users)
+ *   - RSA-encrypted credential vault for Zerodha API proxying
+ *   - /gate/unlock endpoint to retrieve RSA public key
+ *   - /zerodha/historical endpoint for proxied Kite API calls
  *
  * Deploy:
  *   cd worker && npx wrangler deploy
  *
  * Secrets (set via `wrangler secret put`):
- *   BATCH_AUTH_HASH — SHA-256 hex of the batch passphrase
+ *   GATE_PASSPHRASE_HASH — SHA-256 hex of the premium passphrase
+ *   GATE_PRIVATE_KEY — RSA private key PEM for vault decryption
  *
- * KV namespace binding (in wrangler.toml):
+ * KV namespace bindings (in wrangler.toml):
  *   RATE_LIMIT — for IP-based daily counters
+ *   CANDLESCAN_KV — for storing GATE_PUBLIC_KEY
  */
 
 const ALLOWED_ORIGINS = [
@@ -28,8 +33,8 @@ function corsHeaders(origin) {
   const allowed = ALLOWED_ORIGINS.some((o) => origin?.startsWith(o));
   return {
     'Access-Control-Allow-Origin': allowed ? origin : ALLOWED_ORIGINS[0],
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Batch-Token',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Gate-Token',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -41,18 +46,18 @@ async function sha256(text) {
 }
 
 /**
- * Validate batch token against stored hash.
+ * Validate gate token against stored hash.
  * Client sends SHA-256 hash of passphrase (never plaintext).
- * Worker compares directly to env.BATCH_AUTH_HASH.
+ * Worker compares directly to env.GATE_PASSPHRASE_HASH.
  * Returns true if token is valid, false if invalid, null if no token provided.
  */
-async function validateBatchToken(request, env) {
-  const token = request.headers.get('X-Batch-Token');
+async function validateGateToken(request, env) {
+  const token = request.headers.get('X-Gate-Token');
   if (!token) return null; // no token = regular request
   // Ignore tokens that don't look like SHA-256 hashes (stale plaintext tokens)
   if (!/^[a-f0-9]{64}$/.test(token)) return null; // treat as no token, not invalid
-  if (!env.BATCH_AUTH_HASH) return null; // secret not configured = skip auth
-  return token === env.BATCH_AUTH_HASH;
+  if (!env.GATE_PASSPHRASE_HASH) return null; // secret not configured = skip auth
+  return token === env.GATE_PASSPHRASE_HASH;
 }
 
 /**
@@ -77,20 +82,241 @@ async function checkRateLimit(request, env) {
   return { allowed: true, remaining: DAILY_LIMIT - current - 1 };
 }
 
+/**
+ * Decrypt an RSA-OAEP + AES-GCM hybrid-encrypted vault blob.
+ * Format: base64 of JSON { encKey: base64, iv: base64, data: base64 }
+ *   - encKey: AES-256 key encrypted with RSA-OAEP (GATE_PRIVATE_KEY)
+ *   - iv: AES-GCM 12-byte IV
+ *   - data: AES-GCM ciphertext of the plaintext credentials JSON
+ */
+async function decryptVault(vaultBlob, privateKeyPem) {
+  const vaultJson = JSON.parse(atob(vaultBlob));
+  const { encKey, iv, data } = vaultJson;
+
+  // Import RSA private key
+  const pemBody = privateKeyPem
+    .replace(/-----BEGIN PRIVATE KEY-----/, '')
+    .replace(/-----END PRIVATE KEY-----/, '')
+    .replace(/-----BEGIN RSA PRIVATE KEY-----/, '')
+    .replace(/-----END RSA PRIVATE KEY-----/, '')
+    .replace(/\s/g, '');
+  const keyBuf = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+  const rsaKey = await crypto.subtle.importKey(
+    'pkcs8', keyBuf, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']
+  );
+
+  // Decrypt AES key with RSA
+  const encKeyBuf = Uint8Array.from(atob(encKey), c => c.charCodeAt(0));
+  const aesKeyBuf = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, rsaKey, encKeyBuf);
+  const aesKey = await crypto.subtle.importKey('raw', aesKeyBuf, 'AES-GCM', false, ['decrypt']);
+
+  // Decrypt data with AES
+  const ivBuf = Uint8Array.from(atob(iv), c => c.charCodeAt(0));
+  const dataBuf = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBuf }, aesKey, dataBuf);
+
+  return JSON.parse(new TextDecoder().decode(plainBuf));
+}
+
+/**
+ * Handle /gate/unlock — validate passphrase hash and return public key.
+ */
+async function handleGateUnlock(request, env, origin) {
+  const body = await request.json();
+  const { gateHash } = body;
+
+  if (!gateHash || !/^[a-f0-9]{64}$/.test(gateHash)) {
+    return new Response(JSON.stringify({ error: 'Invalid gate hash format' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!env.GATE_PASSPHRASE_HASH || gateHash !== env.GATE_PASSPHRASE_HASH) {
+    return new Response(JSON.stringify({ error: 'Invalid passphrase' }), {
+      status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Retrieve public key from KV
+  let publicKey = null;
+  if (env.CANDLESCAN_KV) {
+    publicKey = await env.CANDLESCAN_KV.get('GATE_PUBLIC_KEY');
+  }
+
+  if (!publicKey) {
+    return new Response(JSON.stringify({ error: 'Public key not configured' }), {
+      status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  return new Response(JSON.stringify({ gatePublicKey: publicKey }), {
+    status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+  });
+}
+
+/**
+ * Handle /zerodha/historical — decrypt vault and proxy to Kite API.
+ */
+async function handleZerodhaHistorical(request, env, origin) {
+  // Validate gate token
+  const authResult = await validateGateToken(request, env);
+  if (authResult !== true) {
+    return new Response(JSON.stringify({ error: 'Premium access required' }), {
+      status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const body = await request.json();
+  const { symbol, interval, from, to, vault } = body;
+
+  if (!symbol || !interval || !from || !to || !vault) {
+    return new Response(JSON.stringify({ error: 'Missing required fields: symbol, interval, from, to, vault' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!env.GATE_PRIVATE_KEY) {
+    return new Response(JSON.stringify({ error: 'Zerodha proxy not configured (missing private key)' }), {
+      status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Decrypt the vault to get Zerodha credentials
+  let creds;
+  try {
+    creds = await decryptVault(vault, env.GATE_PRIVATE_KEY);
+  } catch (err) {
+    return new Response(JSON.stringify({ error: 'Failed to decrypt credentials. Keys may have been rotated — re-enter credentials in Settings.' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { zerodhaApiKey, zerodhaAccessToken } = creds;
+  if (!zerodhaApiKey || !zerodhaAccessToken) {
+    return new Response(JSON.stringify({ error: 'Vault is missing Zerodha API key or access token' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Look up instrument token for the symbol
+  // For now, we use the symbol directly and let the caller provide instrument_token if needed
+  // Kite API v3: GET /instruments/historical/{instrument_token}/{interval}?from=...&to=...
+  // Alternative: use the exchange:tradingsymbol format via /quote endpoint
+  const kiteUrl = `https://api.kite.trade/instruments/NSE/${symbol}/historical/${interval}?from=${from}&to=${to}`;
+
+  try {
+    const resp = await fetch(kiteUrl, {
+      headers: {
+        'Authorization': `token ${zerodhaApiKey}:${zerodhaAccessToken}`,
+        'X-Kite-Version': '3',
+      },
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      return new Response(JSON.stringify({ error: data.message || `Kite API error: ${resp.status}` }), {
+        status: resp.status, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { ...corsHeaders(origin), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Kite API fetch failed: ${err.message}` }), {
+      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+/**
+ * Handle /zerodha/session — exchange request_token for access_token via Kite API.
+ * Computes checksum server-side so api_secret never touches the browser.
+ */
+async function handleZerodhaSession(request, env, origin) {
+  const authResult = await validateGateToken(request, env);
+  if (authResult !== true) {
+    return new Response(JSON.stringify({ error: 'Premium access required' }), {
+      status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const body = await request.json();
+  const { apiKey, apiSecret, requestToken } = body;
+
+  if (!apiKey || !apiSecret || !requestToken) {
+    return new Response(JSON.stringify({ error: 'Missing required fields: apiKey, apiSecret, requestToken' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Compute checksum = SHA256(api_key + request_token + api_secret)
+  const checksum = await sha256(apiKey + requestToken + apiSecret);
+
+  try {
+    const resp = await fetch('https://api.kite.trade/session/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Kite-Version': '3' },
+      body: `api_key=${encodeURIComponent(apiKey)}&request_token=${encodeURIComponent(requestToken)}&checksum=${encodeURIComponent(checksum)}`,
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok || data.status === 'error') {
+      return new Response(JSON.stringify({ error: data.message || `Kite session failed (${resp.status})` }), {
+        status: resp.status, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    const accessToken = data.data?.access_token;
+    if (!accessToken) {
+      return new Response(JSON.stringify({ error: 'No access_token in Kite response' }), {
+        status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(JSON.stringify({ accessToken }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Kite session exchange failed: ${err.message}` }), {
+      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
+    const url = new URL(request.url);
+    const path = url.pathname;
 
     // Preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
+    // --- POST endpoints ---
+    if (request.method === 'POST') {
+      if (path === '/gate/unlock') {
+        return handleGateUnlock(request, env, origin);
+      }
+      if (path === '/zerodha/historical') {
+        return handleZerodhaHistorical(request, env, origin);
+      }
+      if (path === '/zerodha/session') {
+        return handleZerodhaSession(request, env, origin);
+      }
+      return new Response('Not found', { status: 404, headers: corsHeaders(origin) });
+    }
+
+    // --- GET proxy (Yahoo / NSE) ---
     if (request.method !== 'GET') {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders(origin) });
     }
 
-    const url = new URL(request.url);
     const target = url.searchParams.get('url');
 
     if (!target) {
@@ -110,22 +336,22 @@ export default {
     }
 
     // --- Auth & rate limiting ---
-    const authResult = await validateBatchToken(request, env);
+    const authResult = await validateGateToken(request, env);
 
     if (authResult === false) {
       // Token was provided but is invalid
-      return new Response(JSON.stringify({ error: 'Invalid batch token' }), {
+      return new Response(JSON.stringify({ error: 'Invalid gate token' }), {
         status: 403,
         headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
       });
     }
 
-    // If no batch token, apply rate limiting
+    // If no gate token, apply rate limiting
     if (authResult === null) {
       const { allowed, remaining } = await checkRateLimit(request, env);
       if (!allowed) {
         return new Response(
-          JSON.stringify({ error: 'Daily limit exceeded. Try again tomorrow.' }),
+          JSON.stringify({ error: 'Daily limit exceeded. Unlock premium for unlimited access.' }),
           {
             status: 429,
             headers: {
@@ -137,7 +363,7 @@ export default {
         );
       }
     }
-    // authResult === true means valid batch token — no rate limit
+    // authResult === true means valid gate token — no rate limit
 
     // --- Proxy the request ---
     try {

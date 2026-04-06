@@ -1,6 +1,8 @@
 /**
  * Fetch parent index trend direction for scalping filter.
  * Called once per scan session, cached for 5 minutes.
+ * Cache key is the resolved Yahoo symbol, so indices sharing the
+ * same parent (e.g., SMALLCAP 50/100/250 → ^NSMIDCP) don't re-fetch.
  */
 
 import { fetchOHLCV } from './fetcher.js';
@@ -11,15 +13,16 @@ const INDEX_SYMBOL_MAP = {
   'NIFTY NEXT 50': '^NSEI',
   'NIFTY 100': '^NSEI',
   'NIFTY 200': '^NSEI',
-  'NIFTY MIDCAP 50': 'NIFTY_MIDCAP_50.NS',
-  'NIFTY MIDCAP 100': 'NIFTY_MIDCAP_50.NS',
-  'NIFTY MIDCAP 150': 'NIFTY_MIDCAP_50.NS',
-  'NIFTY SMALLCAP 50': 'NIFTY_SMLCAP_50.NS',
-  'NIFTY SMALLCAP 100': 'NIFTY_SMLCAP_50.NS',
-  'NIFTY SMALLCAP 250': 'NIFTY_SMLCAP_50.NS',
+  'NIFTY 500': '^NSEI',
+  'NIFTY MIDCAP 50': '^NSEI',
+  'NIFTY MIDCAP 100': '^NSEI',
+  'NIFTY MIDCAP 150': '^NSEI',
+  'NIFTY SMALLCAP 50': '^NSEI',
+  'NIFTY SMALLCAP 100': '^NSEI',
+  'NIFTY SMALLCAP 250': '^NSEI',
 };
 
-let cache = { indexName: null, result: null, ts: 0 };
+let cache = { symbol: null, result: null, ts: 0 };
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 function sma(vals, n) {
@@ -31,19 +34,19 @@ function sma(vals, n) {
 /**
  * Get the parent index direction for a given index name.
  * @param {string} indexName — e.g. 'NIFTY SMALLCAP 100'
- * @param {string} [batchToken]
+ * @param {string} [gateToken]
  * @returns {Promise<{ direction: 'bullish' | 'bearish' | 'neutral', strength: number }>}
  */
-export async function getIndexDirection(indexName, batchToken) {
-  // Return cache if fresh
-  if (cache.indexName === indexName && Date.now() - cache.ts < CACHE_TTL && cache.result) {
+export async function getIndexDirection(indexName, gateToken) {
+  const yahooSym = INDEX_SYMBOL_MAP[indexName] || '^NSEI';
+
+  // Return cache if fresh and same resolved symbol
+  if (cache.symbol === yahooSym && Date.now() - cache.ts < CACHE_TTL && cache.result) {
     return cache.result;
   }
 
-  const yahooSym = INDEX_SYMBOL_MAP[indexName] || '^NSEI'; // fallback to NIFTY
-
   try {
-    const result = await fetchOHLCV(yahooSym, '1m', { batchToken });
+    const result = await fetchOHLCV(yahooSym, '1m', { gateToken });
     const candles = result.candles;
     if (!candles?.length || candles.length < 20) {
       return { direction: 'neutral', strength: 0 };
@@ -63,7 +66,7 @@ export async function getIndexDirection(indexName, batchToken) {
     if (sma10 != null && sma20 != null) {
       if (sma10 > sma20 && momentum > 0) {
         direction = 'bullish';
-        strength = Math.min(1, Math.abs(momentum) * 100); // normalize
+        strength = Math.min(1, Math.abs(momentum) * 100);
       } else if (sma10 < sma20 && momentum < 0) {
         direction = 'bearish';
         strength = Math.min(1, Math.abs(momentum) * 100);
@@ -73,7 +76,7 @@ export async function getIndexDirection(indexName, batchToken) {
     }
 
     const res = { direction, strength };
-    cache = { indexName, result: res, ts: Date.now() };
+    cache = { symbol: yahooSym, result: res, ts: Date.now() };
     return res;
   } catch {
     return { direction: 'neutral', strength: 0 };
@@ -82,5 +85,5 @@ export async function getIndexDirection(indexName, batchToken) {
 
 /** Clear the cache (e.g., on index change). */
 export function clearIndexDirectionCache() {
-  cache = { indexName: null, result: null, ts: 0 };
+  cache = { symbol: null, result: null, ts: 0 };
 }

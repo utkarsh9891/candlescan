@@ -159,12 +159,12 @@ async function tryFetch(url) {
 /**
  * Cloudflare Worker proxy — most reliable path for production.
  * @param {string} yahooUrl
- * @param {string} [batchToken] — optional passphrase for authenticated batch scans
+ * @param {string} [gateToken] — optional gate token for authenticated scans
  */
-async function tryFetchCfWorker(yahooUrl, batchToken) {
+async function tryFetchCfWorker(yahooUrl, gateToken) {
   // Use centralized CF proxy with auto-auth
   const { cfFetchJson } = await import('../utils/cfProxy.js');
-  return cfFetchJson(yahooUrl, batchToken);
+  return cfFetchJson(yahooUrl, gateToken);
 }
 
 /**
@@ -215,7 +215,7 @@ async function fetchWithFallbacks(symbol, interval, range, options) {
   const yahooUrl = buildYahooUrl(symbol, interval, range);
   const enc = encodeURIComponent(yahooUrl);
   // Token is auto-read from localStorage by cfProxy.js if not explicitly passed
-  const batchToken = options?.batchToken || '';
+  const gateToken = options?.gateToken || options?.batchToken || '';
   const date = options?.date || null;
 
   const attempts = [];
@@ -234,7 +234,7 @@ async function fetchWithFallbacks(symbol, interval, range, options) {
   }
 
   /* Cloudflare Worker — primary production proxy */
-  attempts.push(() => tryFetchCfWorker(yahooUrl, batchToken));
+  attempts.push(() => tryFetchCfWorker(yahooUrl, gateToken));
 
   /* Optional env-var proxy */
   const envProxy = tryFetchFromEnvProxy(yahooUrl);
@@ -368,7 +368,7 @@ export function generateSimulatedCandles(symbol, count = 80) {
 /**
  * @param {string} inputSymbol
  * @param {string} timeframeKey
- * @param {{ batchToken?: string, date?: string }} [options] date is YYYY-MM-DD for date-partitioned cache
+ * @param {{ gateToken?: string, batchToken?: string, date?: string }} [options] date is YYYY-MM-DD for date-partitioned cache
  * @returns {{ candles: Array, live: boolean, simulated: boolean, error?: string, yahooSymbol: string, displaySymbol: string, companyName: string }}
  */
 export async function fetchOHLCV(inputSymbol, timeframeKey, options) {

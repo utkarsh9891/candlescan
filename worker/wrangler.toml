@@ -6,11 +6,17 @@ compatibility_date = "2024-12-01"
 # Deploy: cd worker && npx wrangler deploy
 #
 # Secrets (set via CLI, not here):
-#   wrangler secret put BATCH_AUTH_HASH
+#   wrangler secret put GATE_PASSPHRASE_HASH
+#   wrangler secret put GATE_PRIVATE_KEY
 #
-# KV namespace — create with:
+# KV namespaces — create with:
 #   wrangler kv namespace create RATE_LIMIT
-# Then paste the id below.
+#   wrangler kv namespace create CANDLESCAN_KV
+# Then paste the ids below.
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
 id = "527c95317e0141a3adf0b9a7cf384836"
+
+[[kv_namespaces]]
+binding = "CANDLESCAN_KV"
+id = "00f596cbf39d47cf87bd42bfafd48340"

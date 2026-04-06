@@ -21,7 +21,7 @@ describe('batchScan', () => {
     const results = await batchScan({
       symbols: ['RELIANCE', 'TCS', 'INFY'],
       timeframe: '5m',
-      batchToken: 'test',
+      gateToken: 'test',
       concurrency: 2,
       delayMs: 0,
     });
@@ -33,7 +33,7 @@ describe('batchScan', () => {
     const results = await batchScan({
       symbols: ['RELIANCE'],
       timeframe: '5m',
-      batchToken: 'test',
+      gateToken: 'test',
       delayMs: 0,
     });
 
@@ -55,7 +55,7 @@ describe('batchScan', () => {
     const results = await batchScan({
       symbols: ['A', 'B', 'C', 'D', 'E'],
       timeframe: '5m',
-      batchToken: 'test',
+      gateToken: 'test',
       delayMs: 0,
     });
 
@@ -70,7 +70,7 @@ describe('batchScan', () => {
     await batchScan({
       symbols: ['A', 'B', 'C'],
       timeframe: '5m',
-      batchToken: 'test',
+      gateToken: 'test',
       delayMs: 0,
       onProgress: (completed, total) => progress.push({ completed, total }),
     });
@@ -88,7 +88,7 @@ describe('batchScan', () => {
     const results = await batchScan({
       symbols: ['A', 'B', 'C', 'D', 'E'],
       timeframe: '5m',
-      batchToken: 'test',
+      gateToken: 'test',
       delayMs: 0,
       signal: controller.signal,
     });
@@ -101,7 +101,7 @@ describe('batchScan', () => {
     const results = await batchScan({
       symbols: [],
       timeframe: '5m',
-      batchToken: 'test',
+      gateToken: 'test',
       delayMs: 0,
     });
 
