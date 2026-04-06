@@ -6,8 +6,10 @@ import { chartCacheDevPlugin } from './vite-plugin-chart-cache.mjs';
 import { execSync } from 'node:child_process';
 
 function gitVersion() {
+  // CI sets CANDLESCAN_VERSION to the exact tag (avoids git describe ambiguity
+  // when multiple tags point to the same commit)
+  if (process.env.CANDLESCAN_VERSION) return process.env.CANDLESCAN_VERSION;
   try {
-    // v2.1.0 (on tag) or v2.1.0-3-gabcdef (3 commits after tag)
     return execSync('git describe --tags --always', { encoding: 'utf8' }).trim();
   } catch {
     return 'dev';
