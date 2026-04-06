@@ -24,10 +24,11 @@ import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx'
 import BatchScanPage from './components/BatchScanPage.jsx';
 import SimulationPage from './components/SimulationPage.jsx';
 import PaperTradingPage from './components/PaperTradingPage.jsx';
+import SettingsPage from './components/SettingsPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
-import { hasBatchToken } from './utils/batchAuth.js';
+import { hasGateToken } from './utils/batchAuth.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
@@ -71,7 +72,7 @@ const shell = {
 
 export default function App() {
   const [mode, setMode] = useState(() => {
-    try { return localStorage.getItem('candlescan_mode') || 'simple'; } catch { return 'simple'; }
+    try { return localStorage.getItem('candlescan_mode') || 'advanced'; } catch { return 'advanced'; }
   });
   const [engineVersion, setEngineVersion] = useState(() => {
     try { return localStorage.getItem('candlescan_engine') || 'scalp'; } catch { return 'scalp'; }
@@ -148,8 +149,13 @@ export default function App() {
   // Signal highlight toggle
   const [highlightSignals, setHighlightSignals] = useState(true);
 
-  // View state: 'main' | 'batch' | 'simulate'
-  const [view, setViewRaw] = useState('main');
+  // View state: 'main' | 'batch' | 'simulate' | 'settings'
+  // Auto-navigate to settings if returning from Zerodha OAuth callback
+  const [view, setViewRaw] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('request_token') && params.get('action') === 'login') return 'settings';
+    return 'main';
+  });
   const [cameFromBatch, setCameFromBatch] = useState(false);
   const [cameFromSimulation, setCameFromSimulation] = useState(false);
 
@@ -309,9 +315,21 @@ export default function App() {
         try { idxDir = await getIndexDirection(nseIndex); } catch { /* ignore */ }
       }
 
-      const pat = detectPat(cd);
+      // Compute ORB + prev day levels for pattern context (same as batchScan)
+      const IST_OFFSET = 19800;
+      const istDateLocal = (t) => new Date((t + IST_OFFSET) * 1000).toISOString().slice(0, 10);
+      const lastDate = istDateLocal(cd[cd.length - 1].t);
+      const todayCandles = cd.filter(c => istDateLocal(c.t) === lastDate);
+      const prevCandles = cd.filter(c => istDateLocal(c.t) < lastDate);
+      const orbBars = todayCandles.slice(0, 15);
+      const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
+      const orbLow = orbBars.length >= 5 ? Math.min(...orbBars.map(c => c.l)) : null;
+      const prevDayHigh = prevCandles.length ? Math.max(...prevCandles.map(c => c.h)) : null;
+      const prevDayLow = prevCandles.length ? Math.min(...prevCandles.map(c => c.l)) : null;
+
+      const pat = detectPat(cd, { barIndex: cd.length, orbHigh, orbLow, prevDayHigh, prevDayLow });
       const bx = detectBox(cd);
-      const rk = scoreRisk({ candles: cd, patterns: pat, box: bx, opts: { indexDirection: idxDir } });
+      const rk = scoreRisk({ candles: cd, patterns: pat, box: bx, opts: { barIndex: cd.length, indexDirection: idxDir } });
       setPatterns(pat);
       setBox(bx);
       setRisk(rk);
@@ -422,7 +440,7 @@ export default function App() {
     <div style={shell}>
       <UpdatePrompt />
       {/* Shared header — single instance, nav action changes per view */}
-      <Header badge={headerBadge} lastScan={lastScan} mode={mode} onModeChange={setMode}>
+      <Header badge={headerBadge} lastScan={lastScan}>
         <GlobalMenu
           activeFilters={activeFilters}
           onFiltersChange={setActiveFilters}
@@ -430,14 +448,18 @@ export default function App() {
             ? { label: 'Index Scanner', onClick: () => setView('batch') }
             : { label: 'Stock Scanner', onClick: () => setView('main') }
           }
-          simulationAction={hasBatchToken() ? {
+          simulationAction={hasGateToken() ? {
             label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
             onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
           } : null}
-          paperTradingAction={hasBatchToken() ? {
+          paperTradingAction={hasGateToken() ? {
             label: view === 'paper' ? 'Index Scanner' : 'Paper Trading',
             onClick: () => setView(view === 'paper' ? 'batch' : 'paper'),
           } : null}
+          settingsAction={{
+            label: 'Settings',
+            onClick: () => setView('settings'),
+          }}
           customIndices={customIndices}
           onAddCustomIndex={handleAddCustomIndex}
           onRemoveCustomIndex={handleRemoveCustomIndex}
@@ -445,11 +467,6 @@ export default function App() {
           onEngineVersionChange={setEngineVersion}
           scalpVariant={scalpVariant}
           onScalpVariantChange={setScalpVariant}
-          debugMode={debugMode}
-          onDebugModeChange={(v) => {
-            setDebugMode(v);
-            window.dispatchEvent(new Event('candlescan:check-update'));
-          }}
         />
       </Header>
 
@@ -495,6 +512,11 @@ export default function App() {
           scalpVariant={scalpVariant}
         />
       </div>
+
+      {/* Settings page */}
+      {view === 'settings' && (
+        <SettingsPage onBack={() => setView('main')} debugMode={debugMode} onDebugModeChange={setDebugMode} mode={mode} onModeChange={setMode} />
+      )}
 
       {/* Main view — hidden when not active */}
       <div style={{ display: view === 'main' ? 'block' : 'none' }}>

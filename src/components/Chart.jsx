@@ -50,7 +50,7 @@ function formatTimestamp(ts, timeframe, prevTs) {
   if (prevTs != null) {
     const prev = new Date(prevTs * 1000);
     if (prev.getDate() !== d.getDate() || prev.getMonth() !== d.getMonth()) {
-      return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${time}`;
+      return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
     }
   }
   return time;
@@ -74,7 +74,7 @@ export default function Chart({
 }) {
   const [visibleCount, setVisibleCount] = useState(() => {
     const today = countLatestSessionCandles(candles);
-    return today >= MIN_VISIBLE ? Math.min(today, MAX_VISIBLE_CAP) : Math.min(58, MAX_VISIBLE_CAP);
+    return today > 0 ? Math.min(80, today, MAX_VISIBLE_CAP) : 80;
   });
   const [panOffset, setPanOffset] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -108,7 +108,7 @@ export default function Chart({
     if (key === prevKeyRef.current) return;
     prevKeyRef.current = key;
     const today = countLatestSessionCandles(candles);
-    const defaultCount = today >= MIN_VISIBLE ? Math.min(today, MAX_VISIBLE_CAP) : Math.min(58, candles.length, MAX_VISIBLE_CAP);
+    const defaultCount = today > 0 ? Math.min(80, today, candles.length, MAX_VISIBLE_CAP) : 80;
     setVisibleCount(defaultCount);
     setPanOffset(0);
   }, [sym, candles]);
@@ -141,7 +141,7 @@ export default function Chart({
 
   const zoomFit = useCallback(() => {
     const today = countLatestSessionCandles(candles);
-    const defaultCount = today >= MIN_VISIBLE ? Math.min(today, MAX_VISIBLE_CAP) : Math.min(58, maxVisible);
+    const defaultCount = today > 0 ? Math.min(80, today, maxVisible) : Math.min(80, maxVisible);
     setVisibleCount(defaultCount);
     setPanOffset(0);
   }, [maxVisible, candles]);
@@ -258,7 +258,9 @@ export default function Chart({
   const h = height;
   const totalH = h + X_AXIS_HEIGHT;
   const leftGutter = 40;
-  const chartW = w - leftGutter;
+  const rightPadding = 65;
+  const chartW = w - leftGutter - rightPadding;
+  const chartRight = leftGutter + chartW;
 
   const xFor = (i) => leftGutter + (i / Math.max(slice.length - 1, 1)) * chartW;
   const yFor = (p) => h - ((p - lo) / range) * (h - 8) - 4;
@@ -291,17 +293,7 @@ export default function Chart({
         prevTs = slice[i].t;
       }
     }
-    // Remove labels adjacent to date-change labels to avoid overlap
-    const filtered = [];
-    for (let i = 0; i < labels.length; i++) {
-      const isNearDateChange =
-        (i > 0 && labels[i - 1].isDateChange) ||
-        (i < labels.length - 1 && labels[i + 1]?.isDateChange);
-      if (labels[i].isDateChange || !isNearDateChange) {
-        filtered.push(labels[i]);
-      }
-    }
-    return filtered;
+    return labels;
   }, [slice, timeframe]);
 
   /* ── Pattern highlight indices + labels ───────────────────────── */
@@ -509,7 +501,7 @@ export default function Chart({
           {/* Grid */}
           {gridYs.map((gy, i) => (
             <g key={i}>
-              <line x1={leftGutter} y1={yFor(gy)} x2={w} y2={yFor(gy)} stroke="#eef0f4" strokeWidth={1} />
+              <line x1={leftGutter} y1={yFor(gy)} x2={chartRight} y2={yFor(gy)} stroke="#eef0f4" strokeWidth={1} />
               <text x={4} y={yFor(gy) + 4} fontSize={11} fill="#8892a8" fontFamily={mono}>{gy.toFixed(2)}</text>
             </g>
           ))}
@@ -517,7 +509,7 @@ export default function Chart({
           {/* Pattern highlight backgrounds + labels */}
           {highlightSignals && Array.from(highlightSet).map((i) => {
             const x = xFor(i);
-            const bw = Math.max(2, chartW / slice.length - 1.5);
+            const bw = Math.max(1.5, chartW / slice.length - 2);
             const label = patternLabels.get(i);
             return (
               <g key={`hl-${i}`}>
@@ -536,7 +528,7 @@ export default function Chart({
                   const labelColor = label.direction === 'bullish' ? '#16a34a' : label.direction === 'bearish' ? '#dc2626' : '#2563eb';
                   // Clamp label X so it doesn't go off edges
                   const rawLabelX = x - labelW / 2;
-                  const clampedLabelX = Math.max(leftGutter, Math.min(rawLabelX, w - labelW - 2));
+                  const clampedLabelX = Math.max(leftGutter, Math.min(rawLabelX, chartRight - labelW - 2));
                   return (
                     <g>
                       <rect
@@ -581,9 +573,9 @@ export default function Chart({
 
           {highlightSignals && box && !boxVisible && (
             <g>
-              <line x1={leftGutter} y1={yFor(box.high)} x2={w} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
+              <line x1={leftGutter} y1={yFor(box.high)} x2={chartRight} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
               <text x={leftGutter + 4} y={yFor(box.high) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Hi</text>
-              <line x1={leftGutter} y1={yFor(box.low)} x2={w} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
+              <line x1={leftGutter} y1={yFor(box.low)} x2={chartRight} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
               <text x={leftGutter + 4} y={yFor(box.low) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Lo</text>
             </g>
           )}
@@ -592,15 +584,15 @@ export default function Chart({
           {risk && (risk.action === 'STRONG BUY' || risk.action === 'BUY' || risk.action === 'STRONG SHORT' || risk.action === 'SHORT') && (
             <g>
               {/* Entry — blue dashed */}
-              <line x1={leftGutter} y1={yFor(risk.entry)} x2={w} y2={yFor(risk.entry)} stroke="#2563eb" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+              <line x1={leftGutter} y1={yFor(risk.entry)} x2={chartRight} y2={yFor(risk.entry)} stroke="#2563eb" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
               <rect x={leftGutter + 2} y={yFor(risk.entry) - 12} width={72} height={14} rx={3} fill="#2563eb" opacity={0.85} />
               <text x={leftGutter + 6} y={yFor(risk.entry) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>Entry {risk.entry.toFixed(0)}</text>
               {/* SL — red dashed */}
-              <line x1={leftGutter} y1={yFor(risk.sl)} x2={w} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
+              <line x1={leftGutter} y1={yFor(risk.sl)} x2={chartRight} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
               <rect x={leftGutter + 2} y={yFor(risk.sl) - 12} width={56} height={14} rx={3} fill="#dc2626" opacity={0.85} />
               <text x={leftGutter + 6} y={yFor(risk.sl) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>SL {risk.sl.toFixed(0)}</text>
               {/* Target — green dashed */}
-              <line x1={leftGutter} y1={yFor(risk.target)} x2={w} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
+              <line x1={leftGutter} y1={yFor(risk.target)} x2={chartRight} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
               <rect x={leftGutter + 2} y={yFor(risk.target) - 12} width={72} height={14} rx={3} fill="#16a34a" opacity={0.85} />
               <text x={leftGutter + 6} y={yFor(risk.target) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>Target {risk.target.toFixed(0)}</text>
             </g>
@@ -609,7 +601,7 @@ export default function Chart({
           {/* Candles */}
           {slice.map((c, i) => {
             const x = xFor(i);
-            const bw = Math.max(2, chartW / slice.length - 1.5);
+            const bw = Math.max(1.5, chartW / slice.length - 2);
             const cx = x - bw / 2;
             const yH = yFor(c.h);
             const yL = yFor(c.l);
@@ -636,19 +628,7 @@ export default function Chart({
             );
           })}
 
-          {/* Current price line */}
-          {(() => {
-            const last = slice[slice.length - 1];
-            const y = yFor(last.c);
-            return (
-              <g>
-                <line x1={leftGutter} y1={y} x2={w} y2={y} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" opacity={0.7} />
-                <text x={w - 4} y={y - 4} textAnchor="end" fontSize={11} fill="#2563eb" fontFamily={mono} fontWeight={600}>
-                  {last.c.toFixed(2)}
-                </text>
-              </g>
-            );
-          })()}
+          {/* Current price line — rendered early for line, label rendered later on top */}
 
           {/* User drawings */}
           {drawings.map((d, di) => {
@@ -657,7 +637,7 @@ export default function Chart({
               const isDragging = draggingHLine === di;
               return (
                 <g key={`d-${di}`}>
-                  <line x1={leftGutter} y1={y} x2={w} y2={y} stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="6 3" />
+                  <line x1={leftGutter} y1={y} x2={chartRight} y2={y} stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="6 3" />
                   <text x={leftGutter + 4} y={y - 3} fontSize={9} fill="#8b5cf6" fontFamily={mono}>{d.price.toFixed(2)}</text>
                   {/* Drag handle */}
                   <rect
@@ -722,7 +702,7 @@ export default function Chart({
           {mousePos && mousePos.y > 0 && mousePos.y < h && mousePos.x >= leftGutter && (
             <g>
               {/* Horizontal crosshair */}
-              <line x1={leftGutter} y1={mousePos.y} x2={w} y2={mousePos.y}
+              <line x1={leftGutter} y1={mousePos.y} x2={chartRight} y2={mousePos.y}
                 stroke={drawingMode ? '#8b5cf6' : '#8892a8'} strokeWidth={0.5} strokeDasharray="2 2" opacity={0.5} />
               {/* Vertical crosshair */}
               {(() => {
@@ -736,7 +716,7 @@ export default function Chart({
               {(() => {
                 const priceText = priceFor(mousePos.y).toFixed(2);
                 const pillW = priceText.length * 7.5 + 12;
-                const pillX = Math.min(mousePos.x + 12, w - pillW - 2);
+                const pillX = Math.min(mousePos.x + 12, chartRight - pillW - 2);
                 return (
                   <g>
                     <rect x={pillX} y={mousePos.y - 9} width={pillW} height={18} rx={3}
@@ -784,20 +764,37 @@ export default function Chart({
             </g>
           )}
 
+          {/* Current price line + label */}
+          {(() => {
+            const last = slice[slice.length - 1];
+            const y = yFor(last.c);
+            return (
+              <g>
+                <line x1={leftGutter} y1={y} x2={w} y2={y} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" opacity={0.7} />
+                <text x={w - 4} y={y - 4} textAnchor="end" fontSize={11} fill="#2563eb" fontFamily={mono} fontWeight={600}>
+                  {last.c.toFixed(2)}
+                </text>
+              </g>
+            );
+          })()}
+
           {/* X-axis timestamps */}
           {xLabels.map(({ idx, text, isDateChange }) => (
-            <text
-              key={`xl-${idx}`}
-              x={xFor(idx)}
-              y={h + 15}
-              textAnchor="middle"
-              fontSize={isDateChange ? 10 : 9}
-              fontWeight={isDateChange ? 700 : 400}
-              fill={isDateChange ? '#2563eb' : '#8892a8'}
-              fontFamily={mono}
-            >
-              {text}
-            </text>
+            <g key={`xl-${idx}`}>
+              {/* Tick mark */}
+              <line x1={xFor(idx)} y1={h} x2={xFor(idx)} y2={h + 4} stroke={isDateChange ? '#2563eb' : '#c8ccd4'} strokeWidth={1} />
+              <text
+                x={xFor(idx)}
+                y={h + 15}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight={isDateChange ? 700 : 400}
+                fill={isDateChange ? '#2563eb' : '#8892a8'}
+                fontFamily={mono}
+              >
+                {text}
+              </text>
+            </g>
           ))}
         </svg>
       </div>

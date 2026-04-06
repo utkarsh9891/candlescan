@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan } from '../engine/batchScan.js';
-import { getBatchToken, setBatchToken, hasBatchToken, clearBatchToken } from '../utils/batchAuth.js';
+import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 // Engine-specific imports for engine-aware batch scanning
 import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
 import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
@@ -192,7 +192,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       const scanResults = await batchScan({
         symbols,
         timeframe,
-        batchToken: token,
+        gateToken: token,
         engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
         concurrency: 5,
@@ -207,7 +207,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
     } catch (e) {
       const msg = e?.message || String(e);
       if (msg.includes('403')) {
-        clearBatchToken();
+        clearGateToken();
         setError('Invalid passphrase. Please try again.');
       } else if (e?.name !== 'AbortError') {
         setError(msg);
@@ -225,18 +225,18 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       return;
     }
 
-    if (!hasBatchToken()) {
+    if (!hasGateToken()) {
       setShowPassphrase(true);
       return;
     }
 
-    startScan(getBatchToken());
+    startScan(getGateToken());
   }, [scanning, startScan]);
 
   const handlePassphraseSubmit = useCallback(async (passphrase) => {
-    await setBatchToken(passphrase);
+    await setGateToken(passphrase);
     setShowPassphrase(false);
-    startScan(getBatchToken()); // read the stored hash, not the plaintext
+    startScan(getGateToken()); // read the stored hash, not the plaintext
   }, [startScan]);
 
   const sq = searchQuery.trim().toUpperCase();

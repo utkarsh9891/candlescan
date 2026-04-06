@@ -11,7 +11,7 @@ const HASH_RE = /^[a-f0-9]{64}$/;
 /** Read the stored auth token (SHA-256 hash) from localStorage. */
 function getToken() {
   try {
-    const t = typeof localStorage !== 'undefined' ? localStorage.getItem('candlescan_batch_key') : '';
+    const t = typeof localStorage !== 'undefined' ? localStorage.getItem('candlescan_gate_hash') : '';
     return t && HASH_RE.test(t) ? t : '';
   } catch {
     return '';
@@ -30,7 +30,7 @@ export async function cfFetch(targetUrl, explicitToken) {
   const url = `${CF_WORKER_URL}?url=${encodeURIComponent(targetUrl)}`;
   const headers = {};
   const token = explicitToken || getToken();
-  if (token && HASH_RE.test(token)) headers['X-Batch-Token'] = token;
+  if (token && HASH_RE.test(token)) headers['X-Gate-Token'] = token;
 
   return fetch(url, { cache: 'no-store', headers });
 }

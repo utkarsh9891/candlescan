@@ -10,6 +10,26 @@ Mobile-first NSE candlestick pattern scanner with liquidity box analysis, risk s
 
 ---
 
+## Table of Contents
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [npm Scripts](#npm-scripts)
+- [Project Structure](#project-structure)
+- [Data Flow](#data-flow)
+- [Environment Differences](#environment-differences)
+- [Deployment](#deployment)
+- [Local Chart Cache](#local-chart-cache)
+- [Testing](#testing)
+- [Versioning](#versioning)
+- [Debug Mode](#debug-mode)
+- [Gate Auth Flow](#gate-auth-flow)
+- [Rate Limiting](#rate-limiting)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+---
+
 ## Features
 
 ### Single Stock Scanner
@@ -63,12 +83,13 @@ Mobile-first NSE candlestick pattern scanner with liquidity box analysis, risk s
 | Build | Vite 6 |
 | Chart | Custom SVG (no D3/Chart.js) |
 | Data | Yahoo Finance v8 chart API |
+| Data (alt) | Zerodha Kite Connect API (optional, premium) |
 | Index data | NSE India equity-stockIndices API |
 | CORS proxy | Cloudflare Worker (production) |
 | PWA | vite-plugin-pwa (Workbox) |
 | Deploy | GitHub Actions → GitHub Pages |
-| Auth | SHA-256 passphrase via Cloudflare Worker |
-| Rate limit | Cloudflare KV (20 req/day per IP) |
+| Auth | RSA + SHA-256 gate auth via Cloudflare Worker |
+| Rate limit | Cloudflare KV (20 req/day free tier, unlimited premium) |
 
 **Runtime dependencies**: React + React DOM only. Everything else is custom code.
 
@@ -128,6 +149,7 @@ candlescan/
 │   │   ├── SimpleView.jsx       # Compact result card (price, action, score ring)
 │   │   ├── AdvancedView.jsx     # Extended view (quote, timer, breakdown)
 │   │   ├── BatchScanPage.jsx    # Index scanner: progress, results, filters
+│   │   ├── SettingsPage.jsx     # Premium gate, data source, Zerodha credential management
 │   │   ├── GlobalMenu.jsx       # Hamburger menu: signal filters + page nav
 │   │   ├── Header.jsx           # Brand, status badge, mode toggle
 │   │   ├── SearchBar.jsx        # Symbol input + index button + scan
@@ -139,6 +161,7 @@ candlescan/
 │   │   └── EmptyState.jsx       # Placeholder before first scan
 │   ├── engine/
 │   │   ├── fetcher.js           # Yahoo Finance fetch + fallback chain
+│   │   ├── zerodhaFetcher.js    # Zerodha Kite Connect API fetcher
 │   │   ├── patterns.js          # 46-rule pattern detection (8 categories)
 │   │   ├── liquidityBox.js      # Consolidation box + breakout/trap
 │   │   ├── risk.js              # 5-component risk scoring (0-100)
@@ -151,7 +174,8 @@ candlescan/
 │   ├── data/
 │   │   └── signalCategories.js  # Category labels + rule counts
 │   └── utils/
-│       └── batchAuth.js         # Passphrase localStorage helpers
+│       ├── batchAuth.js         # Gate auth — passphrase hashing + localStorage helpers
+│       └── credentialVault.js   # RSA credential encryption + vault storage
 ├── worker/
 │   ├── index.js                 # Cloudflare Worker: CORS proxy + auth + rate limiting
 │   ├── wrangler.toml            # Worker config + KV binding
@@ -161,9 +185,12 @@ candlescan/
 │   ├── deploy-to-pages.sh       # Legacy manual deploy
 │   ├── simulate-day.mjs         # CLI trading simulation
 │   ├── warm-chart-cache.mjs     # Pre-warm chart cache
+│   ├── rotate-keys.sh           # RSA key pair generation + CF Worker deployment
 │   └── lib/
 │       ├── chart-cache-fs.mjs   # Disk-based chart cache read/write
 │       └── nse-http.mjs         # NSE HTTP helpers for Node
+├── docs/
+│   └── ZERODHA_SETUP.md         # Zerodha integration setup guide
 ├── cache/
 │   └── charts/                  # Local chart JSON cache (gitignored)
 └── .github/
@@ -179,7 +206,8 @@ candlescan/
 User enters symbol
   → normalizeSymbol() (RELIANCE → RELIANCE.NS, NIFTY50 → ^NSEI)
   → fetchOHLCV(symbol, timeframe)
-    → Try: Vite proxy → CF Worker → Jina Reader → allorigins
+    → If Zerodha configured: try Zerodha Kite API via CF Worker
+    → Fallback: Vite proxy → CF Worker → Jina Reader → allorigins
     → Parse Yahoo v8 JSON → trim trailing flat candles
   → detectPatterns(candles)        # 46 rules, 8 categories
   → detectLiquidityBox(candles)    # consolidation zone detection
@@ -193,7 +221,7 @@ User enters symbol
 ```
 User selects index + timeframe → Scan All
   → fetchNseIndexSymbolList(index)  # NSE API → symbol list
-  → batchScan({symbols, timeframe, batchToken})
+  → batchScan({symbols, timeframe, gateToken})
     → 5 concurrent fetches, 200ms delay between batches
     → Per stock: fetchOHLCV → patterns → box → risk
   → Sort by action rank + confidence
@@ -308,12 +336,33 @@ In-app API call inspector — toggle via hamburger menu → "Debug mode" checkbo
 When enabled:
 - Bottom panel shows all `fetch()` calls in real-time
 - Each entry: timestamp, HTTP status (color-coded), response time, URL
-- 🔑 icon indicates requests with auth token
+- Key icon indicates requests with gate token
 - Shows CF Worker proxy destinations (chart data, NSE index, quotes)
 - "Clear" button to reset log
 - Last 50 requests retained
 
-Use to verify: auth token is being sent, requests aren't 429/403, response times are reasonable.
+Use to verify: gate token is being sent, requests aren't 429/403, response times are reasonable.
+
+---
+
+## Gate Auth Flow
+
+1. User enters passphrase → SHA-256 hash stored in localStorage (`candlescan_gate_hash`)
+2. POST /gate/unlock with hash → CF Worker validates → returns RSA public key
+3. Zerodha credentials encrypted with RSA public key → stored in localStorage
+4. API requests send `X-Gate-Token` header + encrypted vault blob
+5. CF Worker decrypts vault with RSA private key → proxies to Kite API
+
+Environment variable on the CF Worker: `GATE_PASSPHRASE_HASH` (see [worker/OPS.md](worker/OPS.md)).
+
+---
+
+## Rate Limiting
+
+- **Free tier**: 20 req/day per IP, batch scan disabled
+- **Premium** (valid gate token): unlimited, batch scan + Zerodha enabled
+
+Rate limits are enforced via Cloudflare KV. See [worker/OPS.md](worker/OPS.md) for configuration.
 
 ---
 
@@ -324,8 +373,10 @@ Use to verify: auth token is being sent, requests aren't 429/403, response times
 | Blank page on Pages | Check `base: '/candlescan/'` in vite.config.js |
 | No chart data on Pages | Try different network; CORS proxies may be blocked |
 | `npm start` fails | Run `npm install` first |
-| Batch scan 403 | Wrong passphrase — see [worker/OPS.md](worker/OPS.md) |
-| Batch scan 429 | Rate limited (20/day per IP); use passphrase to bypass |
+| Gate auth 403 | Wrong passphrase — see [worker/OPS.md](worker/OPS.md) |
+| Rate limited | 20/day per IP; unlock premium for unlimited |
+| Zerodha 401 | Access token expired — re-enter in Settings |
+| Vault decrypt error | Keys rotated — re-enter credentials in Settings |
 | Demo data not showing | `?simulate=1` only works in dev, not production |
 | Browse stocks empty | Redeploy CF Worker with NSE allowlist; or NSE is down |
 

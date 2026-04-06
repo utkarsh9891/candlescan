@@ -2,8 +2,28 @@
 
 > This file helps AI coding agents (Claude, Cursor, Copilot, Aider, etc.) understand the project quickly and make correct changes.
 
+## Table of Contents
+- [What is this project?](#what-is-this-project)
+- [Quick commands](#quick-commands)
+- [Dev server with simulated data](#dev-server-with-simulated-data-no-network-needed)
+- [Project Principles & Guardrails](#project-principles--guardrails)
+- [Architecture](#architecture)
+- [Key Files](#key-files)
+- [Data Flow](#data-flow)
+- [View Routing](#view-routing-appjsx)
+- [Chart Interactions](#chart-interactions-chartjsx)
+- [Risk Score Algorithm](#risk-score-algorithm)
+- [Caching Layers](#caching-layers)
+- [Auth & Rate Limiting](#auth--rate-limiting)
+- [PWA Details](#pwa-details)
+- [Three Code Paths Must Stay in Sync](#critical-three-code-paths-must-stay-in-sync)
+- [Engine Identity Constraints](#critical-engine-identity-constraints)
+- [Deployment & Versioning](#deployment--versioning)
+- [Conventions](#conventions)
+- [Testing](#testing)
+
 ## What is this project?
-CandleScan is a React 18 + Vite 6 mobile-first PWA for NSE (National Stock Exchange of India) candlestick pattern detection, liquidity box analysis, and risk scoring (0-100). It fetches OHLCV data from Yahoo Finance, renders interactive SVG charts, and includes a batch index scanner with auth-gated access.
+CandleScan is a React 18 + Vite 6 mobile-first PWA for NSE (National Stock Exchange of India) candlestick pattern detection, liquidity box analysis, and risk scoring (0-100). It fetches OHLCV data from Yahoo Finance (or optionally Zerodha Kite Connect), renders interactive SVG charts, and includes a batch index scanner with auth-gated access.
 
 ## Quick commands
 ```bash
@@ -37,7 +57,7 @@ Three engines represent fundamentally different trading models — NOT tunable v
 
 - Tests enforce hard constraints (`risk-scalp.test.js` asserts `maxHoldBars ≤ 15`)
 - If P&L tuning pushes a parameter past a hard limit, the **engine design** needs rethinking, not the limit
-- Scalp variants (Momentum, Box Theory, Quick Flip, Touch & Turn, Fusion) are independent strategies — zero cross-pollination between them
+- Scalp variants: Momentum (original) and Fusion (consensus of rule-based strategies). Box Theory, Quick Flip, Touch & Turn exist as files but are only used internally by Fusion.
 - All variants respect the 3-function interface: `detectPatterns`, `detectLiquidityBox`, `computeRiskScore`
 
 ### Scalping Philosophy
@@ -81,8 +101,10 @@ Three engines represent fundamentally different trading models — NOT tunable v
 - **PWA**: `vite-plugin-pwa` with Workbox `autoUpdate` — service worker + manifest
 - **Deployment**: GitHub Actions → GitHub Pages at `utkarsh9891.github.io/candlescan/`
 - **CORS proxy**: Cloudflare Worker at `worker/` for Yahoo Finance + NSE India `/api/*`
-- **Auth**: SHA-256 passphrase validation at Worker level; `src/utils/batchAuth.js` for localStorage
-- **Rate limiting**: Cloudflare KV — 20 req/day per IP (unauthenticated); batch token bypasses
+- **Gate auth**: RSA + SHA-256 via CF Worker; `src/utils/batchAuth.js` (gate token) + `src/utils/credentialVault.js` (vault encryption)
+- **Rate limiting**: Cloudflare KV — 20 req/day per IP (unauthenticated); gate token bypasses
+- **Zerodha proxy**: `src/engine/zerodhaFetcher.js` — optional Kite Connect data source via CF Worker
+- **Settings**: `src/components/SettingsPage.jsx` — premium gate, data source, credentials
 - **Index constituents**: NSE `equity-stockIndices` at runtime; dev uses Vite proxy; prod uses CF Worker
 - **Local chart cache**: `cache/charts/` (gitignored) — `vite-plugin-chart-cache.mjs` serves from disk in dev
 
@@ -92,15 +114,17 @@ Three engines represent fundamentally different trading models — NOT tunable v
 
 | File | Purpose |
 |------|---------|
-| `src/App.jsx` | Root component: 15+ state vars, scan logic, view routing (`main`/`batch`), history, drawings |
+| `src/App.jsx` | Root component: 15+ state vars, scan logic, view routing (`main`/`batch`/`settings`), history, drawings |
 | `src/components/Chart.jsx` | SVG chart: candles, zoom (ctrl+wheel/pinch), pan, crosshair, H-Line/Box drawings, pattern highlights, liquidity box overlay |
 | `src/components/SimpleView.jsx` | Compact result card: price, change%, action label, risk ring, top 2 patterns, entry/SL/target |
 | `src/components/AdvancedView.jsx` | Extended view: adds bid/ask quote, exit timer, full 5-component breakdown, R:R |
 | `src/components/BatchScanPage.jsx` | Index scanner: index selector, timeframe pills, progress bar, result cards with filter pills (Actionable/All + Buy/Short), search, passphrase modal |
+| `src/components/SettingsPage.jsx` | Premium gate, data source config, Zerodha credential management |
 | `src/components/GlobalMenu.jsx` | Hamburger menu: nav action (Stock Scanner ↔ Index Scanner) + signal category filters (8 checkboxes) |
 | `src/components/Header.jsx` | Brand, status badge (LIVE/DEMO/NO DATA/READY), Simple/Advanced toggle, last scan time |
 | `src/components/IndexConstituentsSidebar.jsx` | Slide-out modal: index dropdown + searchable symbol list |
-| `src/engine/fetcher.js` | Yahoo Finance v8 fetch with fallback chain: Vite proxy → CF Worker → Jina Reader → allorigins. Optional `batchToken` header. Simulated data in dev. |
+| `src/engine/fetcher.js` | Yahoo Finance v8 fetch with fallback chain: Vite proxy → CF Worker → Jina Reader → allorigins. Optional `gateToken` header. Simulated data in dev. |
+| `src/engine/zerodhaFetcher.js` | Zerodha Kite Connect OHLCV fetcher via CF Worker |
 | `src/engine/patterns.js` | 46-rule pattern detection across 8 categories. Returns `{ name, direction, strength, reliability, category, candleIndices }` |
 | `src/engine/liquidityBox.js` | Consolidation box detection (last 25 candles, segments 5-12 bars). ATR-relative thresholds, volume-aware scoring, breakout strength + trap depth |
 | `src/engine/risk.js` | 5-component scoring: signal clarity (0-25), low noise (0-20), risk:reward (0-25), pattern reliability (0-15), confluence (0-15). Rescaled 40-100. Action thresholds: ≥72 STRONG, ≥58 BUY/SHORT, ≥50 WAIT |
@@ -108,12 +132,13 @@ Three engines represent fundamentally different trading models — NOT tunable v
 | `src/engine/nseIndexFetch.js` | Fetch NSE index constituents: dev proxy → CF Worker → allorigins fallback |
 | `src/engine/nseIndexParse.js` | Parse NSE JSON: filter series='EQ', deduplicate symbols |
 | `src/engine/yahooQuote.js` | Yahoo v7 quote API for bid/ask (Advanced mode only) |
-| `src/utils/batchAuth.js` | `getBatchToken()`, `setBatchToken()`, `hasBatchToken()`, `clearBatchToken()` — localStorage key `candlescan_batch_key` |
+| `src/utils/batchAuth.js` | `getGateToken()`, `setGateToken()`, `hasGateToken()`, `clearGateToken()` — localStorage key `candlescan_gate_hash` |
+| `src/utils/credentialVault.js` | RSA vault encryption, gate unlock, public key storage |
 | `src/config/nseIndices.js` | `NSE_INDEX_OPTIONS` array (NIFTY 50 through NIFTY SMALLCAP 250), `DEFAULT_NSE_INDEX_ID` = 'NIFTY 200' |
 | `src/data/signalCategories.js` | Category labels + `APPROX_PATTERN_RULES` count |
 | `vite.config.js` | Base `/candlescan/`, dev proxies (`__candlescan-yahoo`, `__candlescan-nse`), VitePWA plugin config |
 | `vite-plugin-chart-cache.mjs` | Vite middleware: intercepts chart requests, serves from/writes to `cache/charts/` |
-| `worker/index.js` | Cloudflare Worker: CORS proxy (Yahoo + NSE), `X-Batch-Token` SHA-256 validation, IP rate limiting via KV |
+| `worker/index.js` | Cloudflare Worker: CORS proxy (Yahoo + NSE), `X-Gate-Token` SHA-256 validation, IP rate limiting via KV |
 | `worker/wrangler.toml` | Worker config + `RATE_LIMIT` KV namespace binding |
 | `worker/OPS.md` | Operations guide: passphrase reset, deploy, troubleshooting |
 
@@ -124,9 +149,10 @@ Three engines represent fundamentally different trading models — NOT tunable v
 ### Single Stock Scan
 ```
 SearchBar input → App.runScan(symbol)
-  → fetchOHLCV(symbol, timeframe, {batchToken?})
+  → fetchOHLCV(symbol, timeframe, {gateToken?})
     → normalizeSymbol: RELIANCE → RELIANCE.NS, NIFTY50 → ^NSEI
-    → Fallback chain: Vite proxy → CF Worker → Jina → allorigins
+    → Data source: Yahoo (fallback chain: Vite proxy → CF Worker → Jina → allorigins)
+                   OR Zerodha Kite Connect (via CF Worker, if configured)
     → parseChartJson → trimTrailingFlatCandles
   → detectPatterns(candles)         # 46 rules, sorted by strength
   → detectLiquidityBox(candles)     # box detection + breakout/trap
@@ -138,7 +164,7 @@ SearchBar input → App.runScan(symbol)
 ### Batch Index Scan
 ```
 BatchScanPage → Scan All → fetchNseIndexSymbolList(index)
-  → batchScan({symbols, timeframe, batchToken, concurrency:5, delayMs:200})
+  → batchScan({symbols, timeframe, gateToken, concurrency:5, delayMs:200})
     → Per stock: fetchOHLCV → detectPatterns → detectLiquidityBox → computeRiskScore
     → onProgress callback updates progress bar
   → Sort results: action rank desc → confidence desc
@@ -150,16 +176,19 @@ BatchScanPage → Scan All → fetchNseIndexSymbolList(index)
 
 ## View Routing (App.jsx)
 
-The app has two parallel views managed by `view` state (`'main'` | `'batch'`):
+The app has parallel views managed by `view` state (`'main'` | `'batch'` | `'settings'`):
 
 ```jsx
-// Both views always mounted (display: none toggling)
+// Views always mounted (display: none toggling)
 // BatchScanPage keeps running in background when viewing a stock
 <div style={{ display: view === 'batch' ? 'block' : 'none' }}>
   <BatchScanPage ... />
 </div>
 <div style={{ display: view === 'main' ? 'block' : 'none' }}>
   {/* SearchBar, Chart, SimpleView/AdvancedView */}
+</div>
+<div style={{ display: view === 'settings' ? 'block' : 'none' }}>
+  <SettingsPage ... />
 </div>
 ```
 
@@ -219,7 +248,8 @@ Navigation via shared GlobalMenu:
 | Chart cache | Disk (`cache/charts/`) | 7 days | Dev only (Vite plugin) |
 | NSE symbols | sessionStorage | 45 min | Browser tab |
 | Mode + history | localStorage | Permanent | Browser |
-| Batch token | localStorage | Permanent | Browser |
+| Gate token | localStorage | Permanent | Browser |
+| Zerodha vault | localStorage | Permanent | Browser (RSA-encrypted) |
 | HTTP cache | None (`no-store`) | N/A | All fetches |
 | PWA assets | Service worker | Until new deploy | Browser |
 
@@ -227,17 +257,21 @@ Navigation via shared GlobalMenu:
 
 ## Auth & Rate Limiting
 
-### Batch Auth Flow
-1. User enters passphrase → stored in localStorage (`candlescan_batch_key`)
-2. `fetchOHLCV` sends `X-Batch-Token: <passphrase>` header to CF Worker
-3. Worker computes `SHA256(passphrase)`, compares to `env.BATCH_AUTH_HASH`
-4. Match → process request (no rate limit). Mismatch → 403
+### Gate Auth Flow
+1. User enters passphrase → SHA-256 hash stored as `candlescan_gate_hash`
+2. `fetchOHLCV` sends `X-Gate-Token: <hash>` header to CF Worker
+3. Worker compares to `env.GATE_PASSPHRASE_HASH`
+4. Match → no rate limit. Mismatch → 403
 
-### Rate Limiting (unauthenticated)
-- KV key: `rl:{SHA256(IP)}:{YYYY-MM-DD}`
-- Limit: 20 requests/day per IP
-- TTL: 86400s (auto-expires)
-- Authenticated requests bypass entirely
+### Zerodha Auth
+- Zerodha credentials (API key, API secret, access token) are RSA-encrypted in browser using a public key
+- Encrypted vault stored in localStorage
+- Decrypted server-side by CF Worker using the corresponding private key
+- Gate token required to unlock vault operations
+
+### Rate Limiting
+- Free tier: 20 requests/day per IP (KV key: `rl:{SHA256(IP)}:{YYYY-MM-DD}`, TTL: 86400s)
+- Premium (gate token): unlimited, bypasses rate limiting entirely
 
 ### Worker Allowed Origins
 ```javascript
@@ -324,8 +358,8 @@ Each engine represents a fundamentally different trading style. **Never tune par
 ### Cloudflare Worker
 ```bash
 cd worker
-npx wrangler deploy                    # Deploy code
-npx wrangler secret put BATCH_AUTH_HASH  # Set/rotate passphrase hash
+npx wrangler deploy                       # Deploy code
+npx wrangler secret put GATE_PASSPHRASE_HASH  # Set/rotate passphrase hash
 ```
 Full guide: `worker/OPS.md`
 
@@ -360,7 +394,7 @@ npm run test:watch  # Watch mode
 | `src/engine/liquidityBox.test.js` | Box detection: consolidation, breakout, quality score, index bounds, empty input |
 | `src/engine/fetcher.test.js` | `trimTrailingFlatCandles`, `TIMEFRAME_MAP` validation |
 | `src/config/nseIndices.test.js` | Custom index CRUD, dedup, merge with built-in, localStorage mock |
-| `src/utils/batchAuth.test.js` | Token get/set/has/clear with localStorage mock |
+| `src/utils/batchAuth.test.js` | Gate token get/set/has/clear with localStorage mock |
 
 ### Test fixtures
 `src/engine/__fixtures__/candles.js` — reusable candle data sets:

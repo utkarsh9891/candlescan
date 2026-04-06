@@ -12,7 +12,7 @@ import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.
 import { getScalpVariantFns, SCALP_VARIANTS, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
-import { getBatchToken } from '../utils/batchAuth.js';
+import { getGateToken } from '../utils/batchAuth.js';
 import { MARGIN_MULTIPLIER, fetchMarginMap } from '../data/marginData.js';
 
 const mono = "'SF Mono', Menlo, monospace";
@@ -160,7 +160,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
         indexDirection: idxDir,
         capital, positionSize, maxConcurrent, maxTotalTrades,
         margin, marginMap,
-        batchToken: getBatchToken(),
+        gateToken: getGateToken(),
         onProgress: (phase, completed, total, current) => {
           setProgress({ phase, completed, total, current });
         },

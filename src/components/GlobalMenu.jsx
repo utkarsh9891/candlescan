@@ -39,8 +39,9 @@ const CLASSIC_CATEGORIES_UI = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, paperTradingAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, scalpVariant, onScalpVariantChange, debugMode, onDebugModeChange }) {
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, paperTradingAction, settingsAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, scalpVariant, onScalpVariantChange }) {
   const [open, setOpen] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -149,6 +150,21 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
             </>
           )}
 
+          {/* Settings */}
+          {settingsAction && (
+            <>
+              <button type="button" onClick={() => { setOpen(false); settingsAction.onClick(); }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8892a8" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+                Settings
+              </button>
+              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
+            </>
+          )}
+
           {/* 1. Engine */}
           {onEngineVersionChange && (
             <>
@@ -184,24 +200,37 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
             </>
           )}
 
-          {/* 2. Signal filters */}
+          {/* 2. Signal filters (collapsible) */}
           <div style={{ borderTop: '1px solid #eef0f4', marginTop: 2 }} />
-          <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            Signal filters
-            <span style={{ fontSize: 10, background: filterCount === CATEGORIES.length ? '#e2e5eb' : '#2563eb', color: filterCount === CATEGORIES.length ? '#4a5068' : '#fff', borderRadius: 10, padding: '1px 6px', fontWeight: 700 }}>
-              {filterCount}/{CATEGORIES.length}
+          <button type="button" onClick={() => setFiltersExpanded(v => !v)}
+            style={{ width: '100%', padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', border: 'none', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
+            <span>{filtersExpanded ? '▾' : '▸'} Signal filters</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {!filtersExpanded && (
+                <>
+                  <span onClick={(e) => { e.stopPropagation(); onFiltersChange(new Set(CATEGORIES.map(c => c.key))); }} style={{ fontSize: 10, color: '#2563eb', cursor: 'pointer' }}>All</span>
+                  <span onClick={(e) => { e.stopPropagation(); onFiltersChange(new Set()); }} style={{ fontSize: 10, color: '#8892a8', cursor: 'pointer' }}>None</span>
+                </>
+              )}
+              <span style={{ fontSize: 10, background: filterCount === CATEGORIES.length ? '#e2e5eb' : '#2563eb', color: filterCount === CATEGORIES.length ? '#4a5068' : '#fff', borderRadius: 10, padding: '1px 6px', fontWeight: 700 }}>
+                {filterCount}/{CATEGORIES.length}
+              </span>
             </span>
-          </div>
-          {CATEGORIES.map(({ key, label }) => (
-            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: activeFilters.has(key) ? '#1a1d26' : '#8892a8', borderRadius: 4, WebkitTapHighlightColor: 'transparent' }}>
-              <input type="checkbox" checked={activeFilters.has(key)} onChange={() => toggleFilter(key)} style={{ accentColor: '#2563eb', margin: 0, width: 18, height: 18 }} />
-              {label}
-            </label>
-          ))}
-          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, paddingTop: 8, padding: '6px 10px 4px', display: 'flex', gap: 6 }}>
-            <button type="button" onClick={() => onFiltersChange(new Set(CATEGORIES.map(c => c.key)))} style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '8px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>
-            <button type="button" onClick={() => onFiltersChange(new Set())} style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '8px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#8892a8', cursor: 'pointer' }}>None</button>
-          </div>
+          </button>
+          {filtersExpanded && (
+            <>
+              {CATEGORIES.map(({ key, label }) => (
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: activeFilters.has(key) ? '#1a1d26' : '#8892a8', borderRadius: 4, WebkitTapHighlightColor: 'transparent' }}>
+                  <input type="checkbox" checked={activeFilters.has(key)} onChange={() => toggleFilter(key)} style={{ accentColor: '#2563eb', margin: 0, width: 16, height: 16 }} />
+                  {label}
+                </label>
+              ))}
+              <div style={{ padding: '4px 10px 4px', display: 'flex', gap: 6 }}>
+                <button type="button" onClick={() => onFiltersChange(new Set(CATEGORIES.map(c => c.key)))} style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>
+                <button type="button" onClick={() => onFiltersChange(new Set())} style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#8892a8', cursor: 'pointer' }}>None</button>
+              </div>
+            </>
+          )}
 
           {/* 3. Custom indices */}
           {onAddCustomIndex && (
@@ -225,23 +254,8 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
             </>
           )}
 
-          {/* 4. Debug + Version */}
+          {/* 4. Version */}
           <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '8px 10px 6px' }}>
-            {onDebugModeChange && (
-              <label style={{
-                display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
-                fontWeight: 600, color: debugMode ? '#2563eb' : '#8892a8',
-                cursor: 'pointer', marginBottom: 6,
-              }}>
-                <input
-                  type="checkbox"
-                  checked={!!debugMode}
-                  onChange={(e) => onDebugModeChange(e.target.checked)}
-                  style={{ accentColor: '#2563eb', margin: 0, width: 14, height: 14 }}
-                />
-                Debug mode
-              </label>
-            )}
             <div style={{ fontSize: 10, color: '#b0b8c8', fontFamily: "'SF Mono', Menlo, monospace" }}>
               {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v?'}
               {typeof __BUILD_TIME__ !== 'undefined' && (

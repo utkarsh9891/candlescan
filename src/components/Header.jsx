@@ -1,4 +1,4 @@
-export default function Header({ badge, lastScan, mode, onModeChange, children }) {
+export default function Header({ badge, lastScan, children }) {
   const styles = {
     live: { bg: '#16a34a', label: 'LIVE' },
     demo: { bg: '#d97706', label: 'DEMO' },
@@ -56,32 +56,6 @@ export default function Header({ badge, lastScan, mode, onModeChange, children }
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-        .cs-header__modes {
-          display: inline-flex;
-          border-radius: 999px;
-          border: 1px solid #e2e5eb;
-          background: #f0f1f4;
-          padding: 2px;
-          gap: 0;
-          flex-shrink: 0;
-        }
-        .cs-header__modes button {
-          padding: 6px 12px;
-          font-size: 11px;
-          font-weight: 700;
-          border-radius: 999px;
-          border: none;
-          background: transparent;
-          color: #8892a8;
-          cursor: pointer;
-          white-space: nowrap;
-          -webkit-tap-highlight-color: transparent;
-        }
-        .cs-header__modes button[data-active="true"] {
-          background: #fff;
-          color: #1a1d26;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
         @media (max-width: 480px) {
           .cs-header {
             flex-direction: column;
@@ -114,21 +88,6 @@ export default function Header({ badge, lastScan, mode, onModeChange, children }
           </span>
         ) : null}
 
-        <div className="cs-header__modes">
-          {['simple', 'advanced'].map((m) => {
-            const active = mode === m;
-            return (
-              <button
-                key={m}
-                type="button"
-                data-active={active}
-                onClick={() => onModeChange(m)}
-              >
-                {m === 'simple' ? 'Simple' : 'Advanced'}
-              </button>
-            );
-          })}
-        </div>
 
         <span style={{ flexShrink: 0 }}>{children}</span>
       </div>

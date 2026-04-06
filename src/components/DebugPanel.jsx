@@ -32,7 +32,7 @@ export default function DebugPanel({ open, onClose }) {
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '?';
       const method = args[1]?.method || 'GET';
       const reqHeaders = args[1]?.headers || {};
-      const hasToken = !!reqHeaders['X-Batch-Token'];
+      const hasToken = !!reqHeaders['X-Gate-Token'];
       const start = performance.now();
 
       let shortUrl = url;
@@ -235,7 +235,7 @@ export default function DebugPanel({ open, onClose }) {
                   {Object.entries(e.reqHeaders).map(([k, v]) => (
                     <div key={k} style={{ color: '#8892a8' }}>
                       <span style={{ color: '#d97706' }}>{k}</span>: {
-                        k === 'X-Batch-Token' ? v.slice(0, 8) + '...' + v.slice(-4) : v
+                        k === 'X-Gate-Token' ? v.slice(0, 8) + '...' + v.slice(-4) : v
                       }
                     </div>
                   ))}
