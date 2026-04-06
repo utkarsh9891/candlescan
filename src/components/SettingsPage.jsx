@@ -228,6 +228,31 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#1a1d26' }}>Settings</h1>
       </div>
 
+      {/* View Mode */}
+      {onModeChange && (
+        <div style={card}>
+          <div style={sectionTitle}>View Mode</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[
+              { key: 'simple', label: 'Simple' },
+              { key: 'advanced', label: 'Advanced' },
+            ].map(opt => (
+              <button key={opt.key} type="button"
+                onClick={() => { onModeChange(opt.key); try { localStorage.setItem('candlescan_mode', opt.key); } catch {} }}
+                style={{
+                  flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 600,
+                  border: mode === opt.key ? 'none' : '1px solid #e2e5eb',
+                  borderRadius: 8, cursor: 'pointer',
+                  background: mode === opt.key ? '#2563eb' : '#fff',
+                  color: mode === opt.key ? '#fff' : '#4a5068',
+                }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Premium Gate */}
       <div style={card}>
         <div style={sectionTitle}>Premium Gate</div>
@@ -266,31 +291,6 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
           </>
         )}
       </div>
-
-      {/* View Mode */}
-      {onModeChange && (
-        <div style={card}>
-          <div style={sectionTitle}>View Mode</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {[
-              { key: 'simple', label: 'Simple' },
-              { key: 'advanced', label: 'Advanced' },
-            ].map(opt => (
-              <button key={opt.key} type="button"
-                onClick={() => { onModeChange(opt.key); try { localStorage.setItem('candlescan_mode', opt.key); } catch {} }}
-                style={{
-                  flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 600,
-                  border: mode === opt.key ? 'none' : '1px solid #e2e5eb',
-                  borderRadius: 8, cursor: 'pointer',
-                  background: mode === opt.key ? '#2563eb' : '#fff',
-                  color: mode === opt.key ? '#fff' : '#4a5068',
-                }}>
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Data Source */}
       <div style={card}>

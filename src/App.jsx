@@ -448,14 +448,14 @@ export default function App() {
             ? { label: 'Index Scanner', onClick: () => setView('batch') }
             : { label: 'Stock Scanner', onClick: () => setView('main') }
           }
-          simulationAction={hasGateToken() ? {
+          simulationAction={{
             label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
             onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
-          } : null}
-          paperTradingAction={hasGateToken() ? {
+          }}
+          paperTradingAction={{
             label: view === 'paper' ? 'Index Scanner' : 'Paper Trading',
             onClick: () => setView(view === 'paper' ? 'batch' : 'paper'),
-          } : null}
+          }}
           settingsAction={{
             label: 'Settings',
             onClick: () => setView('settings'),
