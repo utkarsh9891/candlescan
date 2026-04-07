@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { fetchOHLCV } from './engine/fetcher.js';
 import { detectPatterns as detectPatternsClassic } from './engine/patterns-classic.js';
 import { detectLiquidityBox as detectLiquidityBoxClassic } from './engine/liquidityBox-classic.js';
@@ -27,11 +27,29 @@ import PaperTradingPage from './components/PaperTradingPage.jsx';
 import SettingsPage from './components/SettingsPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
+import { getMarketStatus } from './utils/marketHours.js';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
 import { hasGateToken } from './utils/batchAuth.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
-import { fetchNseIndexSymbolList } from './engine/nseIndexFetch.js';
+import { fetchNseIndexSymbolList, fetchNseIndexWithNames } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
+
+function DataDelayDisclaimer({ candles, simulated }) {
+  const status = getMarketStatus();
+  if (simulated || !candles?.length || !status.isOpen) return null;
+
+  // Only show during market hours when data may be delayed
+  const lastTs = candles[candles.length - 1]?.t;
+  const delaySec = lastTs ? Math.floor(Date.now() / 1000 - lastTs) : 0;
+  const delayText = delaySec > 120
+    ? `${Math.floor(delaySec / 60)}m`
+    : delaySec > 0 ? `~${delaySec}s` : '~1-2 min';
+  return (
+    <div style={{ fontSize: 10, color: '#8892a8', textAlign: 'right', marginTop: -8, marginBottom: 4, paddingRight: 2 }}>
+      Data delayed by {delayText} (Yahoo Finance)
+    </div>
+  );
+}
 
 // Categories are engine-dependent — initialized after engineVersion state
 
@@ -42,17 +60,18 @@ function readNseSymsCache(indexId) {
   try {
     const raw = sessionStorage.getItem(NSE_SYM_CACHE_PREFIX + indexId);
     if (!raw) return null;
-    const { t, syms } = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    const { t, syms, companyMap: cm } = parsed;
     if (!Array.isArray(syms) || Date.now() - t > NSE_SYM_CACHE_MS) return null;
-    return syms;
+    return { syms, companyMap: cm || {} };
   } catch {
     return null;
   }
 }
 
-function writeNseSymsCache(indexId, syms) {
+function writeNseSymsCache(indexId, syms, companyMap) {
   try {
-    sessionStorage.setItem(NSE_SYM_CACHE_PREFIX + indexId, JSON.stringify({ t: Date.now(), syms }));
+    sessionStorage.setItem(NSE_SYM_CACHE_PREFIX + indexId, JSON.stringify({ t: Date.now(), syms, companyMap }));
   } catch {
     /* quota */
   }
@@ -141,6 +160,7 @@ export default function App() {
   const [constituents, setConstituents] = useState([]);
   const [constituentsLoading, setConstituentsLoading] = useState(false);
   const [constituentsError, setConstituentsError] = useState('');
+  const [companyMap, setCompanyMap] = useState({}); // SYMBOL → "Company Name"
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Signal filter state
@@ -239,8 +259,9 @@ export default function App() {
     let cancelled = false;
     (async () => {
       const cached = readNseSymsCache(nseIndex);
-      if (cached?.length) {
-        setConstituents(cached);
+      if (cached?.syms?.length) {
+        setConstituents(cached.syms);
+        setCompanyMap(cached.companyMap || {});
         setConstituentsError('');
         setConstituentsLoading(false);
         return;
@@ -249,10 +270,11 @@ export default function App() {
       setConstituentsError('');
       setConstituents([]);
       try {
-        const syms = await fetchNseIndexSymbolList(nseIndex);
+        const result = await fetchNseIndexWithNames(nseIndex);
         if (!cancelled) {
-          setConstituents(syms);
-          writeNseSymsCache(nseIndex, syms);
+          setConstituents(result.symbols);
+          setCompanyMap(result.companyMap || {});
+          writeNseSymsCache(nseIndex, result.symbols, result.companyMap);
         }
       } catch (e) {
         if (!cancelled) {
@@ -370,7 +392,7 @@ export default function App() {
     runScan(t);
   };
 
-  const onScanClick = () => { setCameFromBatch(false); setCameFromSimulation(false); runScan(inputVal); };
+  const onScanClick = (sym) => { setCameFromBatch(false); setCameFromSimulation(false); runScan(sym || inputVal); };
 
   const changePct =
     candles.length >= 2
@@ -557,6 +579,8 @@ export default function App() {
         universeLabel={
           allIndexOptions.find((o) => o.id === nseIndex)?.label ?? nseIndex
         }
+        symbols={constituents}
+        companyMap={companyMap}
       />
 
       {loading && (
@@ -617,18 +641,16 @@ export default function App() {
         <EmptyState />
       ) : (
         <>
-          {/* Timeframe + toolbar row */}
+          {/* Timeframe + drawing tools + highlight signals — single row */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <TimeframePills value={timeframe} onChange={setTimeframe} />
             <div style={{ flex: 1, minWidth: 4 }} />
             <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
             <label
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 4,
+                gap: 3,
                 fontSize: 11,
                 fontWeight: 600,
                 color: highlightSignals ? '#2563eb' : '#8892a8',
@@ -641,9 +663,9 @@ export default function App() {
                 type="checkbox"
                 checked={highlightSignals}
                 onChange={(e) => setHighlightSignals(e.target.checked)}
-                style={{ accentColor: '#2563eb', margin: 0, width: 14, height: 14 }}
+                style={{ accentColor: '#2563eb', margin: 0, width: 13, height: 13 }}
               />
-              Highlight Signals
+              Signals
             </label>
           </div>
           <Chart
@@ -660,6 +682,7 @@ export default function App() {
             patterns={patterns}
             highlightSignals={highlightSignals}
           />
+          <DataDelayDisclaimer candles={candles} simulated={simulated} />
           {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
         </>
       )}

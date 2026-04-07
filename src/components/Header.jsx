@@ -1,4 +1,14 @@
+import { useState, useEffect } from 'react';
+import { getMarketStatus, formatCountdown } from '../utils/marketHours.js';
+
 export default function Header({ badge, lastScan, children }) {
+  const [marketStatus, setMarketStatus] = useState(getMarketStatus);
+
+  useEffect(() => {
+    const id = setInterval(() => setMarketStatus(getMarketStatus()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const styles = {
     live: { bg: '#16a34a', label: 'LIVE' },
     demo: { bg: '#d97706', label: 'DEMO' },
@@ -7,88 +17,70 @@ export default function Header({ badge, lastScan, children }) {
   };
   const s = styles[badge] || styles.idle;
 
+  const showMarketClosed = !marketStatus.isOpen && (badge === 'idle' || badge === 'live');
+  const displayLabel = showMarketClosed ? 'CLOSED' : s.label;
+  const displayBg = showMarketClosed ? '#64748b' : s.bg;
+
+  const cd = formatCountdown(marketStatus.nextEventMs, marketStatus.nextLabel);
+  // "Opens 09:15" or "Closes 3h 12m" or "Opens 1h 4m"
+  const cdPrefix = marketStatus.nextEventMs >= 4 * 3600000 ? `${marketStatus.nextLabel}` : `${marketStatus.nextLabel}`;
+  const cdText = `${cdPrefix} ${cd}`;
+
   return (
     <header className="cs-header">
       <style>{`
         .cs-header {
           display: flex;
-          flex-wrap: wrap;
           align-items: center;
           justify-content: space-between;
           gap: 10px;
           margin-bottom: 14px;
-          row-gap: 10px;
         }
         .cs-header__brand {
           margin: 0;
           font-size: 20px;
           font-weight: 700;
           color: #1a1d26;
-          flex: 0 1 auto;
-          min-width: 0;
+          flex: 0 0 auto;
           line-height: 1.2;
         }
         .cs-header__row {
           display: flex;
           align-items: center;
           gap: 8px;
-          flex-wrap: wrap;
+          flex-wrap: nowrap;
           justify-content: flex-end;
           flex: 1 1 auto;
           min-width: 0;
         }
-        .cs-header__meta {
+        .cs-header__status {
           display: flex;
           align-items: center;
-          gap: 6px;
-          font-size: 13px;
-          color: #4a5068;
-          font-weight: 600;
+          gap: 5px;
+          font-size: 11px;
+          color: #64748b;
+          font-weight: 500;
           white-space: nowrap;
           flex-shrink: 0;
         }
-        .cs-header__scan {
-          color: #8892a8;
-          font-size: 12px;
-          font-weight: 500;
-          max-width: 140px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+        .cs-header__badge {
+          font-weight: 700;
+          font-size: 11px;
         }
         @media (max-width: 480px) {
-          .cs-header {
-            flex-direction: column;
-            align-items: stretch;
-          }
-          .cs-header__brand {
-            font-size: 18px;
-            width: 100%;
-          }
-          .cs-header__row {
-            justify-content: space-between;
-            width: 100%;
-          }
-          .cs-header__scan {
-            display: none;
-          }
+          .cs-header__brand { font-size: 18px; }
         }
       `}</style>
 
       <h1 className="cs-header__brand">CandleScan</h1>
 
       <div className="cs-header__row">
-        <span className="cs-header__meta">
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.bg, flexShrink: 0 }} />
-          <span>{s.label}</span>
+        <span className="cs-header__status">
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: displayBg, flexShrink: 0 }} />
+          <span className="cs-header__badge" style={{ color: displayBg }}>{displayLabel}</span>
+          <span>· {cdText}</span>
+          {lastScan && <span>· {lastScan}</span>}
         </span>
-        {lastScan ? (
-          <span className="cs-header__scan" title={`Scan: ${lastScan}`}>
-            Scan: {lastScan}
-          </span>
-        ) : null}
-
-
         <span style={{ flexShrink: 0 }}>{children}</span>
       </div>
     </header>
