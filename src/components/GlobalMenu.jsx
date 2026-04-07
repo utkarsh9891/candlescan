@@ -257,7 +257,7 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
           {/* 4. Version */}
           <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '6px 10px' }}>
             <div style={{ fontSize: 10, color: '#b0b8c8' }}>
-              {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v?'}
+              {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v?'} (pre-release)
             </div>
           </div>
         </div>
