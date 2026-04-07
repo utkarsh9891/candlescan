@@ -22,10 +22,12 @@
  *    Batch=8 with 600ms caused HTTP 429s after ~150 symbols.
  *
  * 3. TIMEFRAME RANGES — Yahoo's intraday data retention:
- *      - 1m:  ~7 trading days (range=5d gives 5 days, range=1mo may return empty)
+ *      - 1m:  max 8 days per request, only last 30 calendar days available.
+ *            range=8d gets the maximum. range=1mo returns an error.
+ *            period-based requests older than 30 days are also rejected.
  *      - 5m:  ~60 days (range=1mo gives full month)
  *      - 15m: ~60 days (range=1mo gives full month)
- *    For initial cache population, run 5m/15m with range=1mo first, then 1m with 5d.
+ *    For initial cache population, run 5m/15m with range=1mo first, then 1m with 8d.
  *    For daily top-ups, range=5d is sufficient for all timeframes.
  *
  * 4. SYMBOL EDGE CASES — Symbols with '&' (M&M, GVT&D, J&KBANK, ARE&M, GMRP&UI)
@@ -194,11 +196,11 @@ async function main() {
   if (allTimeframes) {
     // Warm all 3 intraday timeframes in sequence.
     // 5m and 15m use range=1mo to maximize historical depth (~60 days).
-    // 1m uses range=5d because Yahoo only retains ~7 days of 1m data.
+    // 1m: max 8 days per request, only last 30 calendar days available on Yahoo.
     const runs = [
       { interval: '5m',  range: '1mo' },
       { interval: '15m', range: '1mo' },
-      { interval: '1m',  range: '5d' },
+      { interval: '1m',  range: '8d' },
     ];
 
     let totalOk = 0, totalFail = 0, totalFiles = 0;
