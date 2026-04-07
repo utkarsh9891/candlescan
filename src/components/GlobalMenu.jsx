@@ -255,15 +255,9 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
           )}
 
           {/* 4. Version */}
-          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '8px 10px 6px' }}>
-            <div style={{ fontSize: 10, color: '#b0b8c8', fontFamily: "'SF Mono', Menlo, monospace" }}>
+          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '6px 10px' }}>
+            <div style={{ fontSize: 10, color: '#b0b8c8' }}>
               {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v?'}
-              {typeof __BUILD_TIME__ !== 'undefined' && (
-                <span style={{ marginLeft: 4 }}>
-                  [{new Date(__BUILD_TIME__).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-                  {' '}{new Date(__BUILD_TIME__).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })} IST]
-                </span>
-              )}
             </div>
           </div>
         </div>

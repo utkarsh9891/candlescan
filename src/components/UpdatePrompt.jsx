@@ -151,12 +151,18 @@ export default function UpdatePrompt() {
       setChecking(false);
       (async () => {
         try {
-          const reg = await navigator.serviceWorker.getRegistration();
-          if (reg) await reg.unregister();
+          // Unregister all service workers
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(r => r.unregister()));
+          // Clear all caches (SW + runtime)
           const keys = await caches.keys();
           await Promise.all(keys.map(k => caches.delete(k)));
         } catch { /* best effort */ }
-        window.location.reload();
+        // Hard reload with cache bust — critical for mobile PWA
+        // which may serve stale HTML from browser HTTP cache
+        const url = new URL(window.location.href);
+        url.searchParams.set('_cb', Date.now());
+        window.location.replace(url.href);
       })();
     }
   };
