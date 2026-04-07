@@ -3,7 +3,7 @@
  */
 import { CF_WORKER_URL } from './fetcher.js';
 import { NSE_EQUITY_INDICES_BASE } from '../config/nseIndices.js';
-import { parseNseIndexSymbols } from './nseIndexParse.js';
+import { parseNseIndexSymbols, parseNseIndexWithNames } from './nseIndexParse.js';
 
 function isViteDev() {
   try {
@@ -85,6 +85,47 @@ export async function fetchNseIndexSymbolList(indexName) {
       const json = await run();
       const syms = parseNseIndexSymbols(json);
       if (syms.length) return syms;
+      lastErr = new Error('empty symbol list');
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('NSE fetch failed');
+}
+
+/**
+ * Same as fetchNseIndexSymbolList but also returns company name map.
+ * @returns {Promise<{ symbols: string[], companyMap: Record<string, string> }>}
+ */
+export async function fetchNseIndexWithNames(indexName) {
+  const { isDynamicIndex, fetchDynamicIndexSymbols } = await import('../data/dynamicIndices.js');
+  if (isDynamicIndex(indexName)) {
+    const syms = await fetchDynamicIndexSymbols(indexName);
+    return { symbols: syms, companyMap: {} };
+  }
+
+  const target = buildNseUrl(indexName);
+  const attempts = [];
+
+  if (typeof window !== 'undefined' && (isViteDev() || isProdHttpLoopback())) {
+    attempts.push(() => tryFetchJson(devProxyUrl(indexName)));
+  }
+
+  if (typeof window !== 'undefined' && CF_WORKER_URL) {
+    attempts.push(async () => {
+      const { cfFetchJson } = await import('../utils/cfProxy.js');
+      return cfFetchJson(target);
+    });
+  }
+
+  attempts.push(() => tryAllOrigins(target));
+
+  let lastErr;
+  for (const run of attempts) {
+    try {
+      const json = await run();
+      const result = parseNseIndexWithNames(json);
+      if (result.symbols.length) return result;
       lastErr = new Error('empty symbol list');
     } catch (e) {
       lastErr = e;

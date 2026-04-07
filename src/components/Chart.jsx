@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 const mono = "'SF Mono', Menlo, monospace";
 
-const MIN_VISIBLE = 30;
+const MIN_VISIBLE = 10;
 const MAX_VISIBLE_CAP = 300;
 const X_AXIS_HEIGHT = 22;
 
@@ -74,7 +74,9 @@ export default function Chart({
 }) {
   const [visibleCount, setVisibleCount] = useState(() => {
     const today = countLatestSessionCandles(candles);
-    return today > 0 ? Math.min(80, today, MAX_VISIBLE_CAP) : 80;
+    const isMobile = window.innerWidth < 500;
+    const cap = isMobile ? 40 : 80;
+    return today > 0 ? Math.min(cap, today, MAX_VISIBLE_CAP) : cap;
   });
   const [panOffset, setPanOffset] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -82,6 +84,8 @@ export default function Chart({
   const svgRef = useRef(null);
   const [pendingPoint, setPendingPoint] = useState(null);
   const [mousePos, setMousePos] = useState(null);
+  const [tappedCandle, setTappedCandle] = useState(null); // { idx, candle } for mobile OHLCV info
+  const [touchDrawPos, setTouchDrawPos] = useState(null); // touch crosshair position in drawing mode
 
   // Measure container width on mount and resize
   useEffect(() => {
@@ -108,7 +112,9 @@ export default function Chart({
     if (key === prevKeyRef.current) return;
     prevKeyRef.current = key;
     const today = countLatestSessionCandles(candles);
-    const defaultCount = today > 0 ? Math.min(80, today, candles.length, MAX_VISIBLE_CAP) : 80;
+    const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
+    const cap = isMobile ? 40 : 80;
+    const defaultCount = today > 0 ? Math.min(cap, today, candles.length, MAX_VISIBLE_CAP) : cap;
     setVisibleCount(defaultCount);
     setPanOffset(0);
   }, [sym, candles]);
@@ -141,7 +147,9 @@ export default function Chart({
 
   const zoomFit = useCallback(() => {
     const today = countLatestSessionCandles(candles);
-    const defaultCount = today > 0 ? Math.min(80, today, maxVisible) : Math.min(80, maxVisible);
+    const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
+    const cap = isMobile ? 40 : 80;
+    const defaultCount = today > 0 ? Math.min(cap, today, maxVisible) : Math.min(cap, maxVisible);
     setVisibleCount(defaultCount);
     setPanOffset(0);
   }, [maxVisible, candles]);
@@ -151,9 +159,9 @@ export default function Chart({
     const el = wrapRef.current;
     if (!el || maxVisible <= 0) return;
     const onWheelNative = (e) => {
-      e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
         // Pinch-to-zoom on trackpad (sends ctrl+wheel)
+        e.preventDefault();
         const step = Math.max(2, Math.round(count * 0.1));
         const fl = Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
         if (e.deltaY > 0) {
@@ -161,17 +169,13 @@ export default function Chart({
         } else {
           setVisibleCount((v) => Math.max(fl, v - step));
         }
-      } else {
-        // Regular scroll = pan left/right
+      } else if (e.deltaX !== 0) {
+        // Horizontal scroll/swipe = pan chart
+        e.preventDefault();
         const step = Math.max(1, Math.round(count * 0.05));
-        if (e.deltaX !== 0) {
-          // Horizontal scroll
-          setPanOffset((p) => Math.max(0, Math.min((candles?.length || 0) - count, p + (e.deltaX > 0 ? -step : step))));
-        } else if (e.deltaY !== 0) {
-          // Vertical scroll as pan
-          setPanOffset((p) => Math.max(0, Math.min((candles?.length || 0) - count, p + (e.deltaY > 0 ? -step : step))));
-        }
+        setPanOffset((p) => Math.max(0, Math.min((candles?.length || 0) - count, p + (e.deltaX > 0 ? -step : step))));
       }
+      // Vertical scroll without modifier → let page scroll naturally
     };
     el.addEventListener('wheel', onWheelNative, { passive: false });
     return () => el.removeEventListener('wheel', onWheelNative);
@@ -199,8 +203,8 @@ export default function Chart({
 
     const onTouchMove = (e) => {
       const t = touchRef.current;
-      if (e.touches.length === 1 && t.fingers === 1) {
-        // Pan
+      if (e.touches.length === 1 && t.fingers === 1 && !drawingMode) {
+        // Pan (disabled when drawing)
         const dx = e.touches[0].clientX - t.startX;
         const step = Math.round(dx / 8);
         const newPan = Math.max(0, Math.min((candles?.length || 0) - count, t.panStart + step));
@@ -231,7 +235,7 @@ export default function Chart({
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  }, [panOffset, visibleCount, count, maxVisible, candles?.length]);
+  }, [panOffset, visibleCount, count, maxVisible, candles?.length, drawingMode]);
 
   const canRender = slice.length > 0 && containerWidth > 0;
 
@@ -253,19 +257,24 @@ export default function Chart({
   hi += pad;
   const range = hi - lo || 1;
 
-  // Chart width fills the container; candle width adapts
+  // Chart width fills the container; price axis on right
   const w = containerWidth > 0 ? containerWidth : 400;
   const h = height;
   const totalH = h + X_AXIS_HEIGHT;
-  const leftGutter = 40;
-  const rightPadding = 65;
-  const chartW = w - leftGutter - rightPadding;
-  const chartRight = leftGutter + chartW;
+  const leftPad = 4;
+  const rightGutter = w < 500 ? 52 : 60; // price labels on right
+  const chartW = w - leftPad - rightGutter;
+  const chartRight = leftPad + chartW;
 
-  const xFor = (i) => leftGutter + (i / Math.max(slice.length - 1, 1)) * chartW;
+  // Inset so first/last candle bodies don't clip edges
+  const candleInset = Math.max(4, Math.ceil((chartW / Math.max(slice.length, 1)) / 2));
+  const plotLeft = leftPad + candleInset;
+  const plotW = chartW - candleInset * 2;
+
+  const xFor = (i) => plotLeft + (i / Math.max(slice.length - 1, 1)) * plotW;
   const yFor = (p) => h - ((p - lo) / range) * (h - 8) - 4;
   const priceFor = (y) => lo + ((h - 4 - y) / (h - 8)) * range;
-  const idxFor = (x) => Math.round(((x - leftGutter) / chartW) * (slice.length - 1));
+  const idxFor = (x) => Math.round(((x - plotLeft) / plotW) * (slice.length - 1));
 
   const gridYs = [0, 0.25, 0.5, 0.75, 1].map((t) => lo + range * t);
 
@@ -403,8 +412,84 @@ export default function Chart({
     setMousePos(null);
   };
 
+  // Touch handlers for SVG — drawing mode crosshair + candle tap info
+  const handleSvgTouchStart = (e) => {
+    if (e.touches.length !== 1) return;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const x = e.touches[0].clientX - rect.left;
+    const y = e.touches[0].clientY - rect.top;
+
+    if (drawingMode) {
+      // In drawing mode: show crosshair at touch position
+      e.preventDefault();
+      e.stopPropagation();
+      setTouchDrawPos({ x, y });
+      setMousePos({ x, y });
+    } else {
+      // Not drawing: show OHLCV info for tapped candle
+      const idx = Math.max(0, Math.min(slice.length - 1, idxFor(x)));
+      if (slice[idx]) {
+        setTappedCandle({ idx, candle: slice[idx] });
+        setMousePos({ x, y });
+      }
+    }
+  };
+
+  const handleSvgTouchMove = (e) => {
+    if (e.touches.length !== 1) return;
+    if (!drawingMode) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const x = e.touches[0].clientX - rect.left;
+    const y = e.touches[0].clientY - rect.top;
+    setTouchDrawPos({ x, y });
+    setMousePos({ x, y });
+  };
+
+  const handleSvgTouchEnd = (e) => {
+    if (drawingMode && touchDrawPos) {
+      // Confirm drawing at current touch position
+      e.preventDefault();
+      const coords = touchDrawPos;
+      const price = priceFor(coords.y);
+      const idx = Math.max(0, Math.min(slice.length - 1, idxFor(coords.x)));
+
+      if (drawingMode === 'hline' && onDrawingComplete) {
+        onDrawingComplete({ type: 'hline', price });
+      } else if (drawingMode === 'box' && onDrawingComplete) {
+        if (!pendingPoint) {
+          setPendingPoint({ price, idx, time: slice[idx]?.t });
+        } else {
+          const i1 = Math.min(pendingPoint.idx, idx);
+          const i2 = Math.max(pendingPoint.idx, idx);
+          const pTop = Math.max(pendingPoint.price, price);
+          const pBot = Math.min(pendingPoint.price, price);
+          const t1 = slice[i1]?.t;
+          const t2 = slice[i2]?.t;
+          const priceChange = price - pendingPoint.price;
+          onDrawingComplete({
+            type: 'box', priceTop: pTop, priceBot: pBot,
+            idx1: i1, idx2: i2, time1: t1, time2: t2,
+            candleCount: i2 - i1 + 1, startPrice: pendingPoint.price,
+            endPrice: price, priceChange,
+          });
+          setPendingPoint(null);
+        }
+      }
+      setTouchDrawPos(null);
+      setMousePos(null);
+    }
+  };
+
   useEffect(() => {
     setPendingPoint(null);
+    setTouchDrawPos(null);
+    setTappedCandle(null);
   }, [drawingMode]);
 
   /* ── Box positioning ────────────────────────────────────────────── */
@@ -450,30 +535,56 @@ export default function Chart({
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 8,
-          marginBottom: 8,
+          justifyContent: 'flex-end',
+          gap: 4,
+          marginBottom: 4,
         }}
       >
-        <span style={{ fontSize: 12, color: '#8892a8', fontWeight: 500 }}>
-          Chart · {slice.length} bars
-          {clampedPan > 0 && <span style={{ color: '#d97706', marginLeft: 4 }}>(panned)</span>}
-          {drawingMode && (
-            <span style={{ color: '#2563eb', marginLeft: 6 }}>
-              [Drawing: {drawingMode}{pendingPoint ? ' — click end point' : ''}]
-            </span>
-          )}
+        {drawingMode && (
+          <span style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 500, marginRight: 'auto' }}>
+            {drawingMode === 'hline' ? 'Tap to place line' : pendingPoint ? 'Tap end point' : 'Tap start point'}
+          </span>
+        )}
+        <span style={{ fontSize: 10, color: '#b0b8c8', marginRight: 'auto' }}>
+          {slice.length} bars
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button type="button" aria-label="Zoom in" title="Zoom in" onClick={zoomIn} disabled={atMinZoom}
-            style={{ ...btnStyle, opacity: atMinZoom ? 0.45 : 1, cursor: atMinZoom ? 'not-allowed' : 'pointer' }}>+</button>
-          <button type="button" aria-label="Zoom out" title="Zoom out" onClick={zoomOut} disabled={atMaxZoom}
-            style={{ ...btnStyle, opacity: atMaxZoom ? 0.45 : 1, cursor: atMaxZoom ? 'not-allowed' : 'pointer' }}>−</button>
-          <button type="button" aria-label="Reset zoom" title="Today" onClick={zoomFit}
-            style={{ ...btnStyle, fontSize: 12, fontWeight: 600, color: '#2563eb' }}>Today</button>
-        </div>
+        <button type="button" aria-label="Zoom in" title="Zoom in" onClick={zoomIn} disabled={atMinZoom}
+          style={{ ...btnStyle, minWidth: 30, minHeight: 28, padding: '0 7px', fontSize: 14, opacity: atMinZoom ? 0.35 : 1, cursor: atMinZoom ? 'not-allowed' : 'pointer' }}>+</button>
+        <button type="button" aria-label="Zoom out" title="Zoom out" onClick={zoomOut} disabled={atMaxZoom}
+          style={{ ...btnStyle, minWidth: 30, minHeight: 28, padding: '0 7px', fontSize: 14, opacity: atMaxZoom ? 0.35 : 1, cursor: atMaxZoom ? 'not-allowed' : 'pointer' }}>−</button>
+        <button type="button" aria-label="Reset zoom" title="Today" onClick={zoomFit}
+          style={{ ...btnStyle, minWidth: 30, minHeight: 28, padding: '0 7px', fontSize: 11, fontWeight: 600, color: '#2563eb' }}>↻</button>
       </div>
+
+      {/* Mobile OHLCV info bar — shown on candle tap */}
+      {tappedCandle && tappedCandle.candle && (
+        <div style={{
+          display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+          padding: '4px 8px', marginBottom: 4, borderRadius: 6,
+          background: '#f8f9fb', border: '1px solid #e2e5eb',
+          fontSize: 11, fontFamily: mono, color: '#4a5068',
+        }}>
+          <span>O <b>{tappedCandle.candle.o.toFixed(2)}</b></span>
+          <span>H <b>{tappedCandle.candle.h.toFixed(2)}</b></span>
+          <span>L <b>{tappedCandle.candle.l.toFixed(2)}</b></span>
+          <span>C <b style={{ color: tappedCandle.candle.c >= tappedCandle.candle.o ? '#16a34a' : '#dc2626' }}>{tappedCandle.candle.c.toFixed(2)}</b></span>
+          {tappedCandle.candle.v != null && <span>V <b>{tappedCandle.candle.v.toLocaleString()}</b></span>}
+          {tappedCandle.candle.t && <span style={{ color: '#8892a8' }}>{formatTimestamp(tappedCandle.candle.t, timeframe)}</span>}
+          <button type="button" onClick={() => { setTappedCandle(null); setMousePos(null); }}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#8892a8', fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
+        </div>
+      )}
+
+      {/* Drawing mode touch hint */}
+      {drawingMode && touchDrawPos && (
+        <div style={{
+          padding: '3px 8px', marginBottom: 4, borderRadius: 6,
+          background: '#f5f3ff', border: '1px solid #c4b5fd',
+          fontSize: 11, fontFamily: mono, color: '#8b5cf6', textAlign: 'center',
+        }}>
+          Price: {priceFor(touchDrawPos.y).toFixed(2)} · Lift finger to confirm
+        </div>
+      )}
 
       <div
         ref={wrapRef}
@@ -497,19 +608,23 @@ export default function Chart({
           onMouseMove={handleSvgMouseMove}
           onMouseUp={handleSvgMouseUp}
           onMouseLeave={handleSvgMouseLeave}
+          onTouchStart={handleSvgTouchStart}
+          onTouchMove={handleSvgTouchMove}
+          onTouchEnd={handleSvgTouchEnd}
         >
-          {/* Grid */}
+          {/* Grid + price labels on right */}
           {gridYs.map((gy, i) => (
             <g key={i}>
-              <line x1={leftGutter} y1={yFor(gy)} x2={chartRight} y2={yFor(gy)} stroke="#eef0f4" strokeWidth={1} />
-              <text x={4} y={yFor(gy) + 4} fontSize={11} fill="#8892a8" fontFamily={mono}>{gy.toFixed(2)}</text>
+              <line x1={leftPad} y1={yFor(gy)} x2={chartRight} y2={yFor(gy)} stroke="#eef0f4" strokeWidth={1} />
+              <text x={chartRight + 6} y={yFor(gy) + 4} fontSize={10} fill="#8892a8" fontFamily={mono}>{gy.toFixed(2)}</text>
             </g>
           ))}
 
           {/* Pattern highlight backgrounds + labels */}
           {highlightSignals && Array.from(highlightSet).map((i) => {
             const x = xFor(i);
-            const bw = Math.max(1.5, chartW / slice.length - 2);
+            const hlGap = w < 500 ? 1 : 2;
+            const bw = Math.max(w < 500 ? 3 : 1.5, chartW / slice.length - hlGap);
             const label = patternLabels.get(i);
             return (
               <g key={`hl-${i}`}>
@@ -528,7 +643,7 @@ export default function Chart({
                   const labelColor = label.direction === 'bullish' ? '#16a34a' : label.direction === 'bearish' ? '#dc2626' : '#2563eb';
                   // Clamp label X so it doesn't go off edges
                   const rawLabelX = x - labelW / 2;
-                  const clampedLabelX = Math.max(leftGutter, Math.min(rawLabelX, chartRight - labelW - 2));
+                  const clampedLabelX = Math.max(leftPad, Math.min(rawLabelX, chartRight - labelW - 2));
                   return (
                     <g>
                       <rect
@@ -573,10 +688,10 @@ export default function Chart({
 
           {highlightSignals && box && !boxVisible && (
             <g>
-              <line x1={leftGutter} y1={yFor(box.high)} x2={chartRight} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
-              <text x={leftGutter + 4} y={yFor(box.high) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Hi</text>
-              <line x1={leftGutter} y1={yFor(box.low)} x2={chartRight} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
-              <text x={leftGutter + 4} y={yFor(box.low) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Lo</text>
+              <line x1={leftPad} y1={yFor(box.high)} x2={chartRight} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
+              <text x={leftPad + 4} y={yFor(box.high) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Hi</text>
+              <line x1={leftPad} y1={yFor(box.low)} x2={chartRight} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
+              <text x={leftPad + 4} y={yFor(box.low) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Lo</text>
             </g>
           )}
 
@@ -584,24 +699,25 @@ export default function Chart({
           {risk && (risk.action === 'STRONG BUY' || risk.action === 'BUY' || risk.action === 'STRONG SHORT' || risk.action === 'SHORT') && (
             <g>
               {/* Entry — blue dashed */}
-              <line x1={leftGutter} y1={yFor(risk.entry)} x2={chartRight} y2={yFor(risk.entry)} stroke="#2563eb" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
-              <rect x={leftGutter + 2} y={yFor(risk.entry) - 12} width={72} height={14} rx={3} fill="#2563eb" opacity={0.85} />
-              <text x={leftGutter + 6} y={yFor(risk.entry) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>Entry {risk.entry.toFixed(0)}</text>
+              <line x1={leftPad} y1={yFor(risk.entry)} x2={chartRight} y2={yFor(risk.entry)} stroke="#2563eb" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+              <rect x={leftPad + 2} y={yFor(risk.entry) - 12} width={62} height={14} rx={3} fill="#2563eb" opacity={0.85} />
+              <text x={leftPad + 5} y={yFor(risk.entry) - 2} fontSize={8} fill="#fff" fontFamily={mono} fontWeight={700}>E {risk.entry.toFixed(1)}</text>
               {/* SL — red dashed */}
-              <line x1={leftGutter} y1={yFor(risk.sl)} x2={chartRight} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
-              <rect x={leftGutter + 2} y={yFor(risk.sl) - 12} width={56} height={14} rx={3} fill="#dc2626" opacity={0.85} />
-              <text x={leftGutter + 6} y={yFor(risk.sl) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>SL {risk.sl.toFixed(0)}</text>
+              <line x1={leftPad} y1={yFor(risk.sl)} x2={chartRight} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
+              <rect x={leftPad + 2} y={yFor(risk.sl) - 12} width={62} height={14} rx={3} fill="#dc2626" opacity={0.85} />
+              <text x={leftPad + 5} y={yFor(risk.sl) - 2} fontSize={8} fill="#fff" fontFamily={mono} fontWeight={700}>SL {risk.sl.toFixed(1)}</text>
               {/* Target — green dashed */}
-              <line x1={leftGutter} y1={yFor(risk.target)} x2={chartRight} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
-              <rect x={leftGutter + 2} y={yFor(risk.target) - 12} width={72} height={14} rx={3} fill="#16a34a" opacity={0.85} />
-              <text x={leftGutter + 6} y={yFor(risk.target) - 2} fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>Target {risk.target.toFixed(0)}</text>
+              <line x1={leftPad} y1={yFor(risk.target)} x2={chartRight} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
+              <rect x={leftPad + 2} y={yFor(risk.target) - 12} width={62} height={14} rx={3} fill="#16a34a" opacity={0.85} />
+              <text x={leftPad + 5} y={yFor(risk.target) - 2} fontSize={8} fill="#fff" fontFamily={mono} fontWeight={700}>T {risk.target.toFixed(1)}</text>
             </g>
           )}
 
           {/* Candles */}
           {slice.map((c, i) => {
             const x = xFor(i);
-            const bw = Math.max(1.5, chartW / slice.length - 2);
+            const gap = w < 500 ? 1 : 2;
+            const bw = Math.max(w < 500 ? 3 : 1.5, chartW / slice.length - gap);
             const cx = x - bw / 2;
             const yH = yFor(c.h);
             const yL = yFor(c.l);
@@ -613,17 +729,20 @@ export default function Chart({
             const fill = bull ? '#16a34a' : '#dc2626';
             const last = i === slice.length - 1;
             const highlighted = highlightSet.has(i);
+            const wickW = Math.max(1, bw * 0.15);
             return (
               <g key={i}>
-                <line x1={x} y1={yH} x2={x} y2={yL} stroke={fill} strokeWidth={1} />
+                <line x1={x} y1={yH} x2={x} y2={yL} stroke={fill} strokeWidth={wickW} />
                 <rect
                   x={cx} y={top} width={bw} height={Math.max(1, bot - top)}
                   fill={fill}
-                  stroke={last ? '#2563eb' : highlighted ? '#2563eb' : fill}
-                  strokeWidth={last ? 2 : highlighted ? 1.5 : 0}
-                  strokeDasharray={last ? '3 2' : undefined}
+                  stroke={highlighted ? '#2563eb' : fill}
+                  strokeWidth={highlighted ? 1.5 : 0}
                   rx={1}
                 />
+                {last && (
+                  <circle cx={x} cy={top - 4} r={2} fill={fill} opacity={0.5} />
+                )}
               </g>
             );
           })}
@@ -637,11 +756,13 @@ export default function Chart({
               const isDragging = draggingHLine === di;
               return (
                 <g key={`d-${di}`}>
-                  <line x1={leftGutter} y1={y} x2={chartRight} y2={y} stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="6 3" />
-                  <text x={leftGutter + 4} y={y - 3} fontSize={9} fill="#8b5cf6" fontFamily={mono}>{d.price.toFixed(2)}</text>
+                  <line x1={leftPad} y1={y} x2={chartRight} y2={y} stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="6 3" />
+                  {/* Price label on right */}
+                  <rect x={chartRight + 2} y={y - 8} width={rightGutter - 6} height={16} rx={3} fill="#8b5cf6" opacity={0.85} />
+                  <text x={chartRight + rightGutter / 2} y={y + 4} textAnchor="middle" fontSize={9} fill="#fff" fontFamily={mono} fontWeight={600}>{d.price.toFixed(2)}</text>
                   {/* Drag handle */}
                   <rect
-                    x={leftGutter + 50}
+                    x={leftPad + 4}
                     y={y - 8}
                     width={20}
                     height={16}
@@ -652,7 +773,7 @@ export default function Chart({
                     style={{ cursor: 'ns-resize' }}
                     onMouseDown={(e) => handleHLineMouseDown(e, di)}
                   />
-                  <text x={leftGutter + 55} y={y + 4} fontSize={8} fill="#8b5cf6" fontFamily={mono} style={{ pointerEvents: 'none' }}>
+                  <text x={leftPad + 9} y={y + 4} fontSize={8} fill="#8b5cf6" fontFamily={mono} style={{ pointerEvents: 'none' }}>
                     ↕
                   </text>
                 </g>
@@ -699,10 +820,10 @@ export default function Chart({
           )}
 
           {/* Crosshair with price + time labels — always shown on hover */}
-          {mousePos && mousePos.y > 0 && mousePos.y < h && mousePos.x >= leftGutter && (
+          {mousePos && mousePos.y > 0 && mousePos.y < h && mousePos.x >= leftPad && (
             <g>
               {/* Horizontal crosshair */}
-              <line x1={leftGutter} y1={mousePos.y} x2={chartRight} y2={mousePos.y}
+              <line x1={leftPad} y1={mousePos.y} x2={chartRight} y2={mousePos.y}
                 stroke={drawingMode ? '#8b5cf6' : '#8892a8'} strokeWidth={0.5} strokeDasharray="2 2" opacity={0.5} />
               {/* Vertical crosshair */}
               {(() => {
@@ -712,15 +833,16 @@ export default function Chart({
                     stroke={drawingMode ? '#8b5cf6' : '#8892a8'} strokeWidth={0.5} strokeDasharray="2 2" opacity={0.4} />
                 );
               })()}
-              {/* Price label following cursor */}
+              {/* Price label on right axis */}
               {(() => {
                 const priceText = priceFor(mousePos.y).toFixed(2);
-                const pillW = priceText.length * 7.5 + 12;
-                const pillX = Math.min(mousePos.x + 12, chartRight - pillW - 2);
+                const pillW = rightGutter - 6;
+                const pillX = chartRight + 2;
+                const pillColor = drawingMode ? '#8b5cf6' : '#4a5068';
                 return (
                   <g>
-                    <rect x={pillX} y={mousePos.y - 9} width={pillW} height={18} rx={3}
-                      fill={drawingMode ? '#8b5cf6' : '#4a5068'} opacity={0.9} />
+                    <rect x={pillX} y={mousePos.y - 8} width={pillW} height={16} rx={3}
+                      fill={pillColor} opacity={0.9} />
                     <text x={pillX + pillW / 2} y={mousePos.y + 4} textAnchor="middle" fontSize={10} fill="#fff" fontFamily={mono} fontWeight={600}>
                       {priceText}
                     </text>
@@ -764,14 +886,15 @@ export default function Chart({
             </g>
           )}
 
-          {/* Current price line + label */}
+          {/* Current price line + label on right axis */}
           {(() => {
             const last = slice[slice.length - 1];
             const y = yFor(last.c);
             return (
               <g>
-                <line x1={leftGutter} y1={y} x2={w} y2={y} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" opacity={0.7} />
-                <text x={w - 4} y={y - 4} textAnchor="end" fontSize={11} fill="#2563eb" fontFamily={mono} fontWeight={600}>
+                <line x1={leftPad} y1={y} x2={chartRight} y2={y} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" opacity={0.5} />
+                <rect x={chartRight + 2} y={y - 8} width={rightGutter - 6} height={16} rx={3} fill="#2563eb" />
+                <text x={chartRight + rightGutter / 2} y={y + 4} textAnchor="middle" fontSize={10} fill="#fff" fontFamily={mono} fontWeight={600}>
                   {last.c.toFixed(2)}
                 </text>
               </g>
