@@ -188,7 +188,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   }, []);
 
   // eslint-disable-next-line no-undef
-  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
+  // Version now shown only in hamburger menu
 
   const container = { maxWidth: 620, margin: '0 auto', padding: '12px 8px' };
   const card = {
@@ -384,7 +384,6 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
       {/* About */}
       <div style={card}>
         <div style={sectionTitle}>About</div>
-        {appVersion && <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 6 }}>Version {appVersion} (pre-release)</div>}
         <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 12 }}>Educational only — not financial advice.</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <a
