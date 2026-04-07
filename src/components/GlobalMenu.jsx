@@ -254,11 +254,21 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
             </>
           )}
 
-          {/* 4. Version */}
-          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '6px 10px' }}>
-            <div style={{ fontSize: 10, color: '#b0b8c8' }}>
+          {/* 4. Version + update */}
+          <div style={{ borderTop: '1px solid #eef0f4', marginTop: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 10, color: '#b0b8c8' }}>
               {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v?'} (pre-release)
-            </div>
+            </span>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event('candlescan:check-update'))}
+              style={{
+                fontSize: 10, fontWeight: 600, color: '#2563eb',
+                background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+              }}
+            >
+              Check for updates
+            </button>
           </div>
         </div>
       )}

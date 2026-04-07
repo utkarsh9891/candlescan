@@ -483,6 +483,7 @@ export default function App() {
       ...prev,
       [sym]: [...(prev[sym] || []), drawing],
     }));
+    setDrawingMode(null); // one-shot: deactivate after placing
   };
   const handleDrawingUpdate = (idx, updated) => {
     setDrawingsMap((prev) => {
