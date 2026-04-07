@@ -1,130 +1,145 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 
 /**
- * Detects new service worker OR stale cached app shell and shows update banner.
+ * Detects new versions via two mechanisms:
  *
- * Detection methods (in order):
- *  1. SW waiting state — a new SW is already downloaded and waiting
- *  2. SW updatefound event — browser detects sw.js changed on server
- *  3. Version mismatch fallback — if SW is current but cached HTML is stale,
- *     compare deployed <meta app-version> against __APP_VERSION__. This catches
- *     the case where the SW was updated on a previous visit but the user never
- *     tapped "Update now", and the waiting SW was later discarded by the browser.
+ *  1. Passive SW detection — the browser naturally checks for SW updates;
+ *     if a new SW is waiting, we surface the "Update now" banner.
+ *  2. GitHub Release check — once per 24 h (or on manual trigger from Settings),
+ *     fetches the latest release from the GitHub API and compares the tag
+ *     against __APP_VERSION__. This is the single source of truth for versioning.
  */
+
+const GITHUB_REPO = 'utkarsh9891/candlescan';
+const LS_LAST_CHECK = 'candlescan_last_update_check';
+const LS_LATEST_VER = 'candlescan_latest_version';
+const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/** Parse "vMAJOR.MINOR.PATCH" → [major, minor, patch] or null */
+function parseSemver(v) {
+  const m = String(v).match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+
+/** Returns true if `a` is strictly newer than `b` (both "vX.Y.Z" strings) */
+function isNewer(a, b) {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa || !pb) return false;
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] > pb[i]) return true;
+    if (pa[i] < pb[i]) return false;
+  }
+  return false;
+}
+
 export default function UpdatePrompt() {
   const [showUpdate, setShowUpdate] = useState(false);
   const [registration, setRegistration] = useState(null);
   const [checking, setChecking] = useState(false);
   const [newVersion, setNewVersion] = useState('');
-  const [forceReload, setForceReload] = useState(false); // true = no waiting SW, just reload
+  const [forceReload, setForceReload] = useState(false);
   const [checkError, setCheckError] = useState('');
   const foundRef = useRef(false);
 
+  const currentVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
+
+  // ── Passive SW detection (no extra network requests) ──────────────
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
-
-    const markFound = (reg) => {
-      foundRef.current = true;
-      if (reg) setRegistration(reg);
-      setShowUpdate(true);
-      setChecking(false);
-      fetchNewVersion();
-    };
-
-    const handleSWUpdate = async () => {
-      if (foundRef.current) return;
-      const reg = await navigator.serviceWorker.getRegistration();
+    navigator.serviceWorker.getRegistration().then(reg => {
       if (!reg) return;
-
-      // Check if a new SW is already waiting
       if (reg.waiting) {
-        markFound(reg);
+        foundRef.current = true;
+        setRegistration(reg);
+        setShowUpdate(true);
         return;
       }
-
-      // Listen for future updatefound (only attach once)
-      if (!reg._csScanListening) {
-        reg._csScanListening = true;
-        reg.addEventListener('updatefound', () => {
-          const newSW = reg.installing;
-          if (!newSW) return;
-          newSW.addEventListener('statechange', () => {
-            if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
-              markFound(reg);
-            }
-          });
-        });
-      }
-    };
-
-    handleSWUpdate();
-
-    const onManualCheck = () => {
-      foundRef.current = false;
-      setChecking(true);
-      setCheckError('');
-
-      // Force browser to re-fetch sw.js from server
-      navigator.serviceWorker.getRegistration().then(r => r?.update()).catch(() => {});
-
-      // Check SW state at 2s and 5s
-      const t1 = setTimeout(() => handleSWUpdate(), 2000);
-      const t2 = setTimeout(() => handleSWUpdate(), 5000);
-
-      // At 8s: if SW check found nothing, fall back to version comparison
-      const t3 = setTimeout(async () => {
-        if (foundRef.current) return;
-        await handleSWUpdate();
-        if (foundRef.current) return;
-
-        // Fallback: directly compare deployed version vs running version
-        try {
-          const deployedVersion = await fetchDeployedVersion();
-          const currentVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
-          if (deployedVersion && currentVersion && deployedVersion !== currentVersion) {
-            setNewVersion(deployedVersion);
-            setForceReload(true);
-            setShowUpdate(true);
-            setChecking(false);
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
             foundRef.current = true;
-          } else if (deployedVersion) {
-            setChecking(false);
-            // Version matches — genuinely up to date
-          } else {
-            setChecking(false);
-            setCheckError('Could not reach server to check for updates. Please check your network connection.');
+            setRegistration(reg);
+            setShowUpdate(true);
           }
-        } catch (e) {
-          setChecking(false);
-          const msg = e?.message?.includes('fetch') || e?.message?.includes('network') || e?.name === 'TypeError'
-            ? 'Network error — could not check for updates. Please check your connection and try again.'
-            : 'Could not check for updates. Please try again later.';
-          setCheckError(msg);
-        }
-      }, 8000);
-
-      // Final dismiss at 15s regardless
-      const t4 = setTimeout(() => setChecking(false), 15000);
-
-      return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
-    };
-
-    window.addEventListener('candlescan:check-update', onManualCheck);
-    return () => window.removeEventListener('candlescan:check-update', onManualCheck);
+        });
+      });
+    });
   }, []);
 
-  const fetchDeployedVersion = async () => {
-    const res = await fetch(window.location.pathname + '?_=' + Date.now(), { cache: 'no-store' });
-    const html = await res.text();
-    const match = html.match(/<meta\s+name="app-version"\s+content="([^"]+)"/);
-    return match ? match[1] : null;
-  };
+  // ── GitHub Release check ──────────────────────────────────────────
+  const checkGitHubRelease = useCallback(async (manual = false) => {
+    if (!currentVersion) return;
+    setChecking(true);
+    setCheckError('');
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+        { headers: { Accept: 'application/vnd.github+json' } },
+      );
+      if (res.status === 404) {
+        // No releases published yet — nothing to update to
+        setChecking(false);
+        try {
+          localStorage.setItem(LS_LAST_CHECK, String(Date.now()));
+        } catch { /* quota */ }
+        return;
+      }
+      if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+      const data = await res.json();
+      const latest = data.tag_name;
 
-  const fetchNewVersion = async () => {
-    const v = await fetchDeployedVersion();
-    if (v) setNewVersion(v);
-  };
+      try {
+        localStorage.setItem(LS_LAST_CHECK, String(Date.now()));
+        localStorage.setItem(LS_LATEST_VER, latest);
+      } catch { /* quota */ }
 
+      if (isNewer(latest, currentVersion)) {
+        setNewVersion(latest);
+        setForceReload(true);
+        setShowUpdate(true);
+        foundRef.current = true;
+      }
+      setChecking(false);
+    } catch (e) {
+      setChecking(false);
+      if (manual) {
+        setCheckError('Could not check for updates. Please try again later.');
+      }
+      // Silent fail on automatic checks — don't bother the user
+    }
+  }, [currentVersion]);
+
+  // Auto-check: once per 24 h on mount
+  useEffect(() => {
+    if (foundRef.current) return;
+    try {
+      const last = Number(localStorage.getItem(LS_LAST_CHECK) || '0');
+      if (Date.now() - last < CHECK_INTERVAL_MS) {
+        // Still within window — check cached result instead
+        const cached = localStorage.getItem(LS_LATEST_VER);
+        if (cached && isNewer(cached, currentVersion)) {
+          setNewVersion(cached);
+          setForceReload(true);
+          setShowUpdate(true);
+          foundRef.current = true;
+        }
+        return;
+      }
+    } catch { /* localStorage unavailable */ }
+    checkGitHubRelease(false);
+  }, [checkGitHubRelease, currentVersion]);
+
+  // Manual trigger from Settings "Check for updates" button
+  useEffect(() => {
+    const onManual = () => checkGitHubRelease(true);
+    window.addEventListener('candlescan:check-update', onManual);
+    return () => window.removeEventListener('candlescan:check-update', onManual);
+  }, [checkGitHubRelease]);
+
+  // ── Update action ─────────────────────────────────────────────────
   const handleUpdate = () => {
     if (!forceReload && registration?.waiting) {
       registration.waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -132,7 +147,6 @@ export default function UpdatePrompt() {
       setChecking(false);
       setTimeout(() => window.location.reload(), 500);
     } else {
-      // Force reload: unregister SW, clear caches, hard reload
       setShowUpdate(false);
       setChecking(false);
       (async () => {
