@@ -257,22 +257,23 @@ export default function App() {
     }
   }, [nseIndex]);
 
-  // Pre-fetch NIFTY 500 for broad homepage search (once on mount)
+  // Pre-fetch NIFTY TOTAL MARKET (~750 stocks) for broad search universe
+  const SEARCH_UNIVERSE_KEY = '__SEARCH_UNIVERSE__';
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const cached = readNseSymsCache('NIFTY 500');
+      const cached = readNseSymsCache(SEARCH_UNIVERSE_KEY);
       if (cached?.syms?.length) {
         setBroadSearchSymbols(cached.syms);
         setBroadCompanyMap(cached.companyMap || {});
         return;
       }
       try {
-        const result = await fetchNseIndexWithNames('NIFTY 500');
+        const result = await fetchNseIndexWithNames('NIFTY TOTAL MARKET');
         if (!cancelled && result.symbols.length) {
           setBroadSearchSymbols(result.symbols);
           setBroadCompanyMap(result.companyMap || {});
-          writeNseSymsCache('NIFTY 500', result.symbols, result.companyMap);
+          writeNseSymsCache(SEARCH_UNIVERSE_KEY, result.symbols, result.companyMap);
         }
       } catch { /* silent — fallback to current index */ }
     })();
@@ -330,6 +331,12 @@ export default function App() {
       setYahooSym(yahooSymbol || '');
       setSimulated(!!sim);
       setLive(!!lv);
+
+      // Grow search universe with newly discovered symbols
+      if (displaySymbol && cn && !broadCompanyMap[displaySymbol]) {
+        setBroadSearchSymbols(prev => prev.includes(displaySymbol) ? prev : [...prev, displaySymbol]);
+        setBroadCompanyMap(prev => ({ ...prev, [displaySymbol]: cn }));
+      }
 
       if (err || !cd?.length) {
         setCandles([]);
