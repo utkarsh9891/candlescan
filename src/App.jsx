@@ -161,6 +161,8 @@ export default function App() {
   const [constituentsLoading, setConstituentsLoading] = useState(false);
   const [constituentsError, setConstituentsError] = useState('');
   const [companyMap, setCompanyMap] = useState({}); // SYMBOL → "Company Name"
+  const [broadSearchSymbols, setBroadSearchSymbols] = useState([]); // NIFTY 500 symbols for global search
+  const [broadCompanyMap, setBroadCompanyMap] = useState({}); // NIFTY 500 company map
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Signal filter state
@@ -254,6 +256,28 @@ export default function App() {
       /* quota */
     }
   }, [nseIndex]);
+
+  // Pre-fetch NIFTY 500 for broad homepage search (once on mount)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const cached = readNseSymsCache('NIFTY 500');
+      if (cached?.syms?.length) {
+        setBroadSearchSymbols(cached.syms);
+        setBroadCompanyMap(cached.companyMap || {});
+        return;
+      }
+      try {
+        const result = await fetchNseIndexWithNames('NIFTY 500');
+        if (!cancelled && result.symbols.length) {
+          setBroadSearchSymbols(result.symbols);
+          setBroadCompanyMap(result.companyMap || {});
+          writeNseSymsCache('NIFTY 500', result.symbols, result.companyMap);
+        }
+      } catch { /* silent — fallback to current index */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,6 +410,17 @@ export default function App() {
     if (!activeSymRef.current) return;
     runScan(activeSymRef.current);
   }, [timeframe, runScan]);
+
+  // Merge broad NIFTY 500 universe + current index for homepage search
+  const searchSymbols = useMemo(() => {
+    const set = new Set(broadSearchSymbols);
+    for (const s of constituents) set.add(s);
+    return Array.from(set).sort();
+  }, [broadSearchSymbols, constituents]);
+
+  const searchCompanyMap = useMemo(() => {
+    return { ...broadCompanyMap, ...companyMap };
+  }, [broadCompanyMap, companyMap]);
 
   const onQuick = (t) => {
     setInputVal(t);
@@ -579,8 +614,8 @@ export default function App() {
         universeLabel={
           allIndexOptions.find((o) => o.id === nseIndex)?.label ?? nseIndex
         }
-        symbols={constituents}
-        companyMap={companyMap}
+        symbols={searchSymbols}
+        companyMap={searchCompanyMap}
       />
 
       {loading && (
@@ -695,6 +730,7 @@ export default function App() {
         selectedNseIndex={nseIndex}
         onNseIndexChange={setNseIndex}
         symbols={constituents}
+        companyMap={companyMap}
         loading={constituentsLoading}
         error={constituentsError}
         onSelectSymbol={(s) => {

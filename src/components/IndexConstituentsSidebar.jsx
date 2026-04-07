@@ -11,6 +11,7 @@ export default function IndexConstituentsSidebar({
   selectedNseIndex,
   onNseIndexChange,
   symbols,
+  companyMap = {},
   loading,
   error,
   onSelectSymbol,
@@ -20,8 +21,12 @@ export default function IndexConstituentsSidebar({
   const filtered = useMemo(() => {
     const needle = q.trim().toUpperCase();
     if (!needle) return symbols;
-    return symbols.filter((s) => s.includes(needle));
-  }, [symbols, q]);
+    return symbols.filter((s) => {
+      if (s.includes(needle)) return true;
+      const name = (companyMap[s] || '').toUpperCase();
+      return name.includes(needle);
+    });
+  }, [symbols, q, companyMap]);
 
   if (!open) return null;
 
@@ -143,7 +148,7 @@ export default function IndexConstituentsSidebar({
             type="search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Filter symbol…"
+            placeholder="Search symbol or company name…"
             style={{
               width: '100%',
               marginTop: 12,
@@ -151,7 +156,7 @@ export default function IndexConstituentsSidebar({
               borderRadius: 8,
               border: '1px solid #e2e5eb',
               fontSize: 14,
-              fontFamily: mono,
+              fontFamily: 'inherit',
               boxSizing: 'border-box',
             }}
           />
@@ -188,23 +193,28 @@ export default function IndexConstituentsSidebar({
                   onClose();
                 }}
                 style={{
-                  display: 'block',
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 8,
                   width: '100%',
                   textAlign: 'left',
-                  padding: '12px 14px',
+                  padding: '10px 14px',
                   marginBottom: 4,
                   borderRadius: 8,
                   border: '1px solid #e2e5eb',
                   background: '#fff',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  fontFamily: mono,
-                  color: '#2563eb',
                   cursor: 'pointer',
                   WebkitTapHighlightColor: 'transparent',
                 }}
               >
-                {sym}
+                <span style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: '#2563eb', minWidth: 70 }}>
+                  {sym}
+                </span>
+                {companyMap[sym] && (
+                  <span style={{ fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {companyMap[sym]}
+                  </span>
+                )}
               </button>
             ))}
         </div>
