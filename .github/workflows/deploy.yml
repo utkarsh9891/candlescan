@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
@@ -102,3 +102,26 @@ jobs:
           path: dist
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      # Create GitHub Release (prerelease for 0.x.y, full release for 1.0.0+)
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          MAJOR=$(echo "$VERSION" | sed 's/^v//' | cut -d. -f1)
+
+          # Delete any existing release for this tag (idempotent re-runs)
+          gh release delete "$VERSION" --yes 2>/dev/null || true
+
+          if [ "$MAJOR" = "0" ]; then
+            gh release create "$VERSION" \
+              --title "$VERSION" \
+              --generate-notes \
+              --prerelease
+          else
+            gh release create "$VERSION" \
+              --title "$VERSION" \
+              --generate-notes
+          fi
+          echo "Created release: $VERSION (prerelease=$( [ "$MAJOR" = "0" ] && echo true || echo false ))"

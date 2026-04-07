@@ -371,7 +371,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
         <div style={card}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: debugMode ? '#2563eb' : '#4a5068' }}>
             <input type="checkbox" checked={!!debugMode}
-              onChange={(e) => { onDebugModeChange(e.target.checked); window.dispatchEvent(new Event('candlescan:check-update')); }}
+              onChange={(e) => onDebugModeChange(e.target.checked)}
               style={{ accentColor: '#2563eb', margin: 0, width: 18, height: 18 }} />
             Debug mode
           </label>
@@ -384,8 +384,18 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
       {/* About */}
       <div style={card}>
         <div style={sectionTitle}>About</div>
-        {appVersion && <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 6 }}>Version {appVersion}</div>}
-        <div style={{ fontSize: 11, color: '#8892a8' }}>Educational only — not financial advice.</div>
+        {appVersion && <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 6 }}>Version {appVersion} (pre-release)</div>}
+        <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 12 }}>Educational only — not financial advice.</div>
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event('candlescan:check-update'))}
+          style={{
+            padding: '7px 14px', fontSize: 11, fontWeight: 600, border: '1px solid #e2e5eb',
+            borderRadius: 6, cursor: 'pointer', background: '#f5f6f8', color: '#4a5068',
+          }}
+        >
+          Check for updates
+        </button>
       </div>
     </div>
   );
