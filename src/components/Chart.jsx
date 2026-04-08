@@ -648,7 +648,7 @@ export default forwardRef(function Chart({
     : null;
 
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div style={{ marginBottom: 12, userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}>
       {/* Drawing mode hint */}
       {canRender && drawingMode && (
         <div style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 500, marginBottom: 4 }}>
@@ -707,6 +707,9 @@ export default forwardRef(function Chart({
           background: '#fff',
           cursor: draggingHLine !== null ? 'ns-resize' : drawingMode ? 'crosshair' : 'default',
           touchAction: 'none',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none',
         }}
         role="img"
         aria-label={`Candlestick chart, ${slice.length} bars`}
@@ -1051,21 +1054,25 @@ export default forwardRef(function Chart({
         {canRender && crosshair && onDrawingComplete && (
           <button
             type="button"
-            onClick={() => {
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
               const price = priceFor(crosshair.y);
               onDrawingComplete({ type: 'hline', price });
               setCrosshair(null);
               longPressActive.current = false;
             }}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
               left: Math.min(crosshair.x + 12, containerWidth - 40),
               top: crosshair.y - 14,
-              width: 28, height: 28, borderRadius: 14,
+              width: 36, height: 36, borderRadius: 18,
               background: '#2563eb', color: '#fff',
               border: 'none', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 18, fontWeight: 700, lineHeight: 1,
+              fontSize: 20, fontWeight: 700, lineHeight: 1,
               boxShadow: '0 2px 8px rgba(37,99,235,0.4)',
               zIndex: 10,
             }}
