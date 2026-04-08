@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, forwardRef, useImperativeHandle } from 'react';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -58,7 +58,7 @@ function formatTimestamp(ts, timeframe, prevTs) {
 
 /* ── Component ────────────────────────────────────────────────────── */
 
-export default function Chart({
+export default forwardRef(function Chart({
   candles,
   box,
   risk,
@@ -71,7 +71,7 @@ export default function Chart({
   onDrawingUpdate,
   patterns = [],
   highlightSignals = false,
-}) {
+}, ref) {
   const [visibleCount, setVisibleCount] = useState(() => {
     const today = countLatestSessionCandles(candles);
     const isMobile = window.innerWidth < 500;
@@ -168,6 +168,14 @@ export default function Chart({
     setVisibleCount(defaultCount);
     setPanOffset(0);
   }, [maxVisible, candles]);
+
+  // Expose zoom controls to parent via ref
+  useImperativeHandle(ref, () => ({
+    zoomIn, zoomOut, zoomFit,
+    get atMinZoom() { return count <= floorBars; },
+    get atMaxZoom() { return count >= maxVisible; },
+    get barCount() { return slice.length; },
+  }), [zoomIn, zoomOut, zoomFit, count, floorBars, maxVisible, slice.length]);
 
   /* ── Wheel: ctrl+wheel = zoom, regular wheel = pan ───────────── */
   useEffect(() => {
@@ -618,42 +626,12 @@ export default function Chart({
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: 4,
-          marginBottom: 4,
-        }}
-      >
-        {drawingMode && (
-          <span style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 500, marginRight: 'auto' }}>
-            {drawingMode === 'hline' ? 'Tap to place line' : pendingPoint ? 'Tap end point' : 'Tap start point'}
-          </span>
-        )}
-        <span style={{ fontSize: 10, color: '#b0b8c8', marginRight: 'auto' }}>
-          {slice.length} bars
-        </span>
-        <button type="button" aria-label="Zoom in" title="Zoom in" onClick={zoomIn} disabled={atMinZoom}
-          style={{ ...btnStyle, opacity: atMinZoom ? 0.35 : 1, cursor: atMinZoom ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
-          </svg>
-        </button>
-        <button type="button" aria-label="Zoom out" title="Zoom out" onClick={zoomOut} disabled={atMaxZoom}
-          style={{ ...btnStyle, opacity: atMaxZoom ? 0.35 : 1, cursor: atMaxZoom ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
-          </svg>
-        </button>
-        <button type="button" aria-label="Reset zoom" title="Reset to today" onClick={zoomFit}
-          style={{ ...btnStyle, color: '#2563eb', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
-          </svg>
-        </button>
-      </div>
+      {/* Drawing mode hint */}
+      {drawingMode && (
+        <div style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 500, marginBottom: 4 }}>
+          {drawingMode === 'hline' ? 'Tap to place line' : pendingPoint ? 'Tap end point' : 'Tap start point'}
+        </div>
+      )}
 
       {/* Mobile OHLCV info bar — shown on candle tap */}
       {tappedCandle && tappedCandle.candle && (
@@ -1062,4 +1040,4 @@ export default function Chart({
       </div>
     </div>
   );
-}
+})
