@@ -16,14 +16,18 @@ const DHAN_INTERVAL_MAP = {
   '1d': 'day',
 };
 
-/** Maximum lookback in days for Dhan (90 days for intraday, unlimited for daily). */
+/**
+ * Initial lookback in days per interval.
+ * Kept small for fast initial load — lazy prefetch will extend on scroll.
+ * Dhan allows max 90 days per intraday request.
+ */
 const LOOKBACK_DAYS = {
-  '1': 90,
-  '5': 90,
-  '15': 90,
-  '25': 90,
-  '60': 90,
-  day: 2000,
+  '1': 5,     // ~1875 candles (5 trading days × 375 min)
+  '5': 15,    // ~1125 candles
+  '15': 30,   // ~750 candles
+  '25': 45,   // ~675 candles
+  '60': 60,   // ~375 candles
+  day: 365,   // ~250 candles
 };
 
 /** Format a Date as YYYY-MM-DD or YYYY-MM-DD HH:mm:ss for intraday. */
