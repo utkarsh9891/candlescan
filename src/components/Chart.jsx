@@ -86,6 +86,7 @@ export default function Chart({
   const [containerWidth, setContainerWidth] = useState(0);
   // Long-press crosshair state (mobile)
   const [crosshair, setCrosshair] = useState(null); // { x, y } or null
+  const crosshairRef = useRef(null); // sync ref for use in touch handlers
   const longPressTimer = useRef(null);
   const longPressActive = useRef(false);
   const wrapRef = useRef(null);
@@ -135,6 +136,7 @@ export default function Chart({
   countRef.current = count;
   visibleCountRef.current = visibleCount;
   maxVisibleRef.current = maxVisible;
+  crosshairRef.current = crosshair;
 
   useEffect(() => {
     if (maxVisible <= 0) return;
@@ -202,14 +204,32 @@ export default function Chart({
     const el = wrapRef.current;
     if (!el) return;
 
+    // Crosshair behavior:
+    // 1. Long-press (300ms hold) → activates crosshair
+    // 2. Drag while holding → moves crosshair
+    // 3. Lift finger → crosshair STAYS (no auto-dismiss)
+    // 4. Subsequent touch-move → moves crosshair around
+    // 5. Tap "+" → adds line, dismisses crosshair
+    // 6. Short tap (no move) → dismisses crosshair
+    // While crosshair is active, chart pan is disabled.
+
     const onTouchStart = (e) => {
       const t = touchRef.current;
       t.fingers = e.touches.length;
+      t.moved = false;
+
       if (e.touches.length === 1) {
         t.startX = e.touches[0].clientX;
         t.startY = e.touches[0].clientY;
         t.panStart = panOffsetRef.current;
-        // Start long-press timer for crosshair (300ms hold)
+
+        // If crosshair is already visible, subsequent touch moves it
+        if (crosshairRef.current) {
+          longPressActive.current = true;
+          return;
+        }
+
+        // Start long-press timer
         longPressActive.current = false;
         longPressTimer.current = setTimeout(() => {
           longPressActive.current = true;
@@ -233,28 +253,30 @@ export default function Chart({
 
     const onTouchMove = (e) => {
       const t = touchRef.current;
-      if (e.touches.length === 1 && t.fingers === 1) {
-        const dx = e.touches[0].clientX - t.startX;
-        const dy = e.touches[0].clientY - t.startY;
+      t.moved = true;
 
-        // If long-press crosshair is active, move crosshair instead of panning
-        if (longPressActive.current) {
+      if (e.touches.length === 1 && t.fingers === 1) {
+        // If crosshair active, move crosshair (not chart)
+        if (longPressActive.current || crosshairRef.current) {
           e.preventDefault();
           const rect = el.getBoundingClientRect();
           setCrosshair({
             x: e.touches[0].clientX - rect.left,
             y: e.touches[0].clientY - rect.top,
           });
+          longPressActive.current = true;
           return;
         }
 
-        // Cancel long-press if finger moved significantly
+        const dx = e.touches[0].clientX - t.startX;
+        const dy = e.touches[0].clientY - t.startY;
+
+        // Cancel long-press if moved
         if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
           clearTimeout(longPressTimer.current);
         }
 
         if (!drawingMode) {
-          // Pan chart
           const step = Math.round(dx / 8);
           const len = candles?.length || 0;
           const c = countRef.current;
@@ -278,14 +300,17 @@ export default function Chart({
 
     const onTouchEnd = () => {
       clearTimeout(longPressTimer.current);
-      touchRef.current.fingers = 0;
-      // Keep crosshair visible briefly after lift so user can tap the "+" button
-      if (longPressActive.current) {
-        setTimeout(() => {
-          longPressActive.current = false;
-          setCrosshair(null);
-        }, 1500);
+      const t = touchRef.current;
+      t.fingers = 0;
+
+      // Short tap without movement while crosshair is showing → dismiss
+      if (crosshairRef.current && !t.moved && !longPressActive.current) {
+        setCrosshair(null);
+        return;
       }
+
+      // After long-press drag, keep crosshair visible (don't dismiss)
+      longPressActive.current = false;
     };
 
     el.addEventListener('touchstart', onTouchStart, { passive: false });

@@ -179,10 +179,42 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
     setTokenUserName('');
   }, []);
 
+  const [switchWarning, setSwitchWarning] = useState(null); // { from, to } | null
+
   const handleSourceChange = useCallback((src) => {
+    const current = dataSource;
+    // Check if switching away from a premium source that has credentials
+    const hasZerodhaKeys = !!(getSavedApiKey() || getSavedApiSecret());
+    const hasDhanCreds = !!(() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID); } catch { return ''; } })();
+
+    if (current === 'zerodha' && hasZerodhaKeys && src !== 'zerodha') {
+      setSwitchWarning({ from: 'Zerodha', to: src });
+      return;
+    }
+    if (current === 'dhan' && hasDhanCreds && src !== 'dhan') {
+      setSwitchWarning({ from: 'Dhan', to: src });
+      return;
+    }
     setDataSourceState(src);
     setDataSource(src);
-  }, []);
+  }, [dataSource]);
+
+  const confirmSourceSwitch = useCallback(() => {
+    if (!switchWarning) return;
+    // Clear the old source's credentials
+    if (switchWarning.from === 'Zerodha') {
+      try { localStorage.removeItem(LS_ZERODHA_API_KEY); localStorage.removeItem(LS_ZERODHA_API_SECRET); } catch { /* ok */ }
+      setApiKey(''); setApiSecret('');
+      setTokenStatus('none'); setTokenUserName('');
+    } else if (switchWarning.from === 'Dhan') {
+      try { localStorage.removeItem(LS_DHAN_CLIENT_ID); } catch { /* ok */ }
+      setDhanClientId(''); setDhanStatus('none');
+    }
+    clearVault();
+    setDataSourceState(switchWarning.to);
+    setDataSource(switchWarning.to);
+    setSwitchWarning(null);
+  }, [switchWarning]);
 
   const handleSaveApiKeys = useCallback(() => {
     if (!apiKey.trim() || !apiSecret.trim()) {
@@ -537,44 +569,63 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
             <span style={{ fontSize: 10, fontWeight: 600, color: '#2563eb', marginLeft: 6, background: '#eff6ff', borderRadius: 4, padding: '2px 6px' }}>Premium</span>
           </span>
         </label>
+        {switchWarning && (
+          <div style={{
+            marginTop: 10, padding: '10px 12px', borderRadius: 8,
+            background: '#fefce8', border: '1px solid #fde68a',
+            fontSize: 12, color: '#92400e', lineHeight: 1.5,
+          }}>
+            Switching will clear <strong>{switchWarning.from}</strong> credentials.
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button type="button" onClick={confirmSourceSwitch}
+                style={{ ...btnPrimary, fontSize: 11, padding: '5px 12px' }}>Confirm</button>
+              <button type="button" onClick={() => setSwitchWarning(null)}
+                style={{ ...btnSecondary, fontSize: 11, padding: '5px 12px' }}>Cancel</button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Chart Density */}
       {/* Zerodha Setup */}
       {showZerodha && (
         <div style={card}>
           <div style={sectionTitle}>Zerodha Kite Connect</div>
 
+          {/* Disclaimer first */}
+          <div style={{
+            fontSize: 11, color: '#92400e', background: '#fefce8', border: '1px solid #fde68a',
+            borderRadius: 6, padding: '8px 10px', marginBottom: 12, lineHeight: 1.5,
+          }}>
+            Requires the <strong>Historical Data add-on</strong> (included in the Rs 2,000/month <a href="https://kite.trade" target="_blank" rel="noopener noreferrer" style={{ color: '#92400e' }}>Kite Connect</a> plan).
+            Without it, scans will fall back to Yahoo Finance.
+          </div>
+
           {/* Step 1: API Key & Secret */}
           <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
-            1. Enter your Kite Connect credentials
+            1. Get API Key & Secret from <a href="https://developers.kite.trade/apps" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>Kite Developer Console</a>
           </div>
           <PasteInput value={apiKey} onChange={setApiKey} placeholder="API Key" useMono />
           <PasteInput value={apiSecret} onChange={setApiSecret} placeholder="API Secret" type="password" useMono />
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <button type="button" onClick={handleSaveApiKeys} style={btnSecondary}>Save Keys</button>
+            <button type="button" onClick={handleSaveApiKeys}
+              disabled={apiKey === getSavedApiKey() && apiSecret === getSavedApiSecret()}
+              style={{ ...btnSecondary, opacity: (apiKey === getSavedApiKey() && apiSecret === getSavedApiSecret()) ? 0.5 : 1 }}>
+              Save Keys
+            </button>
           </div>
 
           {/* Step 2: OAuth Connect */}
           <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
             2. Authenticate with Zerodha
           </div>
+          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
+            Opens Zerodha login. After login, you'll be redirected back automatically. Token expires daily.
+          </div>
           <button type="button" onClick={handleConnectZerodha}
             disabled={oauthLoading || (!apiKey.trim() && !getSavedApiKey())}
             style={{ ...btnZerodha, opacity: oauthLoading ? 0.5 : 1, marginBottom: 12 }}>
             {oauthLoading ? 'Connecting...' : vaultSaved ? 'Reconnect Zerodha' : 'Connect Zerodha'}
           </button>
-          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 12 }}>
-            Opens Zerodha login. After login, you'll be redirected back and credentials are saved automatically.
-            Token expires daily — reconnect each trading day.
-          </div>
-          <div style={{
-            fontSize: 11, color: '#92400e', background: '#fefce8', border: '1px solid #fde68a',
-            borderRadius: 6, padding: '8px 10px', marginBottom: 12, lineHeight: 1.5,
-          }}>
-            Requires the <strong>Historical Data add-on</strong> (included in the Rs 2,000/month Kite Connect plan).
-            Without it, scans will fall back to Yahoo Finance.
-          </div>
 
           {/* Status */}
           <div style={{
@@ -628,7 +679,11 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
           </div>
           <PasteInput value={dhanClientId} onChange={setDhanClientId} placeholder="Dhan Client ID" useMono />
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <button type="button" onClick={handleSaveDhanClientId} style={btnSecondary}>Save</button>
+            <button type="button" onClick={handleSaveDhanClientId}
+              disabled={dhanClientId === ((() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })())}
+              style={{ ...btnSecondary, opacity: dhanClientId === ((() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })()) ? 0.5 : 1 }}>
+              Save
+            </button>
           </div>
 
           {/* Status */}
@@ -656,9 +711,11 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
                   style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
                   {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
                 </button>
-                <button type="button" onClick={handleReconnectDhan} style={btnSecondary}>
-                  Reconnect
-                </button>
+                {!dhanShowAuth && (
+                  <button type="button" onClick={handleReconnectDhan} style={btnSecondary}>
+                    Reconnect
+                  </button>
+                )}
                 <button type="button" onClick={handleClearDhan} style={btnDanger}>
                   Clear Credentials
                 </button>
@@ -689,6 +746,9 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
               </div>
               <PasteInput value={dhanPin} onChange={setDhanPin} placeholder="Dhan PIN (6 digits)" type="password" useMono />
               <PasteInput value={dhanTotp} onChange={setDhanTotp} placeholder="TOTP (6 digits)" useMono />
+              <div style={{ fontSize: 11, color: '#d97706', marginBottom: 8 }}>
+                Dhan allows token generation once every 2 minutes.
+              </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <button type="button" onClick={handleConnectDhan}
                   disabled={dhanConnecting}
