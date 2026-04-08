@@ -146,6 +146,16 @@ export default function App() {
     try { return localStorage.getItem('candlescan_data_source') || 'yahoo'; } catch { return 'yahoo'; }
   });
   const [zerodhaExpiredMsg, setZerodhaExpiredMsg] = useState('');
+
+  // Re-sync dataSource from localStorage when returning from Settings
+  useEffect(() => {
+    if (view === 'main') {
+      try {
+        const stored = localStorage.getItem('candlescan_data_source') || 'yahoo';
+        setDataSourceState(stored);
+      } catch { /* ok */ }
+    }
+  }, [view]);
   const [lastUsedSource, setLastUsedSource] = useState('yahoo');
 
   const [nseIndex, setNseIndex] = useState(() => {
