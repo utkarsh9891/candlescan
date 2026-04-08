@@ -222,9 +222,7 @@ export default function UpdatePrompt() {
           boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
         }}>
           <span>
-            New version available
-            {newVersion ? ` (${newVersion})` : ''}
-            {currentVersion ? ` — current: ${currentVersion}` : ''}
+            {newVersion ? `Update to ${newVersion}` : 'New version available'}
           </span>
           <button
             type="button"
