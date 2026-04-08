@@ -130,7 +130,7 @@ export default function DebugPanel({ open, onClose }) {
   function formatEntryForCopy(e) {
     const lines = [
       `${e.method} ${e.fullUrl}`,
-      `Status: ${e.status} | Time: ${e.time}ms`,
+      `Status: ${e.status} | Time: ${e.time}ms | Timestamp: ${e.ts}`,
       '',
       '--- Request Headers ---',
       ...Object.entries(e.reqHeaders).map(([k, v]) => `${k}: ${v}`),

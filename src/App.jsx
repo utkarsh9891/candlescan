@@ -366,16 +366,25 @@ export default function App() {
           } else {
             debugReason = `Setting=zerodha, vault=yes, gateToken=yes — calling Zerodha API`;
             result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
-            if (result.error && /HTTP 40[13]|TokenException|InputException|Incorrect.*api_key|expired/i.test(result.error)) {
-              clearVault();
-              try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
-              setDataSourceState('yahoo');
-              setZerodhaExpiredMsg('Zerodha token expired — switched to Yahoo Finance. Reconnect in Settings.');
-              debugReason += ` → auth error: ${result.error} → cleared vault, fallback Yahoo`;
-              result = null;
-              usedSource = 'yahoo';
-            } else if (result.error) {
-              debugReason += ` → error: ${result.error} → fallback Yahoo`;
+            if (result.error) {
+              const err = result.error;
+              // Token actually expired/invalid — clear vault and switch source
+              const isTokenExpiry = /TokenException|Incorrect.*api_key|token.*invalid|token.*expired/i.test(err);
+              // Permission error (e.g. no Historical Data add-on) — DON'T clear vault
+              const isPermission = /Insufficient permission|permission denied/i.test(err);
+
+              if (isTokenExpiry) {
+                clearVault();
+                try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
+                setDataSourceState('yahoo');
+                setZerodhaExpiredMsg('Zerodha token expired — switched to Yahoo Finance. Reconnect in Settings.');
+                debugReason += ` → token expired: ${err} → cleared vault, fallback Yahoo`;
+              } else if (isPermission) {
+                setZerodhaExpiredMsg('Zerodha: Historical data permission missing. Using Yahoo Finance. Enable the Historical Data add-on in your Kite Connect app.');
+                debugReason += ` → permission error: ${err} → fallback Yahoo (vault kept)`;
+              } else {
+                debugReason += ` → error: ${err} → fallback Yahoo`;
+              }
               result = null;
               usedSource = 'yahoo';
             } else {
