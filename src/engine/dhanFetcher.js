@@ -70,20 +70,26 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
   const fromStr = formatDate(from, isIntraday);
 
   try {
+    const reqBody = {
+      symbol: sym,
+      interval,
+      from: fromStr,
+      to: toStr,
+      vault,
+      dhanClientId: (() => { try { return localStorage.getItem('candlescan_dhan_client_id') || ''; } catch { return ''; } })(),
+    };
+    const bodyStr = JSON.stringify(reqBody);
+    // Debug: log body size to help diagnose "Failed to fetch"
+    if (typeof console !== 'undefined') {
+      console.log(`[Dhan] POST /dhan/historical — body: ${bodyStr.length} bytes, symbol: ${sym}, interval: ${interval}, vault: ${vault ? vault.length + ' chars' : 'MISSING'}`);
+    }
     const res = await fetch(`${CF_WORKER_URL}/dhan/historical`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Gate-Token': gateToken,
       },
-      body: JSON.stringify({
-        symbol: sym,
-        interval,
-        from: fromStr,
-        to: toStr,
-        vault,
-        dhanClientId: (() => { try { return localStorage.getItem('candlescan_dhan_client_id') || ''; } catch { return ''; } })(),
-      }),
+      body: bodyStr,
     });
 
     if (!res.ok) {
