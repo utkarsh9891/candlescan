@@ -48,13 +48,13 @@ function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
     ? `${Math.floor(delaySec / 60)}m`
     : delaySec > 0 ? `~${delaySec}s` : '~1-2 min';
 
-  if (!showDelay && !lastScan) return null;
+  if (!candles?.length && !lastScan) return null;
 
   return (
     <div style={{ fontSize: 10, color: '#8892a8', textAlign: 'right', marginTop: -8, marginBottom: 4, paddingRight: 2 }}>
-      {showDelay && <>Data delayed by {delayText} ({sourceName})</>}
-      {showDelay && lastScan && ' · '}
-      {lastScan && <>Scanned {lastScan}</>}
+      {sourceName}
+      {showDelay && <> · delayed by {delayText}</>}
+      {lastScan && <> · scanned {lastScan}</>}
     </div>
   );
 }

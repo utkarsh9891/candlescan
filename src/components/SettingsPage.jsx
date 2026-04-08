@@ -238,6 +238,39 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
     } catch { /* ok */ }
   }, []);
 
+  const handleValidateToken = useCallback(async () => {
+    if (!hasVault() || !hasGateToken()) {
+      setVaultMsg('No credentials to validate');
+      setVaultMsgColor('#dc2626');
+      return;
+    }
+    setTokenStatus('checking');
+    setVaultMsg('');
+    try {
+      const vault = getVaultBlob();
+      const gateToken = getGateToken();
+      const res = await fetch(`${CF_WORKER_URL}/zerodha/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
+        body: JSON.stringify({ vault }),
+      });
+      const data = await res.json();
+      if (data.valid) {
+        setTokenStatus('valid');
+        setTokenUserName(data.userName || '');
+        setVaultMsg('Token is valid');
+        setVaultMsgColor('#16a34a');
+      } else {
+        setTokenStatus('expired');
+        setVaultMsg(`Validation failed: ${data.error || 'token invalid'}`);
+        setVaultMsgColor('#dc2626');
+      }
+    } catch (err) {
+      setVaultMsg(`Network error: ${err.message}`);
+      setVaultMsgColor('#dc2626');
+    }
+  }, []);
+
   // eslint-disable-next-line no-undef
   // Version now shown only in hamburger menu
 
@@ -417,12 +450,21 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
 
           {vaultMsg && <div style={{ fontSize: 12, color: vaultMsgColor, marginBottom: 6 }}>{vaultMsg}</div>}
 
-          {/* Clear */}
-          {(tokenStatus === 'valid' || tokenStatus === 'checking') && (
-            <button type="button" onClick={handleClearVault} style={{ ...btnDanger, marginTop: 8 }}>
-              Clear Credentials
-            </button>
-          )}
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            {hasVault() && (
+              <button type="button" onClick={handleValidateToken}
+                disabled={tokenStatus === 'checking'}
+                style={{ ...btnSecondary, opacity: tokenStatus === 'checking' ? 0.5 : 1 }}>
+                {tokenStatus === 'checking' ? 'Validating...' : 'Validate Token'}
+              </button>
+            )}
+            {(tokenStatus === 'valid' || tokenStatus === 'checking') && (
+              <button type="button" onClick={handleClearVault} style={btnDanger}>
+                Clear Credentials
+              </button>
+            )}
+          </div>
         </div>
       )}
 
