@@ -27,5 +27,8 @@ coverage/
 *.sublime-project
 *.sublime-workspace
 
+# Cloudflare Wrangler
+.wrangler/
+
 # Claude Code
 .claude/
