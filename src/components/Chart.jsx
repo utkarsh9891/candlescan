@@ -631,24 +631,18 @@ export default forwardRef(function Chart({
       }
     : null;
 
-  if (!canRender) {
-    return (
-      <div style={{ marginBottom: 12 }}>
-        <div ref={wrapRef} style={{ borderRadius: 10, border: '1px solid #e2e5eb', background: '#fff', minHeight: slice.length ? height + X_AXIS_HEIGHT : 0 }} />
-      </div>
-    );
-  }
-
   return (
     <div style={{ marginBottom: 12 }}>
       {/* Drawing mode hint */}
-      {drawingMode && (
+      {canRender && drawingMode && (
         <div style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 500, marginBottom: 4 }}>
           {drawingMode === 'hline' ? 'Tap to place line' : pendingPoint ? 'Tap end point' : 'Tap start point'}
         </div>
       )}
 
-      {/* Mobile OHLCV info bar — shown on candle tap */}
+      {/* Mobile OHLCV info bar — shown on candle tap (only when chart renders) */}
+      {canRender && (
+      <>
       {tappedCandle && tappedCandle.candle && (
         <div style={{
           display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
@@ -677,6 +671,8 @@ export default forwardRef(function Chart({
           Price: {priceFor(touchDrawPos.y).toFixed(2)} · Lift finger to confirm
         </div>
       )}
+      </>
+      )}
 
       <div
         ref={wrapRef}
@@ -692,7 +688,7 @@ export default forwardRef(function Chart({
         role="img"
         aria-label={`Candlestick chart, ${slice.length} bars`}
       >
-        <svg
+        {canRender ? <svg
           ref={svgRef}
           width={w}
           height={totalH}
@@ -1027,8 +1023,9 @@ export default forwardRef(function Chart({
             </g>
           )}
         </svg>
+        : <div style={{ minHeight: height + X_AXIS_HEIGHT }} />}
         {/* Floating "+" button for adding hline at crosshair price */}
-        {crosshair && onDrawingComplete && (
+        {canRender && crosshair && onDrawingComplete && (
           <button
             type="button"
             onClick={() => {
