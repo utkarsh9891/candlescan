@@ -99,9 +99,7 @@ const shell = {
 };
 
 export default function App() {
-  const [mode, setMode] = useState(() => {
-    try { return localStorage.getItem('candlescan_mode') || 'advanced'; } catch { return 'advanced'; }
-  });
+  const mode = 'advanced'; // Single view mode — Simple/Advanced toggle removed
   const [engineVersion, setEngineVersion] = useState(() => {
     try { return localStorage.getItem('candlescan_engine') || 'scalp'; } catch { return 'scalp'; }
   });
@@ -689,7 +687,7 @@ export default function App() {
 
       {/* Settings page */}
       {view === 'settings' && (
-        <SettingsPage onBack={() => setView('main')} debugMode={debugMode} onDebugModeChange={setDebugMode} mode={mode} onModeChange={setMode} />
+        <SettingsPage onBack={() => setView('main')} debugMode={debugMode} onDebugModeChange={setDebugMode} />
       )}
 
       {/* Main view — hidden when not active */}
@@ -871,7 +869,7 @@ export default function App() {
               <strong>Source:</strong> {lastUsedSource} | {sourceDebugReason}
             </div>
           )}
-          {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
+          <AdvancedView {...viewProps} />
         </>
       )}
 
