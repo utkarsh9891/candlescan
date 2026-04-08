@@ -84,14 +84,21 @@ async function checkRateLimit(request, env) {
 
 /**
  * Decrypt an RSA-OAEP + AES-GCM hybrid-encrypted vault blob.
- * Format: base64 of JSON { encKey: base64, iv: base64, data: base64 }
- *   - encKey: AES-256 key encrypted with RSA-OAEP (GATE_PRIVATE_KEY)
- *   - iv: AES-GCM 12-byte IV
- *   - data: AES-GCM ciphertext of the plaintext credentials JSON
+ *
+ * The client (credentialVault.js) stores the vault as base64 of a binary layout:
+ *   [2 bytes: RSA ciphertext length (big-endian)]
+ *   [RSA-encrypted AES key]
+ *   [12 bytes: AES-GCM IV]
+ *   [AES-GCM ciphertext (includes auth tag)]
  */
 async function decryptVault(vaultBlob, privateKeyPem) {
-  const vaultJson = JSON.parse(atob(vaultBlob));
-  const { encKey, iv, data } = vaultJson;
+  const raw = Uint8Array.from(atob(vaultBlob), c => c.charCodeAt(0));
+
+  // Parse binary layout
+  const rsaLen = (raw[0] << 8) | raw[1];
+  const encKeyBuf = raw.slice(2, 2 + rsaLen);
+  const ivBuf = raw.slice(2 + rsaLen, 2 + rsaLen + 12);
+  const dataBuf = raw.slice(2 + rsaLen + 12);
 
   // Import RSA private key
   const pemBody = privateKeyPem
@@ -106,13 +113,10 @@ async function decryptVault(vaultBlob, privateKeyPem) {
   );
 
   // Decrypt AES key with RSA
-  const encKeyBuf = Uint8Array.from(atob(encKey), c => c.charCodeAt(0));
   const aesKeyBuf = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, rsaKey, encKeyBuf);
   const aesKey = await crypto.subtle.importKey('raw', aesKeyBuf, 'AES-GCM', false, ['decrypt']);
 
   // Decrypt data with AES
-  const ivBuf = Uint8Array.from(atob(iv), c => c.charCodeAt(0));
-  const dataBuf = Uint8Array.from(atob(data), c => c.charCodeAt(0));
   const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBuf }, aesKey, dataBuf);
 
   return JSON.parse(new TextDecoder().decode(plainBuf));
