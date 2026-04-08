@@ -347,7 +347,8 @@ export default function App() {
         if (vault && gateToken) {
           result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
           // If Zerodha fails with auth error, fallback to Yahoo
-          if (result.error && /403|401|token|expired|InputException/i.test(result.error)) {
+          // Match Kite API auth errors: HTTP 403, 401, or explicit "TokenException"/"InputException"
+          if (result.error && /HTTP 40[13]|TokenException|InputException|Incorrect.*api_key|expired/i.test(result.error)) {
             clearVault();
             try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
             setDataSourceState('yahoo');

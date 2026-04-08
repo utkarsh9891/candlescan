@@ -52,8 +52,9 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
       return;
     }
     if (dataSource !== 'zerodha') {
-      // If vault exists but source isn't zerodha, still show status but skip validation
-      setTokenStatus('checking');
+      // Vault exists but source isn't zerodha — show as valid (skip validation)
+      setTokenStatus('valid');
+      return;
     }
     let cancelled = false;
     (async () => {
@@ -61,7 +62,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
       try {
         const vault = getVaultBlob();
         const gateToken = getGateToken();
-        if (!vault || !gateToken) { setTokenStatus('none'); return; }
+        if (!vault || !gateToken) { if (!cancelled) setTokenStatus('none'); return; }
         const res = await fetch(`${CF_WORKER_URL}/zerodha/validate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
@@ -82,11 +83,12 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
           setVaultMsgColor('#dc2626');
         }
       } catch {
-        if (!cancelled) setTokenStatus('checking'); // Network error — leave as ambiguous
+        // Network error — assume valid to avoid false cleanup
+        if (!cancelled) setTokenStatus('valid');
       }
     })();
     return () => { cancelled = true; };
-  }, [gateUnlocked]);
+  }, [gateUnlocked, dataSource]);
 
   // Handle OAuth callback — catch request_token from URL
   useEffect(() => {
@@ -201,6 +203,11 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   }, [apiKey, apiSecret]);
 
   const handleConnectZerodha = useCallback(() => {
+    // If token is currently valid, confirm before invalidating
+    if (tokenStatus === 'valid') {
+      const ok = window.confirm('Your current Zerodha session is active. Reconnecting will invalidate it. Continue?');
+      if (!ok) return;
+    }
     const key = apiKey.trim() || getSavedApiKey();
     if (!key) {
       setVaultMsg('Save your API Key first');
@@ -217,7 +224,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
     // Redirect to Zerodha OAuth login
     const redirectUrl = window.location.origin + window.location.pathname;
     window.location.href = `https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(key)}&redirect_url=${encodeURIComponent(redirectUrl)}`;
-  }, [apiKey, apiSecret]);
+  }, [apiKey, apiSecret, tokenStatus]);
 
   const handleClearVault = useCallback(() => {
     try {
