@@ -79,6 +79,7 @@ export default function Chart({
     return today > 0 ? Math.min(cap, today, MAX_VISIBLE_CAP) : cap;
   });
   const [panOffset, setPanOffset] = useState(0);
+  const panOffsetRef = useRef(0);
   const [containerWidth, setContainerWidth] = useState(0);
   const wrapRef = useRef(null);
   const svgRef = useRef(null);
@@ -182,6 +183,9 @@ export default function Chart({
   }, [count, maxVisible, candles?.length]);
 
   /* ── Touch: pinch = zoom, swipe = pan ────────────────────────── */
+  // Keep panOffset ref in sync (avoids stale closure in touch handlers)
+  useEffect(() => { panOffsetRef.current = panOffset; }, [panOffset]);
+
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -191,7 +195,7 @@ export default function Chart({
       t.fingers = e.touches.length;
       if (e.touches.length === 1) {
         t.startX = e.touches[0].clientX;
-        t.panStart = panOffset;
+        t.panStart = panOffsetRef.current; // Read from ref, not closure
       } else if (e.touches.length === 2) {
         e.preventDefault();
         const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -204,11 +208,11 @@ export default function Chart({
     const onTouchMove = (e) => {
       const t = touchRef.current;
       if (e.touches.length === 1 && t.fingers === 1 && !drawingMode) {
-        // Pan (disabled when drawing)
-        // Drag right (positive dx) → show more recent candles → decrease panOffset
+        // Pan: drag LEFT → show newer candles (panOffset decreases)
+        //       drag RIGHT → show older candles (panOffset increases)
         const dx = e.touches[0].clientX - t.startX;
         const step = Math.round(dx / 8);
-        const newPan = Math.max(0, Math.min((candles?.length || 0) - count, t.panStart - step));
+        const newPan = Math.max(0, Math.min((candles?.length || 0) - count, t.panStart + step));
         setPanOffset(newPan);
       } else if (e.touches.length === 2) {
         e.preventDefault();
@@ -236,7 +240,7 @@ export default function Chart({
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  }, [panOffset, visibleCount, count, maxVisible, candles?.length, drawingMode]);
+  }, [visibleCount, count, maxVisible, candles?.length, drawingMode]);
 
   const canRender = slice.length > 0 && containerWidth > 0;
 

@@ -10,7 +10,10 @@ function gitVersion() {
   // when multiple tags point to the same commit)
   if (process.env.CANDLESCAN_VERSION) return process.env.CANDLESCAN_VERSION;
   try {
-    return execSync('git describe --tags --always', { encoding: 'utf8' }).trim();
+    // Use the latest semver tag directly — git describe appends commit hashes
+    // for commits after a tag (e.g. v0.11.20-2-g3744c01) which breaks version comparison
+    const tag = execSync("git tag -l 'v*' --sort=-v:refname | head -1", { encoding: 'utf8' }).trim();
+    return tag || execSync('git describe --tags --always', { encoding: 'utf8' }).trim();
   } catch {
     return 'dev';
   }
@@ -60,8 +63,14 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ['src/**/*.test.js'],
+    include: ['src/**/*.test.js', 'src/**/*.test.jsx'],
     environment: 'node',
+    // Component tests opt into jsdom via the per-file comment:
+    //   // @vitest-environment jsdom
+    environmentMatchGlobs: [
+      ['src/**/*.test.jsx', 'jsdom'],
+    ],
+    setupFiles: ['./src/test-setup.js'],
     coverage: {
       provider: 'v8',
       include: ['src/engine/**', 'src/config/**', 'src/utils/**', 'src/data/**'],
