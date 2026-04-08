@@ -649,6 +649,7 @@ export default function App() {
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
           scalpVariant={scalpVariant}
+          dataSource={dataSource}
         />
       </div>
 
@@ -666,6 +667,7 @@ export default function App() {
           engineVersion={engineVersion}
           scalpVariant={scalpVariant}
           onScalpVariantChange={setScalpVariant}
+          dataSource={dataSource}
         />
       </div>
 
@@ -676,6 +678,7 @@ export default function App() {
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
           scalpVariant={scalpVariant}
+          dataSource={dataSource}
         />
       </div>
 

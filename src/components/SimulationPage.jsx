@@ -11,6 +11,7 @@ import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidi
 import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
 import { getScalpVariantFns, SCALP_VARIANTS, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
+import { createFetchFn } from '../engine/dataSourceFetch.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { getGateToken } from '../utils/batchAuth.js';
 import { MARGIN_MULTIPLIER, fetchMarginMap } from '../data/marginData.js';
@@ -86,7 +87,7 @@ const ENGINE_PRESETS = {
   v1:     { from: '09:15', to: '15:30', maxOpen: 3, maxTrades: 2 },
 };
 
-export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant: parentVariant, onScalpVariantChange }) {
+export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant: parentVariant, onScalpVariantChange, dataSource }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [localEngine, setLocalEngine] = useState(engineVersion || 'scalp');
   const [localVariant, setLocalVariant] = useState(parentVariant || DEFAULT_SCALP_VARIANT);
@@ -165,6 +166,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
           setProgress({ phase, completed, total, current });
         },
         signal: controller.signal,
+        fetchFn: createFetchFn(dataSource || 'yahoo'),
       });
       setResults(res);
     } catch (e) {

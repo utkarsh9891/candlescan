@@ -49,6 +49,7 @@ export async function batchScan({
   delayMs = 200,
   onProgress,
   signal,
+  fetchFn, // optional: custom fetch function (e.g. fetchDhanOHLCV) — defaults to Yahoo
 }) {
   // Use provided engine functions or fall back to defaults
   const detectPatterns = engineFns?.detectPatterns || detectPatternsDefault;
@@ -68,7 +69,8 @@ export async function batchScan({
       chunk.map(async (sym) => {
         if (signal?.aborted) return null;
         try {
-          const result = await fetchOHLCV(sym, timeframe, { gateToken: gateToken || batchToken });
+          const doFetch = fetchFn || fetchOHLCV;
+          const result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
           const { candles, companyName, displaySymbol, error } = result;
           if (error || !candles?.length) return null;
 

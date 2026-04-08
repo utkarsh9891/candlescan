@@ -3,6 +3,7 @@ import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../co
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan } from '../engine/batchScan.js';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
+import { createFetchFn } from '../engine/dataSourceFetch.js';
 // Engine-specific imports for engine-aware batch scanning
 import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
 import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
@@ -148,7 +149,7 @@ function getEngineFns(engineVersion, scalpVariant) {
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant, dataSource }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [nseIndex, setNseIndex] = useState(savedIndex || DEFAULT_NSE_INDEX_ID);
   const [timeframe, setTimeframe] = useState('5m');
@@ -201,6 +202,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
           setProgress({ completed, total, current });
         },
         signal: controller.signal,
+        fetchFn: createFetchFn(dataSource || 'yahoo'),
       });
 
       setResults(scanResults);

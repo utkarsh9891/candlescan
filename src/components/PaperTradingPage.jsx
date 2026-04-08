@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan } from '../engine/batchScan.js';
+import { createFetchFn } from '../engine/dataSourceFetch.js';
 import { fetchYahooQuote } from '../engine/yahooQuote.js';
 import { getGateToken } from '../utils/batchAuth.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
@@ -147,7 +148,7 @@ const sectionHeader = (onClick, open, label, count, rightEl) => (
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-export default function PaperTradingPage({ savedIndex, indexOptions, engineVersion, scalpVariant }) {
+export default function PaperTradingPage({ savedIndex, indexOptions, engineVersion, scalpVariant, dataSource }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
 
   // Load saved settings
@@ -220,6 +221,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
         indexDirection: idxDir,
         onProgress: (completed, total, current) => setScanProgress({ completed, total, current }),
         signal: controller.signal,
+        fetchFn: createFetchFn(dataSource || 'yahoo'),
       });
       setScanResults(results);
     } catch (e) { if (e?.name !== 'AbortError') setScanError(e?.message || String(e)); }

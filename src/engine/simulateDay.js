@@ -92,6 +92,7 @@ export async function runSimulation({
   batchToken, // backward compat
   onProgress,
   signal,
+  fetchFn, // optional custom fetch (e.g. Dhan/Zerodha)
 }) {
   const { detectPatterns, detectLiquidityBox, computeRiskScore } = engineFns;
   const startSecs = timeToSecs(startTime);
@@ -116,7 +117,8 @@ export async function runSimulation({
     await Promise.allSettled(chunk.map(async (sym) => {
       if (signal?.aborted) return;
       try {
-        const result = await fetchOHLCV(sym, timeframe, { gateToken: gateToken || batchToken, date });
+        const doFetch = fetchFn || fetchOHLCV;
+        const result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken, date });
         const allCandles = result.candles;
         if (!allCandles?.length) return;
 
