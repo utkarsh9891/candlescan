@@ -287,6 +287,74 @@ async function handleZerodhaSession(request, env, origin) {
   }
 }
 
+/**
+ * Handle /zerodha/validate — decrypt vault and check token validity via Kite user/profile.
+ */
+async function handleZerodhaValidate(request, env, origin) {
+  const authResult = await validateGateToken(request, env);
+  if (authResult !== true) {
+    return new Response(JSON.stringify({ error: 'Premium access required' }), {
+      status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const body = await request.json();
+  const { vault } = body;
+
+  if (!vault) {
+    return new Response(JSON.stringify({ valid: false, error: 'No vault provided' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!env.GATE_PRIVATE_KEY) {
+    return new Response(JSON.stringify({ valid: false, error: 'Server not configured' }), {
+      status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  let creds;
+  try {
+    creds = await decryptVault(vault, env.GATE_PRIVATE_KEY);
+  } catch {
+    return new Response(JSON.stringify({ valid: false, error: 'Failed to decrypt credentials' }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { zerodhaApiKey, zerodhaAccessToken } = creds;
+  if (!zerodhaApiKey || !zerodhaAccessToken) {
+    return new Response(JSON.stringify({ valid: false, error: 'Missing credentials in vault' }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    const resp = await fetch('https://api.kite.trade/user/profile', {
+      headers: {
+        'Authorization': `token ${zerodhaApiKey}:${zerodhaAccessToken}`,
+        'X-Kite-Version': '3',
+      },
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      return new Response(JSON.stringify({ valid: true, userName: data.data?.user_name || '' }), {
+        status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    const errData = await resp.json().catch(() => ({}));
+    return new Response(JSON.stringify({ valid: false, error: errData.message || `HTTP ${resp.status}` }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ valid: false, error: err.message || 'Network error' }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -308,6 +376,9 @@ export default {
       }
       if (path === '/zerodha/session') {
         return handleZerodhaSession(request, env, origin);
+      }
+      if (path === '/zerodha/validate') {
+        return handleZerodhaValidate(request, env, origin);
       }
       return new Response('Not found', { status: 404, headers: corsHeaders(origin) });
     }

@@ -29,15 +29,18 @@ import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { getMarketStatus } from './utils/marketHours.js';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
-import { hasGateToken } from './utils/batchAuth.js';
+import { hasGateToken, getGateToken } from './utils/batchAuth.js';
+import { getVaultBlob, hasVault, clearVault } from './utils/credentialVault.js';
+import { fetchZerodhaOHLCV } from './engine/zerodhaFetcher.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList, fetchNseIndexWithNames } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
 
-function DataDelayDisclaimer({ candles, simulated }) {
+function DataDelayDisclaimer({ candles, simulated, dataSource }) {
   const status = getMarketStatus();
   if (simulated || !candles?.length || !status.isOpen) return null;
 
+  const sourceName = dataSource === 'zerodha' ? 'Zerodha Kite' : 'Yahoo Finance';
   // Only show during market hours when data may be delayed
   const lastTs = candles[candles.length - 1]?.t;
   const delaySec = lastTs ? Math.floor(Date.now() / 1000 - lastTs) : 0;
@@ -46,7 +49,7 @@ function DataDelayDisclaimer({ candles, simulated }) {
     : delaySec > 0 ? `~${delaySec}s` : '~1-2 min';
   return (
     <div style={{ fontSize: 10, color: '#8892a8', textAlign: 'right', marginTop: -8, marginBottom: 4, paddingRight: 2 }}>
-      Data delayed by {delayText} (Yahoo Finance)
+      Data delayed by {delayText} ({sourceName})
     </div>
   );
 }
@@ -133,6 +136,12 @@ export default function App() {
   const [yahooSym, setYahooSym] = useState('');
   const [quote, setQuote] = useState(null);
   const activeSymRef = useRef('');
+
+  const [dataSource, setDataSourceState] = useState(() => {
+    try { return localStorage.getItem('candlescan_data_source') || 'yahoo'; } catch { return 'yahoo'; }
+  });
+  const [zerodhaExpiredMsg, setZerodhaExpiredMsg] = useState('');
+  const [lastUsedSource, setLastUsedSource] = useState('yahoo');
 
   const [nseIndex, setNseIndex] = useState(() => {
     try {
@@ -321,8 +330,41 @@ export default function App() {
     setLoading(true);
     setScanError('');
     setQuote(null);
+    setZerodhaExpiredMsg('');
     try {
-      const result = await fetchOHLCV(s, timeframe);
+      let result;
+      let usedSource = dataSource;
+
+      // Try Zerodha first if configured
+      if (dataSource === 'zerodha' && hasVault()) {
+        const vault = getVaultBlob();
+        const gateToken = getGateToken();
+        if (vault && gateToken) {
+          result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
+          // If Zerodha fails with auth error, fallback to Yahoo
+          if (result.error && /403|401|token|expired|InputException/i.test(result.error)) {
+            clearVault();
+            try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
+            setDataSourceState('yahoo');
+            setZerodhaExpiredMsg('Zerodha token expired — switched to Yahoo Finance. Reconnect in Settings.');
+            result = null;
+            usedSource = 'yahoo';
+          } else if (result.error) {
+            // Other Zerodha error — fallback to Yahoo silently
+            result = null;
+            usedSource = 'yahoo';
+          }
+        } else {
+          usedSource = 'yahoo';
+        }
+      }
+
+      // Fallback to Yahoo Finance
+      if (!result || (!result.candles?.length && !result.error)) {
+        result = await fetchOHLCV(s, timeframe);
+        usedSource = 'yahoo';
+      }
+
       const { candles: cd, live: lv, simulated: sim, error: err, companyName: cn, displaySymbol, yahooSymbol } = result;
 
       activeSymRef.current = displaySymbol;
@@ -330,6 +372,7 @@ export default function App() {
       setCompanyName(cn || displaySymbol);
       setYahooSym(yahooSymbol || '');
       setSimulated(!!sim);
+      setLastUsedSource(usedSource);
       setLive(!!lv);
 
       // Grow search universe with newly discovered symbols
@@ -397,7 +440,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [timeframe, engineVersion, scalpVariant, nseIndex]);
+  }, [timeframe, engineVersion, scalpVariant, nseIndex, dataSource]);
 
   useEffect(() => {
     if (mode !== 'advanced' || simulated || !yahooSym || !risk) {
@@ -660,6 +703,33 @@ export default function App() {
         </div>
       )}
 
+      {zerodhaExpiredMsg && (
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            background: '#fefce8',
+            border: '1px solid #fde68a',
+            color: '#92400e',
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginBottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}
+        >
+          <span>{zerodhaExpiredMsg}</span>
+          <button
+            type="button"
+            onClick={() => setZerodhaExpiredMsg('')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', fontSize: 16, lineHeight: 1, padding: 2, flexShrink: 0 }}
+            aria-label="Dismiss"
+          >×</button>
+        </div>
+      )}
+
       {scanError ? (
         <div
           role="alert"
@@ -725,7 +795,7 @@ export default function App() {
             patterns={patterns}
             highlightSignals={highlightSignals}
           />
-          <DataDelayDisclaimer candles={candles} simulated={simulated} />
+          <DataDelayDisclaimer candles={candles} simulated={simulated} dataSource={lastUsedSource} />
           {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
         </>
       )}

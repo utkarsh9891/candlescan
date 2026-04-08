@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
-import { unlockGate, encryptToVault, getVaultBlob, hasVault, clearGate, getGatePublicKey } from '../utils/credentialVault.js';
+import { unlockGate, encryptToVault, getVaultBlob, hasVault, clearVault, clearGate, getGatePublicKey } from '../utils/credentialVault.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
@@ -31,7 +31,9 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   const [apiKey, setApiKey] = useState(getSavedApiKey);
   const [apiSecret, setApiSecret] = useState(getSavedApiSecret);
 
-  const [vaultSaved, setVaultSaved] = useState(false);
+  // tokenStatus: 'none' | 'checking' | 'valid' | 'expired'
+  const [tokenStatus, setTokenStatus] = useState(() => hasVault() ? 'checking' : 'none');
+  const [tokenUserName, setTokenUserName] = useState('');
   const [vaultMsg, setVaultMsg] = useState('');
   const [vaultMsgColor, setVaultMsgColor] = useState('#8892a8');
   const [oauthLoading, setOauthLoading] = useState(false);
@@ -40,9 +42,50 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   const [showApiSecret, setShowApiSecret] = useState(false);
   const passphraseRef = useRef(null);
 
-  // Check vault status on mount and when gate state changes
+  // Derived for backward compat in UI logic
+  const vaultSaved = tokenStatus === 'valid' || tokenStatus === 'checking';
+
+  // Validate token on mount when vault exists and Zerodha is selected
   useEffect(() => {
-    try { setVaultSaved(hasVault()); } catch { setVaultSaved(false); }
+    if (!hasVault() || !hasGateToken()) {
+      setTokenStatus('none');
+      return;
+    }
+    if (dataSource !== 'zerodha') {
+      // If vault exists but source isn't zerodha, still show status but skip validation
+      setTokenStatus('checking');
+    }
+    let cancelled = false;
+    (async () => {
+      setTokenStatus('checking');
+      try {
+        const vault = getVaultBlob();
+        const gateToken = getGateToken();
+        if (!vault || !gateToken) { setTokenStatus('none'); return; }
+        const res = await fetch(`${CF_WORKER_URL}/zerodha/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
+          body: JSON.stringify({ vault }),
+        });
+        if (cancelled) return;
+        const data = await res.json();
+        if (data.valid) {
+          setTokenStatus('valid');
+          setTokenUserName(data.userName || '');
+        } else {
+          // Token expired — clear vault only, keep API key + secret
+          clearVault();
+          setTokenStatus('expired');
+          setDataSourceState('yahoo');
+          setDataSource('yahoo');
+          setVaultMsg('Token expired. Click "Connect Zerodha" to re-authenticate.');
+          setVaultMsgColor('#dc2626');
+        }
+      } catch {
+        if (!cancelled) setTokenStatus('checking'); // Network error — leave as ambiguous
+      }
+    })();
+    return () => { cancelled = true; };
   }, [gateUnlocked]);
 
   // Handle OAuth callback — catch request_token from URL
@@ -96,7 +139,8 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
         zerodhaApiSecret: secret,
         zerodhaAccessToken: accessToken,
       });
-      setVaultSaved(true);
+      setTokenStatus('valid');
+      setTokenUserName('');
       setVaultMsg('Connected! Credentials encrypted & saved.');
       setVaultMsgColor('#16a34a');
     } catch (err) {
@@ -130,7 +174,8 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
     setGateUnlocked(false);
     setDataSourceState('yahoo');
     setDataSource('yahoo');
-    setVaultSaved(false);
+    setTokenStatus('none');
+    setTokenUserName('');
   }, []);
 
   const handleSourceChange = useCallback((src) => {
@@ -179,7 +224,8 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
       clearGate();
       localStorage.removeItem(LS_ZERODHA_API_KEY);
       localStorage.removeItem(LS_ZERODHA_API_SECRET);
-      setVaultSaved(false);
+      setTokenStatus('none');
+      setTokenUserName('');
       setApiKey('');
       setApiSecret('');
       setVaultMsg('Credentials cleared');
@@ -351,14 +397,23 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
           </div>
 
           {/* Status */}
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: vaultSaved ? '#16a34a' : '#8892a8' }}>
-            {vaultSaved ? 'Connected — credentials encrypted & saved' : 'Not connected'}
+          <div style={{
+            fontSize: 12, fontWeight: 600, marginBottom: 6,
+            color: tokenStatus === 'valid' ? '#16a34a'
+              : tokenStatus === 'expired' ? '#dc2626'
+              : tokenStatus === 'checking' ? '#d97706'
+              : '#8892a8',
+          }}>
+            {tokenStatus === 'valid' && `Connected — token verified${tokenUserName ? ` (${tokenUserName})` : ''}`}
+            {tokenStatus === 'checking' && 'Checking token...'}
+            {tokenStatus === 'expired' && 'Token expired — click "Connect Zerodha" to re-authenticate'}
+            {tokenStatus === 'none' && 'Not connected'}
           </div>
 
           {vaultMsg && <div style={{ fontSize: 12, color: vaultMsgColor, marginBottom: 6 }}>{vaultMsg}</div>}
 
           {/* Clear */}
-          {vaultSaved && (
+          {(tokenStatus === 'valid' || tokenStatus === 'checking') && (
             <button type="button" onClick={handleClearVault} style={{ ...btnDanger, marginTop: 8 }}>
               Clear Credentials
             </button>

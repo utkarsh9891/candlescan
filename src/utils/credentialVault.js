@@ -245,6 +245,14 @@ export function getGatePublicKey() {
 }
 
 /**
+ * Remove only the encrypted vault blob (access token) from localStorage.
+ * Preserves gate hash, public key, and API key/secret.
+ */
+export function clearVault() {
+  safeRemoveItem(LS_KEYS.vault);
+}
+
+/**
  * Remove all gate-related data from localStorage.
  */
 export function clearGate() {
