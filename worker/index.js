@@ -637,6 +637,62 @@ async function handleDhanValidate(request, env, origin) {
   }
 }
 
+/**
+ * Handle /dhan/session — generate access token using Client ID + PIN + TOTP.
+ * No vault needed — uses plaintext credentials from the request body.
+ * The resulting access token is returned to the client for vault encryption.
+ */
+async function handleDhanSession(request, env, origin) {
+  const authResult = await validateGateToken(request, env);
+  if (authResult !== true) {
+    return new Response(JSON.stringify({ error: 'Premium access required' }), {
+      status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const body = await request.json();
+  const { dhanClientId, pin, totp } = body;
+
+  if (!dhanClientId || !pin || !totp) {
+    return new Response(JSON.stringify({ error: 'Missing required fields: dhanClientId, pin, totp' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    const url = `https://auth.dhan.co/app/generateAccessToken?dhanClientId=${encodeURIComponent(dhanClientId)}&pin=${encodeURIComponent(pin)}&totp=${encodeURIComponent(totp)}`;
+    const resp = await fetch(url, { method: 'POST' });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      let errMsg;
+      try { errMsg = JSON.parse(errText).remarks || JSON.parse(errText).message; } catch { errMsg = errText.slice(0, 200); }
+      return new Response(JSON.stringify({ error: errMsg || `Dhan auth error: ${resp.status}` }), {
+        status: resp.status, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    const data = await resp.json();
+    if (!data.accessToken) {
+      return new Response(JSON.stringify({ error: 'No access token in response' }), {
+        status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(JSON.stringify({
+      accessToken: data.accessToken,
+      clientName: data.dhanClientName || '',
+      expiryTime: data.expiryTime || '',
+    }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Dhan session failed: ${err.message}` }), {
+      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -661,6 +717,9 @@ export default {
       }
       if (path === '/zerodha/validate') {
         return handleZerodhaValidate(request, env, origin);
+      }
+      if (path === '/dhan/session') {
+        return handleDhanSession(request, env, origin);
       }
       if (path === '/dhan/historical') {
         return handleDhanHistorical(request, env, origin);

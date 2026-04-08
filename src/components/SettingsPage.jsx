@@ -1,12 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { unlockGate, encryptToVault, getVaultBlob, hasVault, clearVault, clearGate, getGatePublicKey } from '../utils/credentialVault.js';
+import PasteInput from './PasteInput.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
 const LS_ZERODHA_API_KEY = 'candlescan_zerodha_api_key';
 const LS_ZERODHA_API_SECRET = 'candlescan_zerodha_api_secret';
-const LS_DHAN_ACCESS_TOKEN = 'candlescan_dhan_access_token';
+const LS_DHAN_CLIENT_ID = 'candlescan_dhan_client_id';
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 function getDataSource() {
@@ -40,7 +41,6 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   const [oauthLoading, setOauthLoading] = useState(false);
 
   const [showPassphrase, setShowPassphrase] = useState(false);
-  const [showApiSecret, setShowApiSecret] = useState(false);
   const passphraseRef = useRef(null);
 
   // Derived for backward compat in UI logic
@@ -273,45 +273,70 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   }, []);
 
   // ─── Dhan ───────────────────────────────────────────────────────────
-  const [dhanToken, setDhanToken] = useState(() => {
-    try { return localStorage.getItem(LS_DHAN_ACCESS_TOKEN) || ''; } catch { return ''; }
+  const [dhanClientId, setDhanClientId] = useState(() => {
+    try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; }
   });
+  const [dhanPin, setDhanPin] = useState('');
+  const [dhanTotp, setDhanTotp] = useState('');
   const [dhanStatus, setDhanStatus] = useState('none'); // 'none' | 'checking' | 'valid' | 'expired'
   const [dhanMsg, setDhanMsg] = useState('');
   const [dhanMsgColor, setDhanMsgColor] = useState('#8892a8');
+  const [dhanConnecting, setDhanConnecting] = useState(false);
 
-  const handleSaveDhanToken = useCallback(async () => {
-    const token = dhanToken.trim();
-    if (!token) {
-      setDhanMsg('Access token is required');
+  const handleSaveDhanClientId = useCallback(() => {
+    if (!dhanClientId.trim()) {
+      setDhanMsg('Client ID is required');
       setDhanMsgColor('#dc2626');
       return;
     }
+    try { localStorage.setItem(LS_DHAN_CLIENT_ID, dhanClientId.trim()); } catch { /* ok */ }
+    setDhanMsg('Client ID saved.');
+    setDhanMsgColor('#16a34a');
+  }, [dhanClientId]);
+
+  const handleConnectDhan = useCallback(async () => {
+    const clientId = dhanClientId.trim() || ((() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })());
+    if (!clientId) { setDhanMsg('Save your Client ID first'); setDhanMsgColor('#dc2626'); return; }
+    if (!dhanPin.trim()) { setDhanMsg('PIN is required'); setDhanMsgColor('#dc2626'); return; }
+    if (!dhanTotp.trim()) { setDhanMsg('TOTP is required'); setDhanMsgColor('#dc2626'); return; }
+
+    setDhanConnecting(true);
+    setDhanMsg('Generating access token...');
+    setDhanMsgColor('#2563eb');
     try {
-      localStorage.setItem(LS_DHAN_ACCESS_TOKEN, token);
-    } catch { /* ok */ }
-    // Encrypt into vault
-    const pubKey = getGatePublicKey();
-    if (!pubKey) {
-      setDhanMsg('RSA public key not found. Re-unlock premium first.');
-      setDhanMsgColor('#dc2626');
-      return;
-    }
-    try {
-      // Merge with existing vault credentials if any
+      const gateToken = getGateToken();
+      const res = await fetch(`${CF_WORKER_URL}/dhan/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
+        body: JSON.stringify({ dhanClientId: clientId, pin: dhanPin.trim(), totp: dhanTotp.trim() }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Session failed (${res.status})`);
+      }
+      const data = await res.json();
+      if (!data.accessToken) throw new Error('No access token in response');
+
+      // Encrypt access token into vault
+      const pubKey = getGatePublicKey();
+      if (!pubKey) throw new Error('RSA public key not found. Re-unlock premium first.');
       const existing = {};
-      // Keep any Zerodha creds that may be in vault
       if (apiKey.trim()) existing.zerodhaApiKey = apiKey.trim();
       if (apiSecret.trim()) existing.zerodhaApiSecret = apiSecret.trim();
-      await encryptToVault(pubKey, { ...existing, dhanAccessToken: token });
+      await encryptToVault(pubKey, { ...existing, dhanAccessToken: data.accessToken });
+
       setDhanStatus('valid');
-      setDhanMsg('Access token saved & encrypted.');
+      setDhanMsg(`Connected${data.clientName ? ` — ${data.clientName}` : ''}! Token encrypted & saved.`);
       setDhanMsgColor('#16a34a');
+      setDhanPin('');
+      setDhanTotp('');
     } catch (err) {
-      setDhanMsg(err.message || 'Failed to encrypt');
+      setDhanMsg(err.message || 'Failed to connect');
       setDhanMsgColor('#dc2626');
+    } finally {
+      setDhanConnecting(false);
     }
-  }, [dhanToken, apiKey, apiSecret]);
+  }, [dhanClientId, dhanPin, dhanTotp, apiKey, apiSecret]);
 
   const handleValidateDhan = useCallback(async () => {
     if (!hasVault() || !hasGateToken()) {
@@ -490,17 +515,8 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
           <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
             1. Enter your Kite Connect credentials
           </div>
-          <input type="text" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-            placeholder="API Key" style={inputStyle} />
-          <div style={{ position: 'relative', marginBottom: 10 }}>
-            <input type={showApiSecret ? 'text' : 'password'} value={apiSecret} onChange={(e) => setApiSecret(e.target.value)}
-              placeholder="API Secret" style={{ ...inputStyle, marginBottom: 0, paddingRight: 40 }} />
-            <button type="button" onClick={() => setShowApiSecret(v => !v)} tabIndex={-1}
-              style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#8892a8', fontSize: 16, lineHeight: 1 }}
-              aria-label={showApiSecret ? 'Hide API secret' : 'Show API secret'}>
-              {showApiSecret ? '🙈' : '👁'}
-            </button>
-          </div>
+          <PasteInput value={apiKey} onChange={setApiKey} placeholder="API Key" useMono />
+          <PasteInput value={apiSecret} onChange={setApiSecret} placeholder="API Secret" type="password" useMono />
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <button type="button" onClick={handleSaveApiKeys} style={btnSecondary}>Save Keys</button>
           </div>
@@ -564,23 +580,38 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
       {showDhan && (
         <div style={card}>
           <div style={sectionTitle}>Dhan Connect</div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
-            Enter your Dhan access token
-          </div>
-          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
-            Generate from <a href="https://web.dhan.co" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>Dhan Web</a> → Profile → DhanHQ Trading APIs. Token expires daily — regenerate each trading day.
-          </div>
           <div style={{
             fontSize: 11, color: '#92400e', background: '#fefce8', border: '1px solid #fde68a',
             borderRadius: 6, padding: '8px 10px', marginBottom: 12, lineHeight: 1.5,
           }}>
-            Requires the <strong>DhanHQ Data API subscription</strong> (Rs 499/month).
-            Without it, scans will fall back to Yahoo Finance.
+            Requires the <strong>DhanHQ Data API subscription</strong> (Rs 499/month) and <strong>TOTP enabled</strong> on your Dhan account.
+            Without the Data API, scans will fall back to Yahoo Finance.
           </div>
-          <input type="text" value={dhanToken} onChange={(e) => setDhanToken(e.target.value)}
-            placeholder="Dhan Access Token" style={{ ...inputStyle, fontFamily: mono }} />
+
+          {/* Step 1: Client ID (saved) */}
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
+            1. Dhan Client ID
+          </div>
+          <PasteInput value={dhanClientId} onChange={setDhanClientId} placeholder="Dhan Client ID" useMono />
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button type="button" onClick={handleSaveDhanClientId} style={btnSecondary}>Save</button>
+          </div>
+
+          {/* Step 2: PIN + TOTP (entered daily, never stored) */}
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
+            2. Authenticate (daily)
+          </div>
+          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
+            Enter your 6-digit Dhan PIN and TOTP from your authenticator app. Neither is stored.
+          </div>
+          <PasteInput value={dhanPin} onChange={setDhanPin} placeholder="Dhan PIN (6 digits)" type="password" useMono />
+          <PasteInput value={dhanTotp} onChange={setDhanTotp} placeholder="TOTP (6 digits)" useMono />
           <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            <button type="button" onClick={handleSaveDhanToken} style={btnPrimary}>Save & Connect</button>
+            <button type="button" onClick={handleConnectDhan}
+              disabled={dhanConnecting}
+              style={{ ...btnPrimary, background: '#387ed1', opacity: dhanConnecting ? 0.5 : 1 }}>
+              {dhanConnecting ? 'Connecting...' : 'Connect Dhan'}
+            </button>
           </div>
 
           {/* Status */}
@@ -591,9 +622,9 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
               : dhanStatus === 'checking' ? '#d97706'
               : '#8892a8',
           }}>
-            {dhanStatus === 'valid' && 'Connected — token saved'}
+            {dhanStatus === 'valid' && 'Connected — token encrypted & saved'}
             {dhanStatus === 'checking' && 'Checking token...'}
-            {dhanStatus === 'expired' && 'Token expired or invalid'}
+            {dhanStatus === 'expired' && 'Token expired — reconnect with PIN + TOTP'}
             {dhanStatus === 'none' && 'Not connected'}
           </div>
 
