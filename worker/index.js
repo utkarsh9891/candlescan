@@ -465,6 +465,7 @@ async function resolveDhanSecurityId(symbol, env) {
  * Handle /dhan/historical — decrypt vault and proxy to Dhan API.
  */
 async function handleDhanHistorical(request, env, origin) {
+  try {
   const authResult = await validateGateToken(request, env);
   if (authResult !== true) {
     return new Response(JSON.stringify({ error: 'Premium access required' }), {
@@ -473,7 +474,7 @@ async function handleDhanHistorical(request, env, origin) {
   }
 
   const body = await request.json();
-  const { symbol, interval, from, to, vault } = body;
+  const { symbol, interval, from, to, vault, dhanClientId } = body;
 
   if (!symbol || !interval || !from || !to || !vault) {
     return new Response(JSON.stringify({ error: 'Missing required fields' }), {
@@ -583,6 +584,12 @@ async function handleDhanHistorical(request, env, origin) {
   } catch (err) {
     return new Response(JSON.stringify({ error: `Dhan API fetch failed: ${err.message}` }), {
       status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+  } catch (outerErr) {
+    // Catch-all to prevent Cloudflare 1101 Worker crashes
+    return new Response(JSON.stringify({ error: `Worker crash in /dhan/historical: ${outerErr.message || outerErr}` }), {
+      status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
     });
   }
 }
