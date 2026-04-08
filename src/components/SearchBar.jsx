@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -14,6 +14,9 @@ export default function SearchBar({
 }) {
   const [focused, setFocused] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(-1);
+  // When true, dropdown is visually hidden but stays in the DOM to absorb
+  // the remaining pointerup + click events from the current touch gesture.
+  const [hiding, setHiding] = useState(false);
   const wrapRef = useRef(null);
 
   // Fuzzy match: search both symbol and company name
@@ -53,15 +56,24 @@ export default function SearchBar({
   // Close dropdown when a scan starts (e.g. from sidebar stock pick)
   useEffect(() => { if (loading) setFocused(false); }, [loading]);
 
-  const selectSymbol = (sym) => {
+  // When hiding transitions to true, schedule actual removal after the
+  // full touch event cycle (pointerdown → pointerup → click) completes.
+  useEffect(() => {
+    if (!hiding) return;
+    const id = setTimeout(() => {
+      setFocused(false);
+      setHiding(false);
+    }, 400);
+    return () => clearTimeout(id);
+  }, [hiding]);
+
+  const selectSymbol = useCallback((sym) => {
     setInputVal(sym);
-    // Defer dropdown removal so it stays in the DOM through the full
-    // pointerdown → pointerup → click cycle. Otherwise the click event
-    // lands on whatever element is underneath (Recent stocks, Browse button).
-    // Use setTimeout(50ms) — rAF alone can fire before click on some mobile browsers.
-    setTimeout(() => setFocused(false), 50);
+    // Don't remove the dropdown — hide it so it stays in the DOM to absorb
+    // pointerup + click events. Actual removal happens after 400ms via effect.
+    setHiding(true);
     setTimeout(() => onScan(sym), 0);
-  };
+  }, [setInputVal, onScan]);
 
   const handleKeyDown = (e) => {
     if (!showDropdown) {
@@ -87,6 +99,9 @@ export default function SearchBar({
     }
   };
 
+  // The dropdown renders when showDropdown is true OR when hiding (absorbing events).
+  const renderDropdown = (showDropdown || hiding) && suggestions.length > 0;
+
   return (
     <div style={{ marginBottom: 10 }} ref={wrapRef}>
       {/* Search + Scan row */}
@@ -95,7 +110,7 @@ export default function SearchBar({
           <input
             type="text"
             value={inputVal}
-            onChange={(e) => { setInputVal(e.target.value.toUpperCase()); setFocused(true); }}
+            onChange={(e) => { setInputVal(e.target.value.toUpperCase()); setFocused(true); setHiding(false); }}
             onFocus={() => setFocused(true)}
             onKeyDown={handleKeyDown}
             placeholder="Search symbol or company name"
@@ -105,29 +120,35 @@ export default function SearchBar({
               minHeight: 44,
               padding: '0 14px',
               fontSize: 14,
-              borderRadius: showDropdown ? '10px 10px 0 0' : 10,
+              borderRadius: renderDropdown && !hiding ? '10px 10px 0 0' : 10,
               border: '1px solid #e2e5eb',
               fontFamily: 'inherit',
               boxSizing: 'border-box',
             }}
           />
 
-          {/* Autocomplete dropdown */}
-          {showDropdown && (
-            <div style={{
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              right: 0,
-              background: '#fff',
-              border: '1px solid #e2e5eb',
-              borderTop: 'none',
-              borderRadius: '0 0 10px 10px',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
-              zIndex: 100,
-              maxHeight: 260,
-              overflowY: 'auto',
-            }}>
+          {/* Autocomplete dropdown — stays in DOM while hiding to absorb click events */}
+          {renderDropdown && (
+            <div
+              onPointerUp={(e) => { if (hiding) { e.stopPropagation(); e.preventDefault(); } }}
+              onClick={(e) => { if (hiding) { e.stopPropagation(); e.preventDefault(); } }}
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                right: 0,
+                background: '#fff',
+                border: '1px solid #e2e5eb',
+                borderTop: 'none',
+                borderRadius: '0 0 10px 10px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+                zIndex: 100,
+                maxHeight: 260,
+                overflowY: 'auto',
+                // When hiding: invisible but still in DOM to absorb events
+                ...(hiding ? { visibility: 'hidden', pointerEvents: 'auto' } : {}),
+              }}
+            >
               {suggestions.map((s, i) => (
                 <button
                   key={s.sym}
