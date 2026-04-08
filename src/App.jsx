@@ -36,6 +36,7 @@ import { fetchDhanOHLCV } from './engine/dhanFetcher.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList, fetchNseIndexWithNames } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
+import { isDynamicIndex } from './data/dynamicIndices.js';
 
 function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
   const sourceName = dataSource === 'zerodha' ? 'Zerodha Kite' : dataSource === 'dhan' ? 'Dhan' : 'Yahoo Finance';
@@ -177,6 +178,7 @@ export default function App() {
   const [companyMap, setCompanyMap] = useState({}); // SYMBOL → "Company Name"
   const [broadSearchSymbols, setBroadSearchSymbols] = useState([]); // NIFTY 500 symbols for global search
   const [broadCompanyMap, setBroadCompanyMap] = useState({}); // NIFTY 500 company map
+  const [refreshKey, setRefreshKey] = useState(0); // Bump to force re-fetch constituents
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Signal filter state
@@ -311,17 +313,24 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const cached = readNseSymsCache(nseIndex);
-      if (cached?.syms?.length) {
-        setConstituents(cached.syms);
-        setCompanyMap(cached.companyMap || {});
-        setConstituentsError('');
-        setConstituentsLoading(false);
-        return;
+      // Skip sessionStorage cache for dynamic indices (auto-refreshing)
+      if (!isDynamicIndex(nseIndex)) {
+        const cached = readNseSymsCache(nseIndex);
+        if (cached?.syms?.length) {
+          setConstituents(cached.syms);
+          setCompanyMap(cached.companyMap || {});
+          setConstituentsError('');
+          setConstituentsLoading(false);
+          return;
+        }
       }
-      setConstituentsLoading(true);
-      setConstituentsError('');
-      setConstituents([]);
+      // Don't show loading/clear for auto-refresh of dynamic indices
+      const isAutoRefresh = isDynamicIndex(nseIndex) && constituents.length > 0;
+      if (!isAutoRefresh) {
+        setConstituentsLoading(true);
+        setConstituentsError('');
+        setConstituents([]);
+      }
       try {
         const result = await fetchNseIndexWithNames(nseIndex);
         if (!cancelled) {
@@ -341,6 +350,13 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [nseIndex, refreshKey]);
+
+  // Auto-refresh dynamic indices (Top Gainers/Losers) every 30 seconds
+  useEffect(() => {
+    if (!isDynamicIndex(nseIndex)) return;
+    const interval = setInterval(() => setRefreshKey(k => k + 1), 30000);
+    return () => clearInterval(interval);
   }, [nseIndex]);
 
   const runScan = useCallback(async (symbol) => {
@@ -894,6 +910,8 @@ export default function App() {
           setInputVal(s);
           onQuick(s);
         }}
+        isDynamic={isDynamicIndex(nseIndex)}
+        onRefresh={() => setRefreshKey(k => k + 1)}
       />
 
       <footer

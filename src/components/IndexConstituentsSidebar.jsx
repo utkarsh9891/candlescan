@@ -1,7 +1,20 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
 
 const mono = "'SF Mono', Menlo, monospace";
+
+const IconChevron = ({ open }) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+    style={{ transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+    <polyline points="6 9 12 15 18 9"/>
+  </svg>
+);
+
+const IconRefresh = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+  </svg>
+);
 
 export default function IndexConstituentsSidebar({
   open,
@@ -15,8 +28,22 @@ export default function IndexConstituentsSidebar({
   loading,
   error,
   onSelectSymbol,
+  onRefresh,
+  isDynamic,
 }) {
   const [q, setQ] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const handle = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setDropdownOpen(false);
+    };
+    document.addEventListener('pointerdown', handle);
+    return () => document.removeEventListener('pointerdown', handle);
+  }, [dropdownOpen]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toUpperCase();
@@ -32,6 +59,10 @@ export default function IndexConstituentsSidebar({
 
   const showIndexSelect =
     nseIndexOptions.length > 0 && typeof onNseIndexChange === 'function' && selectedNseIndex != null;
+
+  const hasCustom = nseIndexOptions.length > NSE_INDEX_OPTIONS.length;
+  const customOptions = hasCustom ? nseIndexOptions.slice(NSE_INDEX_OPTIONS.length) : [];
+  const selectedLabel = nseIndexOptions.find(o => o.id === selectedNseIndex)?.label || selectedNseIndex;
 
   return (
     <div
@@ -82,41 +113,89 @@ export default function IndexConstituentsSidebar({
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11, color: '#8892a8', fontWeight: 600, marginBottom: 4 }}>
-                Index
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: '#8892a8', fontWeight: 600 }}>Index</span>
+                {isDynamic && onRefresh && (
+                  <button type="button" onClick={onRefresh} title="Refresh list"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', padding: 2, display: 'flex', alignItems: 'center' }}>
+                    <IconRefresh />
+                  </button>
+                )}
               </div>
               {showIndexSelect ? (
-                <select
-                  value={selectedNseIndex}
-                  onChange={(e) => onNseIndexChange(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #e2e5eb',
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: '#1a1d26',
-                    background: '#fafbfc',
-                    boxSizing: 'border-box',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {NSE_INDEX_OPTIONS.map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </option>
-                  ))}
-                  {nseIndexOptions.length > NSE_INDEX_OPTIONS.length && (
-                    <optgroup label="Custom">
-                      {nseIndexOptions.slice(NSE_INDEX_OPTIONS.length).map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.id}
-                        </option>
+                <div ref={dropdownRef} style={{ position: 'relative' }}>
+                  {/* Custom dropdown trigger */}
+                  <button
+                    type="button"
+                    onClick={() => setDropdownOpen(v => !v)}
+                    style={{
+                      width: '100%',
+                      padding: '10px 36px 10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #e2e5eb',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: '#1a1d26',
+                      background: '#fafbfc',
+                      boxSizing: 'border-box',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      position: 'relative',
+                    }}
+                  >
+                    {selectedLabel}
+                    <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: '#8892a8' }}>
+                      <IconChevron open={dropdownOpen} />
+                    </span>
+                  </button>
+
+                  {/* Custom dropdown list */}
+                  {dropdownOpen && (
+                    <div style={{
+                      position: 'absolute', top: '100%', left: 0, right: 0,
+                      marginTop: 4, background: '#fff', border: '1px solid #e2e5eb',
+                      borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                      maxHeight: 280, overflowY: 'auto', zIndex: 200,
+                    }}>
+                      {NSE_INDEX_OPTIONS.map(opt => (
+                        <button key={opt.id} type="button"
+                          onClick={() => { onNseIndexChange(opt.id); setDropdownOpen(false); }}
+                          style={{
+                            width: '100%', padding: '10px 14px', border: 'none', textAlign: 'left',
+                            fontSize: 13, fontWeight: selectedNseIndex === opt.id ? 700 : 500,
+                            background: selectedNseIndex === opt.id ? '#eff6ff' : '#fff',
+                            color: selectedNseIndex === opt.id ? '#2563eb' : '#1a1d26',
+                            cursor: 'pointer', borderBottom: '1px solid #f1f3f7',
+                          }}
+                        >
+                          {opt.label}
+                          {opt.dynamic && <span style={{ fontSize: 9, color: '#d97706', marginLeft: 6, fontWeight: 600 }}>LIVE</span>}
+                        </button>
                       ))}
-                    </optgroup>
+                      {customOptions.length > 0 && (
+                        <>
+                          <div style={{ padding: '6px 14px', fontSize: 10, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5, background: '#f9fafb' }}>
+                            Custom
+                          </div>
+                          {customOptions.map(opt => (
+                            <button key={opt.id} type="button"
+                              onClick={() => { onNseIndexChange(opt.id); setDropdownOpen(false); }}
+                              style={{
+                                width: '100%', padding: '10px 14px', border: 'none', textAlign: 'left',
+                                fontSize: 13, fontWeight: selectedNseIndex === opt.id ? 700 : 500,
+                                background: selectedNseIndex === opt.id ? '#eff6ff' : '#fff',
+                                color: selectedNseIndex === opt.id ? '#2563eb' : '#1a1d26',
+                                cursor: 'pointer', borderBottom: '1px solid #f1f3f7',
+                              }}
+                            >
+                              {opt.id}
+                            </button>
+                          ))}
+                        </>
+                      )}
+                    </div>
                   )}
-                </select>
+                </div>
               ) : (
                 <div style={{ fontSize: 16, fontWeight: 800, color: '#1a1d26' }}>{indexLabel}</div>
               )}
