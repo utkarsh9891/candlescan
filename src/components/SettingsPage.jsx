@@ -6,6 +6,7 @@ const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
 const LS_ZERODHA_API_KEY = 'candlescan_zerodha_api_key';
 const LS_ZERODHA_API_SECRET = 'candlescan_zerodha_api_secret';
+const LS_DHAN_ACCESS_TOKEN = 'candlescan_dhan_access_token';
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 function getDataSource() {
@@ -271,6 +272,81 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
     }
   }, []);
 
+  // ─── Dhan ───────────────────────────────────────────────────────────
+  const [dhanToken, setDhanToken] = useState(() => {
+    try { return localStorage.getItem(LS_DHAN_ACCESS_TOKEN) || ''; } catch { return ''; }
+  });
+  const [dhanStatus, setDhanStatus] = useState('none'); // 'none' | 'checking' | 'valid' | 'expired'
+  const [dhanMsg, setDhanMsg] = useState('');
+  const [dhanMsgColor, setDhanMsgColor] = useState('#8892a8');
+
+  const handleSaveDhanToken = useCallback(async () => {
+    const token = dhanToken.trim();
+    if (!token) {
+      setDhanMsg('Access token is required');
+      setDhanMsgColor('#dc2626');
+      return;
+    }
+    try {
+      localStorage.setItem(LS_DHAN_ACCESS_TOKEN, token);
+    } catch { /* ok */ }
+    // Encrypt into vault
+    const pubKey = getGatePublicKey();
+    if (!pubKey) {
+      setDhanMsg('RSA public key not found. Re-unlock premium first.');
+      setDhanMsgColor('#dc2626');
+      return;
+    }
+    try {
+      // Merge with existing vault credentials if any
+      const existing = {};
+      // Keep any Zerodha creds that may be in vault
+      if (apiKey.trim()) existing.zerodhaApiKey = apiKey.trim();
+      if (apiSecret.trim()) existing.zerodhaApiSecret = apiSecret.trim();
+      await encryptToVault(pubKey, { ...existing, dhanAccessToken: token });
+      setDhanStatus('valid');
+      setDhanMsg('Access token saved & encrypted.');
+      setDhanMsgColor('#16a34a');
+    } catch (err) {
+      setDhanMsg(err.message || 'Failed to encrypt');
+      setDhanMsgColor('#dc2626');
+    }
+  }, [dhanToken, apiKey, apiSecret]);
+
+  const handleValidateDhan = useCallback(async () => {
+    if (!hasVault() || !hasGateToken()) {
+      setDhanMsg('No credentials to validate');
+      setDhanMsgColor('#dc2626');
+      return;
+    }
+    setDhanStatus('checking');
+    setDhanMsg('');
+    try {
+      const vault = getVaultBlob();
+      const gateToken = getGateToken();
+      const res = await fetch(`${CF_WORKER_URL}/dhan/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
+        body: JSON.stringify({ vault }),
+      });
+      const data = await res.json();
+      if (data.valid) {
+        setDhanStatus('valid');
+        setDhanMsg('Token is valid');
+        setDhanMsgColor('#16a34a');
+      } else {
+        setDhanStatus('expired');
+        setDhanMsg(`Validation failed: ${data.error || 'token invalid'}`);
+        setDhanMsgColor('#dc2626');
+      }
+    } catch (err) {
+      setDhanMsg(`Network error: ${err.message}`);
+      setDhanMsgColor('#dc2626');
+    }
+  }, []);
+
+  const showDhan = gateUnlocked && dataSource === 'dhan';
+
   // eslint-disable-next-line no-undef
   // Version now shown only in hamburger menu
 
@@ -384,12 +460,21 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
             checked={dataSource === 'yahoo'} onChange={() => handleSourceChange('yahoo')} />
           <span style={{ fontSize: 13 }}>Yahoo Finance</span>
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: gateUnlocked ? 'pointer' : 'not-allowed', opacity: gateUnlocked ? 1 : 0.45 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, cursor: gateUnlocked ? 'pointer' : 'not-allowed', opacity: gateUnlocked ? 1 : 0.45 }}>
           <input type="radio" name="dataSource" value="zerodha"
             checked={dataSource === 'zerodha'} onChange={() => handleSourceChange('zerodha')}
             disabled={!gateUnlocked} />
           <span style={{ fontSize: 13 }}>
             Zerodha Kite
+            <span style={{ fontSize: 10, fontWeight: 600, color: '#2563eb', marginLeft: 6, background: '#eff6ff', borderRadius: 4, padding: '2px 6px' }}>Premium</span>
+          </span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: gateUnlocked ? 'pointer' : 'not-allowed', opacity: gateUnlocked ? 1 : 0.45 }}>
+          <input type="radio" name="dataSource" value="dhan"
+            checked={dataSource === 'dhan'} onChange={() => handleSourceChange('dhan')}
+            disabled={!gateUnlocked} />
+          <span style={{ fontSize: 13 }}>
+            Dhan
             <span style={{ fontSize: 10, fontWeight: 600, color: '#2563eb', marginLeft: 6, background: '#eff6ff', borderRadius: 4, padding: '2px 6px' }}>Premium</span>
           </span>
         </label>
@@ -433,6 +518,13 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
             Opens Zerodha login. After login, you'll be redirected back and credentials are saved automatically.
             Token expires daily — reconnect each trading day.
           </div>
+          <div style={{
+            fontSize: 11, color: '#92400e', background: '#fefce8', border: '1px solid #fde68a',
+            borderRadius: 6, padding: '8px 10px', marginBottom: 12, lineHeight: 1.5,
+          }}>
+            Requires the <strong>Historical Data add-on</strong> (included in the Rs 2,000/month Kite Connect plan).
+            Without it, scans will fall back to Yahoo Finance.
+          </div>
 
           {/* Status */}
           <div style={{
@@ -462,6 +554,50 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
             {(tokenStatus === 'valid' || tokenStatus === 'checking') && (
               <button type="button" onClick={handleClearVault} style={btnDanger}>
                 Clear Credentials
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Dhan Setup */}
+      {showDhan && (
+        <div style={card}>
+          <div style={sectionTitle}>Dhan Connect</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
+            Enter your Dhan access token
+          </div>
+          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
+            Generate from <a href="https://web.dhan.co" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>Dhan Web</a> → Profile → DhanHQ Trading APIs. Token expires daily — regenerate each trading day.
+          </div>
+          <input type="text" value={dhanToken} onChange={(e) => setDhanToken(e.target.value)}
+            placeholder="Dhan Access Token" style={{ ...inputStyle, fontFamily: mono }} />
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <button type="button" onClick={handleSaveDhanToken} style={btnPrimary}>Save & Connect</button>
+          </div>
+
+          {/* Status */}
+          <div style={{
+            fontSize: 12, fontWeight: 600, marginBottom: 6,
+            color: dhanStatus === 'valid' ? '#16a34a'
+              : dhanStatus === 'expired' ? '#dc2626'
+              : dhanStatus === 'checking' ? '#d97706'
+              : '#8892a8',
+          }}>
+            {dhanStatus === 'valid' && 'Connected — token saved'}
+            {dhanStatus === 'checking' && 'Checking token...'}
+            {dhanStatus === 'expired' && 'Token expired or invalid'}
+            {dhanStatus === 'none' && 'Not connected'}
+          </div>
+
+          {dhanMsg && <div style={{ fontSize: 12, color: dhanMsgColor, marginBottom: 6 }}>{dhanMsg}</div>}
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            {hasVault() && (
+              <button type="button" onClick={handleValidateDhan}
+                disabled={dhanStatus === 'checking'}
+                style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
+                {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
               </button>
             )}
           </div>

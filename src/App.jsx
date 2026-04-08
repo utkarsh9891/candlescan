@@ -12,7 +12,7 @@ import { computeRiskScore as computeRiskScoreScalp } from './engine/risk-scalp.j
 import { getScalpVariantFns, DEFAULT_SCALP_VARIANT } from './engine/scalp-variants/registry.js';
 import { getIndexDirection } from './engine/indexDirection.js';
 import Header from './components/Header.jsx';
-import TimeframePills from './components/TimeframePills.jsx';
+import TimeframePills, { SOURCE_TIMEFRAMES } from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
 import Chart from './components/Chart.jsx';
 import EmptyState from './components/EmptyState.jsx';
@@ -32,12 +32,13 @@ import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomInd
 import { hasGateToken, getGateToken } from './utils/batchAuth.js';
 import { getVaultBlob, hasVault, clearVault } from './utils/credentialVault.js';
 import { fetchZerodhaOHLCV } from './engine/zerodhaFetcher.js';
+import { fetchDhanOHLCV } from './engine/dhanFetcher.js';
 import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { fetchNseIndexSymbolList, fetchNseIndexWithNames } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
 
 function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
-  const sourceName = dataSource === 'zerodha' ? 'Zerodha Kite' : 'Yahoo Finance';
+  const sourceName = dataSource === 'zerodha' ? 'Zerodha Kite' : dataSource === 'dhan' ? 'Dhan' : 'Yahoo Finance';
   const status = getMarketStatus();
   const showDelay = !simulated && candles?.length > 0 && status.isOpen;
 
@@ -202,6 +203,13 @@ export default function App() {
       try {
         const stored = localStorage.getItem('candlescan_data_source') || 'yahoo';
         setDataSourceState(stored);
+        // Auto-correct timeframe if not available for the new source
+        const available = SOURCE_TIMEFRAMES[stored] || SOURCE_TIMEFRAMES.yahoo;
+        if (!available.includes(timeframe)) {
+          // Pick nearest: if 30m not in dhan, use 15m; if 25m not in yahoo, use 30m
+          const fallback = available.includes('5m') ? '5m' : available[0];
+          setTimeframe(fallback);
+        }
       } catch { /* ok */ }
     }
   }, [view]);
@@ -385,6 +393,28 @@ export default function App() {
               } else {
                 debugReason += ` → error: ${err} → fallback Yahoo`;
               }
+              result = null;
+              usedSource = 'yahoo';
+            } else {
+              debugReason += ` → success (${result.candles?.length || 0} candles)`;
+            }
+          }
+        }
+      } else if (dataSource === 'dhan') {
+        if (!hasVault()) {
+          usedSource = 'yahoo';
+          debugReason = `Setting=dhan but no vault in localStorage`;
+        } else {
+          const vault = getVaultBlob();
+          const gateToken = getGateToken();
+          if (!vault || !gateToken) {
+            usedSource = 'yahoo';
+            debugReason = `Setting=dhan, vault=${!!vault}, gateToken=${!!gateToken} — missing credentials`;
+          } else {
+            debugReason = `Setting=dhan, vault=yes, gateToken=yes — calling Dhan API`;
+            result = await fetchDhanOHLCV(s, timeframe, { vault, gateToken });
+            if (result.error) {
+              debugReason += ` → error: ${result.error} → fallback Yahoo`;
               result = null;
               usedSource = 'yahoo';
             } else {
@@ -792,7 +822,7 @@ export default function App() {
         <>
           {/* Timeframe + drawing tools + highlight signals — single row */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <TimeframePills value={timeframe} onChange={setTimeframe} />
+            <TimeframePills value={timeframe} onChange={setTimeframe} available={SOURCE_TIMEFRAMES[dataSource]} />
             <div style={{ flex: 1, minWidth: 4 }} />
             <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
             <label

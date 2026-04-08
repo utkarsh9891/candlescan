@@ -413,6 +413,230 @@ async function handleZerodhaValidate(request, env, origin) {
   }
 }
 
+// ─── Dhan ────────────────────────────────────────────────────────────
+
+/**
+ * Resolve NSE tradingsymbol to Dhan securityId.
+ * Downloads the scrip master CSV, parses it, caches in KV for 24h.
+ */
+async function resolveDhanSecurityId(symbol, env) {
+  const KV_KEY = 'dhan_nse_instruments';
+  const sym = symbol.toUpperCase();
+
+  if (env.CANDLESCAN_KV) {
+    const cached = await env.CANDLESCAN_KV.get(KV_KEY, 'json');
+    if (cached && cached[sym]) return cached[sym];
+  }
+
+  const resp = await fetch('https://images.dhan.co/api-data/api-scrip-master.csv');
+  if (!resp.ok) throw new Error(`Dhan scrip master fetch failed: ${resp.status}`);
+
+  const csv = await resp.text();
+  const lines = csv.split('\n');
+  // Header: SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,...,SEM_TRADING_SYMBOL,...
+  const header = lines[0].split(',');
+  const exchIdx = header.indexOf('SEM_EXM_EXCH_ID');
+  const secIdIdx = header.indexOf('SEM_SMST_SECURITY_ID');
+  const symIdx = header.indexOf('SEM_TRADING_SYMBOL');
+  const instrIdx = header.indexOf('SEM_INSTRUMENT_NAME');
+
+  const map = {};
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    if (cols.length <= symIdx) continue;
+    const exch = (cols[exchIdx] || '').trim();
+    const instr = (cols[instrIdx] || '').trim();
+    // Only NSE equities
+    if (exch !== 'NSE' || (instr !== 'EQUITY' && instr !== 'INDEX')) continue;
+    const tradingSym = (cols[symIdx] || '').replace(/"/g, '').trim();
+    const secId = (cols[secIdIdx] || '').trim();
+    if (tradingSym && secId) map[tradingSym] = secId;
+  }
+
+  if (env.CANDLESCAN_KV) {
+    try { await env.CANDLESCAN_KV.put(KV_KEY, JSON.stringify(map), { expirationTtl: 86400 }); } catch { /* ok */ }
+  }
+
+  if (!map[sym]) throw new Error(`Symbol "${sym}" not found in Dhan NSE instruments`);
+  return map[sym];
+}
+
+/**
+ * Handle /dhan/historical — decrypt vault and proxy to Dhan API.
+ */
+async function handleDhanHistorical(request, env, origin) {
+  const authResult = await validateGateToken(request, env);
+  if (authResult !== true) {
+    return new Response(JSON.stringify({ error: 'Premium access required' }), {
+      status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const body = await request.json();
+  const { symbol, interval, from, to, vault } = body;
+
+  if (!symbol || !interval || !from || !to || !vault) {
+    return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!env.GATE_PRIVATE_KEY) {
+    return new Response(JSON.stringify({ error: 'Server not configured' }), {
+      status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  let creds;
+  try {
+    creds = await decryptVault(vault, env.GATE_PRIVATE_KEY);
+  } catch {
+    return new Response(JSON.stringify({ error: 'Failed to decrypt credentials' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { dhanAccessToken } = creds;
+  if (!dhanAccessToken) {
+    return new Response(JSON.stringify({ error: 'Vault is missing Dhan access token' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Resolve symbol to securityId
+  let securityId;
+  try {
+    securityId = await resolveDhanSecurityId(symbol, env);
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Instrument lookup failed: ${err.message}` }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const isIntraday = interval !== 'day';
+  const dhanUrl = isIntraday
+    ? 'https://api.dhan.co/v2/charts/intraday'
+    : 'https://api.dhan.co/v2/charts/historical';
+
+  const reqBody = {
+    securityId,
+    exchangeSegment: 'NSE_EQ',
+    instrument: 'EQUITY',
+    expiryCode: 0,
+    oi: false,
+    fromDate: from,
+    toDate: to,
+  };
+  if (isIntraday) reqBody.interval = interval;
+
+  try {
+    const resp = await fetch(dhanUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'access-token': dhanAccessToken,
+      },
+      body: JSON.stringify(reqBody),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      let errMsg;
+      try { errMsg = JSON.parse(errText).remarks || JSON.parse(errText).message; } catch { errMsg = errText.slice(0, 200); }
+      return new Response(JSON.stringify({ error: errMsg || `Dhan API error: ${resp.status}` }), {
+        status: resp.status, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    const data = await resp.json();
+    // Dhan returns: { open: [...], high: [...], low: [...], close: [...], volume: [...], timestamp: [...] }
+    const timestamps = data.timestamp || [];
+    const opens = data.open || [];
+    const highs = data.high || [];
+    const lows = data.low || [];
+    const closes = data.close || [];
+    const volumes = data.volume || [];
+
+    const candles = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      candles.push({
+        t: Math.floor(new Date(timestamps[i]).getTime() / 1000),
+        o: opens[i],
+        h: highs[i],
+        l: lows[i],
+        c: closes[i],
+        v: volumes[i] || 0,
+      });
+    }
+
+    return new Response(JSON.stringify({ candles }), {
+      status: 200,
+      headers: { ...corsHeaders(origin), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Dhan API fetch failed: ${err.message}` }), {
+      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+/**
+ * Handle /dhan/validate — decrypt vault and check token validity.
+ */
+async function handleDhanValidate(request, env, origin) {
+  const authResult = await validateGateToken(request, env);
+  if (authResult !== true) {
+    return new Response(JSON.stringify({ error: 'Premium access required' }), {
+      status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const body = await request.json();
+  const { vault } = body;
+
+  if (!vault || !env.GATE_PRIVATE_KEY) {
+    return new Response(JSON.stringify({ valid: false, error: 'Missing vault or server config' }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  let creds;
+  try {
+    creds = await decryptVault(vault, env.GATE_PRIVATE_KEY);
+  } catch {
+    return new Response(JSON.stringify({ valid: false, error: 'Failed to decrypt' }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { dhanAccessToken } = creds;
+  if (!dhanAccessToken) {
+    return new Response(JSON.stringify({ valid: false, error: 'No Dhan token in vault' }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Try a lightweight Dhan API call to check token
+  try {
+    const resp = await fetch('https://api.dhan.co/v2/fundlimit', {
+      headers: { 'access-token': dhanAccessToken, 'Content-Type': 'application/json' },
+    });
+    if (resp.ok) {
+      return new Response(JSON.stringify({ valid: true }), {
+        status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+    const errData = await resp.json().catch(() => ({}));
+    return new Response(JSON.stringify({ valid: false, error: errData.remarks || `HTTP ${resp.status}` }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ valid: false, error: err.message }), {
+      status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -437,6 +661,12 @@ export default {
       }
       if (path === '/zerodha/validate') {
         return handleZerodhaValidate(request, env, origin);
+      }
+      if (path === '/dhan/historical') {
+        return handleDhanHistorical(request, env, origin);
+      }
+      if (path === '/dhan/validate') {
+        return handleDhanValidate(request, env, origin);
       }
       return new Response('Not found', { status: 404, headers: corsHeaders(origin) });
     }

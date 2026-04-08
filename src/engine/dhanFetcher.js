@@ -1,0 +1,125 @@
+/**
+ * Dhan HQ API fetcher for OHLCV data.
+ * Routes through a Cloudflare Worker proxy at candlescan-proxy.
+ * No external dependencies — plain JS only.
+ */
+
+const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
+
+/** Map user-facing timeframe labels to Dhan interval strings. */
+const DHAN_INTERVAL_MAP = {
+  '1m': '1',
+  '5m': '5',
+  '15m': '15',
+  '25m': '25',
+  '1h': '60',
+  '1d': 'day',
+};
+
+/** Maximum lookback in days for Dhan (90 days for intraday, unlimited for daily). */
+const LOOKBACK_DAYS = {
+  '1': 90,
+  '5': 90,
+  '15': 90,
+  '25': 90,
+  '60': 90,
+  day: 2000,
+};
+
+/** Format a Date as YYYY-MM-DD or YYYY-MM-DD HH:mm:ss for intraday. */
+function formatDate(d, intraday = false) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  if (!intraday) return `${yyyy}-${mm}-${dd}`;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
+/**
+ * Fetch OHLCV candles from Dhan via the CF Worker proxy.
+ *
+ * @param {string} symbol   NSE symbol without suffix, e.g. 'RELIANCE'
+ * @param {string} timeframe  One of '1m','5m','15m','25m','1h','1d'
+ * @param {object} opts
+ * @param {string} opts.vault      Encrypted credentials blob (base64)
+ * @param {string} opts.gateToken  SHA-256 hash for auth
+ * @returns {Promise<object>}
+ */
+export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
+  const sym = String(symbol || '').trim().toUpperCase().replace(/\.NS$/i, '');
+  const interval = DHAN_INTERVAL_MAP[timeframe];
+
+  if (!interval) {
+    return {
+      candles: [],
+      error: `Unsupported timeframe for Dhan: ${timeframe}`,
+      displaySymbol: sym,
+    };
+  }
+
+  const isIntraday = interval !== 'day';
+  const lookback = LOOKBACK_DAYS[interval];
+  const today = new Date();
+  const from = new Date(today);
+  from.setDate(from.getDate() - lookback);
+
+  const toStr = formatDate(today, isIntraday);
+  const fromStr = formatDate(from, isIntraday);
+
+  try {
+    const res = await fetch(`${CF_WORKER_URL}/dhan/historical`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Gate-Token': gateToken,
+      },
+      body: JSON.stringify({
+        symbol: sym,
+        interval,
+        from: fromStr,
+        to: toStr,
+        vault,
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
+    }
+
+    const data = await res.json();
+    const candles = data.candles || [];
+
+    return {
+      candles,
+      live: true,
+      simulated: false,
+      displaySymbol: sym,
+      companyName: sym,
+    };
+  } catch (err) {
+    return {
+      candles: [],
+      error: err.message || 'Dhan fetch failed',
+      displaySymbol: sym,
+    };
+  }
+}
+
+/** Supported timeframes for Dhan. */
+export const DHAN_TIMEFRAMES = ['1m', '5m', '15m', '25m', '1h', '1d'];
+
+/**
+ * Check whether Dhan credentials exist in the vault.
+ */
+export function isDhanConfigured() {
+  try {
+    const vault = localStorage.getItem('candlescan_vault');
+    return Boolean(vault);
+  } catch {
+    return false;
+  }
+}
