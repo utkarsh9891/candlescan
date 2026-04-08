@@ -12,6 +12,7 @@ import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.
 import { getScalpVariantFns, SCALP_VARIANTS, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
+import ToggleSwitch from './ToggleSwitch.jsx';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { getGateToken } from '../utils/batchAuth.js';
 import { MARGIN_MULTIPLIER, fetchMarginMap } from '../data/marginData.js';
@@ -293,10 +294,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
 
       {/* Margin toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, color: '#444' }}>
-          <input type="checkbox" checked={margin} onChange={e => setMargin(e.target.checked)} disabled={running} />
-          <span style={{ fontWeight: 600 }}>5× Margin (MIS)</span>
-        </label>
+        <ToggleSwitch checked={margin} onChange={setMargin} label="5× Margin (MIS)" compact disabled={running} />
         {margin && <span style={{ fontSize: 11, color: '#6b7280' }}>
           Buying power: {((capital * MARGIN_MULTIPLIER) / 100000).toFixed(1)}L
         </span>}

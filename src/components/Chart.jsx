@@ -6,6 +6,17 @@ const MIN_VISIBLE = 10;
 const MAX_VISIBLE_CAP = 300;
 const X_AXIS_HEIGHT = 22;
 
+/** Default visible candle count per timeframe — keeps candle widths consistent. */
+const DEFAULT_VISIBLE = {
+  '1m': { mobile: 40, desktop: 60 },
+  '5m': { mobile: 40, desktop: 60 },
+  '15m': { mobile: 50, desktop: 80 },
+  '25m': { mobile: 50, desktop: 80 },
+  '30m': { mobile: 50, desktop: 80 },
+  '1h': { mobile: 40, desktop: 60 },
+  '1d': { mobile: 60, desktop: 120 },
+};
+
 const btnStyle = {
   minWidth: 36,
   minHeight: 34,
@@ -118,16 +129,17 @@ export default forwardRef(function Chart({
   // Reset zoom to today's candles when symbol or data changes
   useEffect(() => {
     if (!candles?.length) return;
-    const key = `${sym}:${candles.length}`;
+    const key = `${sym}:${candles.length}:${timeframe}`;
     if (key === prevKeyRef.current) return;
     prevKeyRef.current = key;
     const today = countLatestSessionCandles(candles);
     const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
-    const cap = isMobile ? 40 : 80;
-    const defaultCount = today > 0 ? Math.min(cap, today, candles.length, MAX_VISIBLE_CAP) : cap;
+    const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
+    const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
+    const defaultCount = today > 0 ? Math.min(cap, today, candles.length, MAX_VISIBLE_CAP) : Math.min(cap, candles.length, MAX_VISIBLE_CAP);
     setVisibleCount(defaultCount);
     setPanOffset(0);
-  }, [sym, candles]);
+  }, [sym, candles, timeframe]);
 
   const maxVisible = Math.min(candles?.length || 0, MAX_VISIBLE_CAP);
   const floorBars = maxVisible <= 0 ? 0 : Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
@@ -165,7 +177,8 @@ export default forwardRef(function Chart({
   const zoomFit = useCallback(() => {
     const today = countLatestSessionCandles(candles);
     const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
-    const cap = isMobile ? 40 : 80;
+    const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
+    const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
     const defaultCount = today > 0 ? Math.min(cap, today, maxVisible) : Math.min(cap, maxVisible);
     setVisibleCount(defaultCount);
     setPanOffset(0);
