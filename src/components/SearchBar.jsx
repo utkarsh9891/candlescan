@@ -50,6 +50,9 @@ export default function SearchBar({
   // Reset selection when suggestions change
   useEffect(() => { setSelectedIdx(-1); }, [suggestions]);
 
+  // Close dropdown when a scan starts (e.g. from sidebar stock pick)
+  useEffect(() => { if (loading) setFocused(false); }, [loading]);
+
   const selectSymbol = (sym) => {
     setInputVal(sym);
     // Defer dropdown removal so it stays in the DOM through the full
