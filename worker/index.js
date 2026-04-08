@@ -159,6 +159,53 @@ async function handleGateUnlock(request, env, origin) {
 }
 
 /**
+ * Resolve NSE tradingsymbol to Kite instrument_token.
+ * Downloads the full NSE instruments CSV from Kite, parses it, and caches
+ * the symbol→token map in KV for 24 hours.
+ */
+async function resolveInstrumentToken(symbol, authHeader, env) {
+  const KV_KEY = 'kite_nse_instruments';
+  const sym = symbol.toUpperCase();
+
+  // Try KV cache first
+  if (env.CANDLESCAN_KV) {
+    const cached = await env.CANDLESCAN_KV.get(KV_KEY, 'json');
+    if (cached && cached[sym]) return cached[sym];
+    // If cached but symbol not found, still try a fresh fetch below
+    // (in case instrument was recently listed)
+  }
+
+  // Fetch NSE instruments CSV from Kite
+  const resp = await fetch('https://api.kite.trade/instruments/NSE', {
+    headers: { 'Authorization': authHeader, 'X-Kite-Version': '3' },
+  });
+  if (!resp.ok) throw new Error(`Instruments API ${resp.status}`);
+
+  const csv = await resp.text();
+  // CSV format: instrument_token,exchange_token,tradingsymbol,name,...
+  // First line is header
+  const lines = csv.split('\n');
+  const map = {};
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    if (cols.length < 3) continue;
+    const token = cols[0]; // instrument_token
+    const tradingsymbol = (cols[2] || '').replace(/"/g, '');
+    if (tradingsymbol) map[tradingsymbol] = token;
+  }
+
+  // Cache in KV for 24h
+  if (env.CANDLESCAN_KV) {
+    try {
+      await env.CANDLESCAN_KV.put(KV_KEY, JSON.stringify(map), { expirationTtl: 86400 });
+    } catch { /* KV write failed — non-fatal */ }
+  }
+
+  if (!map[sym]) throw new Error(`Symbol "${sym}" not found in NSE instruments`);
+  return map[sym];
+}
+
+/**
  * Handle /zerodha/historical — decrypt vault and proxy to Kite API.
  */
 async function handleZerodhaHistorical(request, env, origin) {
@@ -202,28 +249,35 @@ async function handleZerodhaHistorical(request, env, origin) {
     });
   }
 
-  // Look up instrument token for the symbol
-  // For now, we use the symbol directly and let the caller provide instrument_token if needed
-  // Kite API v3: GET /instruments/historical/{instrument_token}/{interval}?from=...&to=...
-  // Alternative: use the exchange:tradingsymbol format via /quote endpoint
-  const kiteUrl = `https://api.kite.trade/instruments/NSE/${symbol}/historical/${interval}?from=${from}&to=${to}`;
+  const authHeader = `token ${zerodhaApiKey}:${zerodhaAccessToken}`;
+
+  // Resolve instrument_token for the NSE symbol (cached in KV for 24h)
+  let instrumentToken;
+  try {
+    instrumentToken = await resolveInstrumentToken(symbol, authHeader, env);
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Instrument lookup failed: ${err.message}` }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const kiteUrl = `https://api.kite.trade/instruments/historical/${instrumentToken}/${interval}?from=${from}&to=${to}`;
 
   try {
     const resp = await fetch(kiteUrl, {
-      headers: {
-        'Authorization': `token ${zerodhaApiKey}:${zerodhaAccessToken}`,
-        'X-Kite-Version': '3',
-      },
+      headers: { 'Authorization': authHeader, 'X-Kite-Version': '3' },
     });
 
-    const data = await resp.json();
-
     if (!resp.ok) {
-      return new Response(JSON.stringify({ error: data.message || `Kite API error: ${resp.status}` }), {
+      const errText = await resp.text().catch(() => '');
+      let errMsg;
+      try { errMsg = JSON.parse(errText).message; } catch { errMsg = errText.slice(0, 200); }
+      return new Response(JSON.stringify({ error: errMsg || `Kite API error: ${resp.status}` }), {
         status: resp.status, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
       });
     }
 
+    const data = await resp.json();
     return new Response(JSON.stringify(data), {
       status: 200,
       headers: { ...corsHeaders(origin), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
