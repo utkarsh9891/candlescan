@@ -218,9 +218,10 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
         localStorage.setItem(LS_ZERODHA_API_SECRET, apiSecret.trim());
       } catch { /* ok */ }
     }
-    // Redirect to Zerodha OAuth login
+    // Redirect to Zerodha OAuth login — use replace() so the Zerodha URL
+    // doesn't stay in browser history (back button should return to home, not Zerodha)
     const redirectUrl = window.location.origin + window.location.pathname;
-    window.location.href = `https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(key)}&redirect_url=${encodeURIComponent(redirectUrl)}`;
+    window.location.replace(`https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(key)}&redirect_url=${encodeURIComponent(redirectUrl)}`);
   }, [apiKey, apiSecret, tokenStatus]);
 
   const handleClearVault = useCallback(() => {
