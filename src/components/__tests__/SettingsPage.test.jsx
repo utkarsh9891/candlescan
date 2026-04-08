@@ -41,8 +41,6 @@ function renderSettings(overrides = {}) {
     onBack: vi.fn(),
     debugMode: false,
     onDebugModeChange: vi.fn(),
-    mode: 'advanced',
-    onModeChange: vi.fn(),
     ...overrides,
   };
   return render(<SettingsPage {...props} />);
@@ -65,12 +63,6 @@ describe('SettingsPage', () => {
   it('renders the back button', () => {
     renderSettings();
     expect(screen.getByLabelText(/go back/i)).toBeInTheDocument();
-  });
-
-  it('renders the View Mode section with Simple and Advanced options', () => {
-    renderSettings();
-    expect(screen.getByRole('button', { name: 'Simple' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Advanced' })).toBeInTheDocument();
   });
 
   it('renders the Premium Gate section', () => {

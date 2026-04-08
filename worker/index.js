@@ -683,17 +683,26 @@ async function handleDhanSession(request, env, origin) {
       });
     }
 
-    const data = await resp.json();
-    if (!data.accessToken) {
-      return new Response(JSON.stringify({ error: 'No access token in response' }), {
+    const rawText = await resp.text();
+    let data;
+    try { data = JSON.parse(rawText); } catch {
+      return new Response(JSON.stringify({ error: `Dhan returned non-JSON: ${rawText.slice(0, 200)}` }), {
+        status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Dhan may return token as 'accessToken' or 'access_token' or nested
+    const token = data.accessToken || data.access_token || data.data?.accessToken || data.data?.access_token;
+    if (!token) {
+      return new Response(JSON.stringify({ error: `No access token found. Response keys: ${Object.keys(data).join(', ')}. Full: ${rawText.slice(0, 300)}` }), {
         status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
       });
     }
 
     return new Response(JSON.stringify({
-      accessToken: data.accessToken,
-      clientName: data.dhanClientName || '',
-      expiryTime: data.expiryTime || '',
+      accessToken: token,
+      clientName: data.dhanClientName || data.data?.dhanClientName || '',
+      expiryTime: data.expiryTime || data.data?.expiryTime || '',
     }), {
       status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
     });
