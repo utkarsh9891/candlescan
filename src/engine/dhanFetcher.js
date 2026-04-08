@@ -82,6 +82,7 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
         from: fromStr,
         to: toStr,
         vault,
+        dhanClientId: (() => { try { return localStorage.getItem('candlescan_dhan_client_id') || ''; } catch { return ''; } })(),
       }),
     });
 

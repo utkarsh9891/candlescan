@@ -503,6 +503,9 @@ async function handleDhanHistorical(request, env, origin) {
     });
   }
 
+  // Client ID from request body (stored in localStorage on client)
+  const clientId = dhanClientId || '';
+
   // Resolve symbol to securityId
   let securityId;
   try {
@@ -535,6 +538,7 @@ async function handleDhanHistorical(request, env, origin) {
       headers: {
         'Content-Type': 'application/json',
         'access-token': dhanAccessToken,
+        ...(clientId ? { 'client-id': clientId } : {}),
       },
       body: JSON.stringify(reqBody),
     });
@@ -542,8 +546,11 @@ async function handleDhanHistorical(request, env, origin) {
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
       let errMsg;
-      try { errMsg = JSON.parse(errText).remarks || JSON.parse(errText).message; } catch { errMsg = errText.slice(0, 200); }
-      return new Response(JSON.stringify({ error: errMsg || `Dhan API error: ${resp.status}` }), {
+      try {
+        const parsed = JSON.parse(errText);
+        errMsg = parsed.remarks || parsed.message || parsed.errorMessage || parsed.error || errText;
+      } catch { errMsg = errText || `(empty body)`; }
+      return new Response(JSON.stringify({ error: `Dhan API ${resp.status}: ${errMsg}` }), {
         status: resp.status, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
       });
     }
@@ -592,7 +599,7 @@ async function handleDhanValidate(request, env, origin) {
   }
 
   const body = await request.json();
-  const { vault } = body;
+  const { vault, dhanClientId } = body;
 
   if (!vault || !env.GATE_PRIVATE_KEY) {
     return new Response(JSON.stringify({ valid: false, error: 'Missing vault or server config' }), {
@@ -619,7 +626,11 @@ async function handleDhanValidate(request, env, origin) {
   // Try a lightweight Dhan API call to check token
   try {
     const resp = await fetch('https://api.dhan.co/v2/fundlimit', {
-      headers: { 'access-token': dhanAccessToken, 'Content-Type': 'application/json' },
+      headers: {
+        'access-token': dhanAccessToken,
+        'Content-Type': 'application/json',
+        ...(dhanClientId ? { 'client-id': dhanClientId } : {}),
+      },
     });
     if (resp.ok) {
       return new Response(JSON.stringify({ valid: true }), {
