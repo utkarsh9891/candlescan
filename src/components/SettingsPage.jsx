@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { unlockGate, encryptToVault, getVaultBlob, hasVault, clearVault, clearGate, getGatePublicKey } from '../utils/credentialVault.js';
 import PasteInput from './PasteInput.jsx';
+import ToggleSwitch from './ToggleSwitch.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
@@ -470,10 +471,6 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#1a1d26' }}>Settings</h1>
       </div>
 
-      {/* View Mode toggle removed — single advanced mode */
-      false && (
-        <div style={card} />
-      )}
 
       {/* Premium Gate */}
       <div style={card}>
@@ -713,14 +710,12 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       {/* Debug Mode */}
       {onDebugModeChange && (
         <div style={card}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: debugMode ? '#2563eb' : '#4a5068' }}>
-            <input type="checkbox" checked={!!debugMode}
-              onChange={(e) => onDebugModeChange(e.target.checked)}
-              style={{ accentColor: '#2563eb', margin: 0, width: 18, height: 18 }} />
-            Debug mode
-          </label>
-          <div style={{ fontSize: 11, color: '#8892a8', marginTop: 6 }}>
-            Shows API call inspector panel at the bottom of the screen.
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: debugMode ? '#2563eb' : '#4a5068' }}>Debug mode</div>
+              <div style={{ fontSize: 11, color: '#8892a8', marginTop: 4 }}>API call inspector panel</div>
+            </div>
+            <ToggleSwitch checked={!!debugMode} onChange={onDebugModeChange} />
           </div>
         </div>
       )}
