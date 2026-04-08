@@ -126,7 +126,7 @@ export default function SearchBar({
                 <button
                   key={s.sym}
                   type="button"
-                  onPointerDown={(e) => { e.preventDefault(); selectSymbol(s.sym); }}
+                  onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); selectSymbol(s.sym); }}
                   style={{
                     display: 'flex',
                     alignItems: 'baseline',
