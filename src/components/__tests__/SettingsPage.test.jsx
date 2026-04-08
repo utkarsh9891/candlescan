@@ -79,7 +79,7 @@ describe('SettingsPage', () => {
 
   it('renders the Debug mode toggle', () => {
     renderSettings();
-    expect(screen.getByLabelText(/debug mode/i)).toBeInTheDocument();
+    expect(screen.getByText(/debug mode/i)).toBeInTheDocument();
   });
 
   it('renders the About section', () => {

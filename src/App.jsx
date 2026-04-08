@@ -16,8 +16,8 @@ import TimeframePills, { SOURCE_TIMEFRAMES } from './components/TimeframePills.j
 import SearchBar from './components/SearchBar.jsx';
 import Chart from './components/Chart.jsx';
 import EmptyState from './components/EmptyState.jsx';
-import SimpleView from './components/SimpleView.jsx';
 import AdvancedView from './components/AdvancedView.jsx';
+import ToggleSwitch from './components/ToggleSwitch.jsx';
 import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
@@ -99,7 +99,6 @@ const shell = {
 };
 
 export default function App() {
-  const mode = 'advanced'; // Single view mode — Simple/Advanced toggle removed
   const [engineVersion, setEngineVersion] = useState(() => {
     try { return localStorage.getItem('candlescan_engine') || 'scalp'; } catch { return 'scalp'; }
   });
@@ -129,7 +128,6 @@ export default function App() {
   const [sym, setSym] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [live, setLive] = useState(false);
   const [simulated, setSimulated] = useState(false);
   const [scanError, setScanError] = useState('');
   const [candles, setCandles] = useState([]);
@@ -276,9 +274,6 @@ export default function App() {
     } catch { /* quota exceeded */ }
   }, [history]);
 
-  useEffect(() => {
-    try { localStorage.setItem('candlescan_mode', mode); } catch { /* quota */ }
-  }, [mode]);
 
   useEffect(() => {
     try {
@@ -443,7 +438,6 @@ export default function App() {
       setSimulated(!!sim);
       setLastUsedSource(usedSource);
       setSourceDebugReason(debugReason);
-      setLive(!!lv);
 
       // Grow search universe with newly discovered symbols
       if (displaySymbol && cn && !broadCompanyMap[displaySymbol]) {
@@ -513,7 +507,7 @@ export default function App() {
   }, [timeframe, engineVersion, scalpVariant, nseIndex, dataSource]);
 
   useEffect(() => {
-    if (mode !== 'advanced' || simulated || !yahooSym || !risk) {
+    if (simulated || !yahooSym || !risk) {
       setQuote(null);
       return undefined;
     }
@@ -524,7 +518,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [mode, simulated, yahooSym, risk, lastScan]);
+  }, [simulated, yahooSym, risk, lastScan]);
 
   useEffect(() => {
     if (!activeSymRef.current) return;
@@ -577,7 +571,7 @@ export default function App() {
     box,
     changePct,
     activeFilters,
-    viewMode: mode,
+    viewMode: 'advanced',
     yahooSymbol: yahooSym,
     quote,
     signalMeta,
@@ -823,27 +817,7 @@ export default function App() {
             <TimeframePills value={timeframe} onChange={setTimeframe} available={SOURCE_TIMEFRAMES[dataSource]} />
             <div style={{ flex: 1, minWidth: 4 }} />
             <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 3,
-                fontSize: 11,
-                fontWeight: 600,
-                color: highlightSignals ? '#2563eb' : '#8892a8',
-                cursor: 'pointer',
-                userSelect: 'none',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={highlightSignals}
-                onChange={(e) => setHighlightSignals(e.target.checked)}
-                style={{ accentColor: '#2563eb', margin: 0, width: 13, height: 13 }}
-              />
-              Signals
-            </label>
+            <ToggleSwitch checked={highlightSignals} onChange={setHighlightSignals} label="Signals" compact />
           </div>
           <Chart
             candles={candles}

@@ -80,7 +80,14 @@ export default function Chart({
   });
   const [panOffset, setPanOffset] = useState(0);
   const panOffsetRef = useRef(0);
+  const countRef = useRef(0);
+  const visibleCountRef = useRef(visibleCount);
+  const maxVisibleRef = useRef(0);
   const [containerWidth, setContainerWidth] = useState(0);
+  // Long-press crosshair state (mobile)
+  const [crosshair, setCrosshair] = useState(null); // { x, y } or null
+  const longPressTimer = useRef(null);
+  const longPressActive = useRef(false);
   const wrapRef = useRef(null);
   const svgRef = useRef(null);
   const [pendingPoint, setPendingPoint] = useState(null);
@@ -124,6 +131,11 @@ export default function Chart({
   const floorBars = maxVisible <= 0 ? 0 : Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
   const count = maxVisible <= 0 ? 0 : Math.min(maxVisible, Math.max(floorBars, visibleCount));
 
+  // Keep refs in sync for event handlers (avoids stale closures)
+  countRef.current = count;
+  visibleCountRef.current = visibleCount;
+  maxVisibleRef.current = maxVisible;
+
   useEffect(() => {
     if (maxVisible <= 0) return;
     const fl = Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
@@ -158,32 +170,32 @@ export default function Chart({
   /* ── Wheel: ctrl+wheel = zoom, regular wheel = pan ───────────── */
   useEffect(() => {
     const el = wrapRef.current;
-    if (!el || maxVisible <= 0) return;
+    if (!el) return;
     const onWheelNative = (e) => {
+      const c = countRef.current;
+      const mv = maxVisibleRef.current;
+      const len = candles?.length || 0;
+      if (mv <= 0) return;
       if (e.ctrlKey || e.metaKey) {
-        // Pinch-to-zoom on trackpad (sends ctrl+wheel)
         e.preventDefault();
-        const step = Math.max(2, Math.round(count * 0.1));
-        const fl = Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
+        const step = Math.max(2, Math.round(c * 0.1));
+        const fl = Math.max(1, Math.min(MIN_VISIBLE, mv));
         if (e.deltaY > 0) {
-          setVisibleCount((v) => Math.min(maxVisible, v + step));
+          setVisibleCount((v) => Math.min(mv, v + step));
         } else {
           setVisibleCount((v) => Math.max(fl, v - step));
         }
       } else if (e.deltaX !== 0) {
-        // Horizontal scroll/swipe = pan chart
         e.preventDefault();
-        const step = Math.max(1, Math.round(count * 0.05));
-        setPanOffset((p) => Math.max(0, Math.min((candles?.length || 0) - count, p + (e.deltaX > 0 ? -step : step))));
+        const step = Math.max(1, Math.round(c * 0.05));
+        setPanOffset((p) => Math.max(0, Math.min(len - c, p + (e.deltaX > 0 ? -step : step))));
       }
-      // Vertical scroll without modifier → let page scroll naturally
     };
     el.addEventListener('wheel', onWheelNative, { passive: false });
     return () => el.removeEventListener('wheel', onWheelNative);
-  }, [count, maxVisible, candles?.length]);
+  }, [candles?.length]);
 
-  /* ── Touch: pinch = zoom, swipe = pan ────────────────────────── */
-  // Keep panOffset ref in sync (avoids stale closure in touch handlers)
+  /* ── Touch: pinch = zoom, swipe = pan, long-press = crosshair ── */
   useEffect(() => { panOffsetRef.current = panOffset; }, [panOffset]);
 
   useEffect(() => {
@@ -195,52 +207,97 @@ export default function Chart({
       t.fingers = e.touches.length;
       if (e.touches.length === 1) {
         t.startX = e.touches[0].clientX;
-        t.panStart = panOffsetRef.current; // Read from ref, not closure
+        t.startY = e.touches[0].clientY;
+        t.panStart = panOffsetRef.current;
+        // Start long-press timer for crosshair (300ms hold)
+        longPressActive.current = false;
+        longPressTimer.current = setTimeout(() => {
+          longPressActive.current = true;
+          const rect = el.getBoundingClientRect();
+          setCrosshair({
+            x: e.touches[0].clientX - rect.left,
+            y: e.touches[0].clientY - rect.top,
+          });
+        }, 300);
       } else if (e.touches.length === 2) {
+        clearTimeout(longPressTimer.current);
+        setCrosshair(null);
+        longPressActive.current = false;
         e.preventDefault();
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         t.lastDist = Math.sqrt(dx * dx + dy * dy);
-        t.countStart = visibleCount;
+        t.countStart = visibleCountRef.current;
       }
     };
 
     const onTouchMove = (e) => {
       const t = touchRef.current;
-      if (e.touches.length === 1 && t.fingers === 1 && !drawingMode) {
-        // Pan: drag LEFT → show newer candles (panOffset decreases)
-        //       drag RIGHT → show older candles (panOffset increases)
+      if (e.touches.length === 1 && t.fingers === 1) {
         const dx = e.touches[0].clientX - t.startX;
-        const step = Math.round(dx / 8);
-        const newPan = Math.max(0, Math.min((candles?.length || 0) - count, t.panStart + step));
-        setPanOffset(newPan);
+        const dy = e.touches[0].clientY - t.startY;
+
+        // If long-press crosshair is active, move crosshair instead of panning
+        if (longPressActive.current) {
+          e.preventDefault();
+          const rect = el.getBoundingClientRect();
+          setCrosshair({
+            x: e.touches[0].clientX - rect.left,
+            y: e.touches[0].clientY - rect.top,
+          });
+          return;
+        }
+
+        // Cancel long-press if finger moved significantly
+        if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+          clearTimeout(longPressTimer.current);
+        }
+
+        if (!drawingMode) {
+          // Pan chart
+          const step = Math.round(dx / 8);
+          const len = candles?.length || 0;
+          const c = countRef.current;
+          const newPan = Math.max(0, Math.min(len - c, t.panStart + step));
+          setPanOffset(newPan);
+        }
       } else if (e.touches.length === 2) {
         e.preventDefault();
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
+        const mv = maxVisibleRef.current;
         if (t.lastDist > 0) {
           const ratio = t.lastDist / dist;
           const newCount = Math.round(t.countStart * ratio);
-          const fl = Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
-          setVisibleCount(Math.min(maxVisible, Math.max(fl, newCount)));
+          const fl = Math.max(1, Math.min(MIN_VISIBLE, mv));
+          setVisibleCount(Math.min(mv, Math.max(fl, newCount)));
         }
       }
     };
 
     const onTouchEnd = () => {
+      clearTimeout(longPressTimer.current);
       touchRef.current.fingers = 0;
+      // Keep crosshair visible briefly after lift so user can tap the "+" button
+      if (longPressActive.current) {
+        setTimeout(() => {
+          longPressActive.current = false;
+          setCrosshair(null);
+        }, 1500);
+      }
     };
 
     el.addEventListener('touchstart', onTouchStart, { passive: false });
     el.addEventListener('touchmove', onTouchMove, { passive: false });
     el.addEventListener('touchend', onTouchEnd);
     return () => {
+      clearTimeout(longPressTimer.current);
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  }, [visibleCount, count, maxVisible, candles?.length, drawingMode]);
+  }, [candles?.length, drawingMode]);
 
   const canRender = slice.length > 0 && containerWidth > 0;
 
@@ -554,11 +611,23 @@ export default function Chart({
           {slice.length} bars
         </span>
         <button type="button" aria-label="Zoom in" title="Zoom in" onClick={zoomIn} disabled={atMinZoom}
-          style={{ ...btnStyle, minWidth: 30, minHeight: 28, padding: '0 7px', fontSize: 14, opacity: atMinZoom ? 0.35 : 1, cursor: atMinZoom ? 'not-allowed' : 'pointer' }}>+</button>
+          style={{ ...btnStyle, opacity: atMinZoom ? 0.35 : 1, cursor: atMinZoom ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+          </svg>
+        </button>
         <button type="button" aria-label="Zoom out" title="Zoom out" onClick={zoomOut} disabled={atMaxZoom}
-          style={{ ...btnStyle, minWidth: 30, minHeight: 28, padding: '0 7px', fontSize: 14, opacity: atMaxZoom ? 0.35 : 1, cursor: atMaxZoom ? 'not-allowed' : 'pointer' }}>−</button>
-        <button type="button" aria-label="Reset zoom" title="Today" onClick={zoomFit}
-          style={{ ...btnStyle, minWidth: 30, minHeight: 28, padding: '0 7px', fontSize: 11, fontWeight: 600, color: '#2563eb' }}>↻</button>
+          style={{ ...btnStyle, opacity: atMaxZoom ? 0.35 : 1, cursor: atMaxZoom ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
+          </svg>
+        </button>
+        <button type="button" aria-label="Reset zoom" title="Reset to today" onClick={zoomFit}
+          style={{ ...btnStyle, color: '#2563eb', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+        </button>
       </div>
 
       {/* Mobile OHLCV info bar — shown on candle tap */}
@@ -594,6 +663,7 @@ export default function Chart({
       <div
         ref={wrapRef}
         style={{
+          position: 'relative',
           overflow: 'hidden',
           borderRadius: 10,
           border: '1px solid #e2e5eb',
@@ -924,7 +994,46 @@ export default function Chart({
               </text>
             </g>
           ))}
+          {/* Long-press crosshair overlay */}
+          {crosshair && (
+            <g>
+              <line x1={leftPad} y1={crosshair.y} x2={chartRight} y2={crosshair.y}
+                stroke="#2563eb" strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
+              <line x1={crosshair.x} y1={4} x2={crosshair.x} y2={h - 4}
+                stroke="#2563eb" strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
+              <rect x={chartRight + 2} y={crosshair.y - 10} width={55} height={20} rx={4}
+                fill="#2563eb" />
+              <text x={chartRight + 6} y={crosshair.y + 4} fontSize={10} fill="#fff" fontFamily={mono}>
+                {priceFor(crosshair.y).toFixed(2)}
+              </text>
+            </g>
+          )}
         </svg>
+        {/* Floating "+" button for adding hline at crosshair price */}
+        {crosshair && onDrawingComplete && (
+          <button
+            type="button"
+            onClick={() => {
+              const price = priceFor(crosshair.y);
+              onDrawingComplete({ type: 'hline', price });
+              setCrosshair(null);
+              longPressActive.current = false;
+            }}
+            style={{
+              position: 'absolute',
+              left: Math.min(crosshair.x + 12, containerWidth - 40),
+              top: crosshair.y - 14,
+              width: 28, height: 28, borderRadius: 14,
+              background: '#2563eb', color: '#fff',
+              border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 18, fontWeight: 700, lineHeight: 1,
+              boxShadow: '0 2px 8px rgba(37,99,235,0.4)',
+              zIndex: 10,
+            }}
+            aria-label="Add horizontal line at this price"
+          >+</button>
+        )}
       </div>
     </div>
   );
