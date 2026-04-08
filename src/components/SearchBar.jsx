@@ -52,8 +52,11 @@ export default function SearchBar({
 
   const selectSymbol = (sym) => {
     setInputVal(sym);
-    setFocused(false);
-    // Auto-scan on selection
+    // Defer dropdown removal so it stays in the DOM through the full
+    // pointerdown → pointerup → click cycle. Otherwise the click event
+    // lands on whatever element is underneath (Recent stocks, Browse button).
+    // Use setTimeout(50ms) — rAF alone can fire before click on some mobile browsers.
+    setTimeout(() => setFocused(false), 50);
     setTimeout(() => onScan(sym), 0);
   };
 
