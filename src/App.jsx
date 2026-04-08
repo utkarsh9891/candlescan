@@ -146,16 +146,6 @@ export default function App() {
     try { return localStorage.getItem('candlescan_data_source') || 'yahoo'; } catch { return 'yahoo'; }
   });
   const [zerodhaExpiredMsg, setZerodhaExpiredMsg] = useState('');
-
-  // Re-sync dataSource from localStorage when returning from Settings
-  useEffect(() => {
-    if (view === 'main') {
-      try {
-        const stored = localStorage.getItem('candlescan_data_source') || 'yahoo';
-        setDataSourceState(stored);
-      } catch { /* ok */ }
-    }
-  }, [view]);
   const [lastUsedSource, setLastUsedSource] = useState('yahoo');
 
   const [nseIndex, setNseIndex] = useState(() => {
@@ -204,6 +194,16 @@ export default function App() {
   });
   const [cameFromBatch, setCameFromBatch] = useState(false);
   const [cameFromSimulation, setCameFromSimulation] = useState(false);
+
+  // Re-sync dataSource from localStorage when returning from Settings or on page reload
+  useEffect(() => {
+    if (view === 'main') {
+      try {
+        const stored = localStorage.getItem('candlescan_data_source') || 'yahoo';
+        setDataSourceState(stored);
+      } catch { /* ok */ }
+    }
+  }, [view]);
 
   // Ref to track whether popstate handler should skip (to avoid loops)
   const handlingPopState = useRef(false);
