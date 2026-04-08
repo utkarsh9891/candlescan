@@ -11,6 +11,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
  */
 
 const GITHUB_REPO = 'utkarsh9891/candlescan';
+const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 const LS_LAST_CHECK = 'candlescan_last_update_check';
 const LS_LATEST_VER = 'candlescan_latest_version';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -78,21 +79,25 @@ export default function UpdatePrompt() {
     setChecking(true);
     setCheckError('');
     try {
-      const res = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-        { headers: { Accept: 'application/vnd.github+json' } },
-      );
-      if (res.status === 404) {
-        // No releases published yet — nothing to update to
-        setChecking(false);
-        try {
-          localStorage.setItem(LS_LAST_CHECK, String(Date.now()));
-        } catch { /* quota */ }
-        return;
+      // Use /releases?per_page=1 (includes pre-releases) instead of
+      // /releases/latest (which only returns full releases — 404 for 0.x.y)
+      const ghUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=1`;
+      let res;
+      try {
+        res = await fetch(ghUrl, { headers: { Accept: 'application/vnd.github+json' } });
+      } catch {
+        // Direct fetch failed (CORS/PNA on VPN networks) — route through CF worker
+        res = await fetch(`${CF_WORKER_URL}/github/releases?repo=${GITHUB_REPO}`);
       }
       if (!res.ok) throw new Error(`GitHub API ${res.status}`);
       const data = await res.json();
-      const latest = data.tag_name;
+      if (!Array.isArray(data) || data.length === 0) {
+        // No releases published yet
+        setChecking(false);
+        try { localStorage.setItem(LS_LAST_CHECK, String(Date.now())); } catch { /* quota */ }
+        return;
+      }
+      const latest = data[0].tag_name;
 
       try {
         localStorage.setItem(LS_LAST_CHECK, String(Date.now()));
