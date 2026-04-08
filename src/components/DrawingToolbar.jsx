@@ -110,17 +110,17 @@ export default function DrawingToolbar({ active, onChange, onClear }) {
       {open && (
         <div style={{
           position: 'absolute',
-          top: '100%',
-          right: 0,
-          marginTop: 4,
+          bottom: '100%',
+          left: 0,
+          marginBottom: 4,
           background: '#fff',
           border: '1px solid #e2e5eb',
           borderRadius: 10,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+          boxShadow: '0 -4px 16px rgba(0,0,0,0.12)',
           padding: 6,
           display: 'flex',
           gap: 4,
-          zIndex: 50,
+          zIndex: 200,
         }}>
           {TOOLS.map(({ key, label, Icon }) => {
             const on = active === key;
