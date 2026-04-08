@@ -45,14 +45,14 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   // Derived for backward compat in UI logic
   const vaultSaved = tokenStatus === 'valid' || tokenStatus === 'checking';
 
-  // Validate token on mount when vault exists and Zerodha is selected
+  // Validate token on mount — informational only, never auto-clears vault.
+  // Only scan-time failures should clear the vault (definitive proof token is dead).
   useEffect(() => {
     if (!hasVault() || !hasGateToken()) {
       setTokenStatus('none');
       return;
     }
     if (dataSource !== 'zerodha') {
-      // Vault exists but source isn't zerodha — show as valid (skip validation)
       setTokenStatus('valid');
       return;
     }
@@ -74,16 +74,13 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
           setTokenStatus('valid');
           setTokenUserName(data.userName || '');
         } else {
-          // Token expired — clear vault only, keep API key + secret
-          clearVault();
+          // Show expired status but do NOT clear vault — let scan-time handle cleanup
           setTokenStatus('expired');
-          setDataSourceState('yahoo');
-          setDataSource('yahoo');
           setVaultMsg('Token expired. Click "Connect Zerodha" to re-authenticate.');
           setVaultMsgColor('#dc2626');
         }
       } catch {
-        // Network error — assume valid to avoid false cleanup
+        // Network/parse error — assume valid
         if (!cancelled) setTokenStatus('valid');
       }
     })();
