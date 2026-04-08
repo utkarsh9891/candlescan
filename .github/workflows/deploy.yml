@@ -28,7 +28,16 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 0
 
-      # Auto-tag patch on branch push only (tag pushes already have a tag)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      # Run tests FIRST — nothing else happens if tests fail
+      - run: npm test
+
+      # Auto-tag patch ONLY after tests pass (branch pushes only)
       - name: Auto-tag patch version
         if: startsWith(github.ref, 'refs/heads/')
         run: |
@@ -73,12 +82,6 @@ jobs:
           echo "Building version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm test
       - name: Build with explicit version
         run: npm run build
         env:
