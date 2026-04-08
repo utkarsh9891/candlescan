@@ -147,6 +147,7 @@ export default function App() {
   });
   const [zerodhaExpiredMsg, setZerodhaExpiredMsg] = useState('');
   const [lastUsedSource, setLastUsedSource] = useState('yahoo');
+  const [sourceDebugReason, setSourceDebugReason] = useState('');
 
   const [nseIndex, setNseIndex] = useState(() => {
     try {
@@ -349,34 +350,49 @@ export default function App() {
     try {
       let result;
       let usedSource = dataSource;
+      let debugReason = '';
 
       // Try Zerodha first if configured
-      if (dataSource === 'zerodha' && hasVault()) {
-        const vault = getVaultBlob();
-        const gateToken = getGateToken();
-        if (vault && gateToken) {
-          result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
-          // If Zerodha fails with auth error, fallback to Yahoo
-          // Match Kite API auth errors: HTTP 403, 401, or explicit "TokenException"/"InputException"
-          if (result.error && /HTTP 40[13]|TokenException|InputException|Incorrect.*api_key|expired/i.test(result.error)) {
-            clearVault();
-            try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
-            setDataSourceState('yahoo');
-            setZerodhaExpiredMsg('Zerodha token expired — switched to Yahoo Finance. Reconnect in Settings.');
-            result = null;
-            usedSource = 'yahoo';
-          } else if (result.error) {
-            // Other Zerodha error — fallback to Yahoo silently
-            result = null;
-            usedSource = 'yahoo';
-          }
-        } else {
+      if (dataSource === 'zerodha') {
+        if (!hasVault()) {
           usedSource = 'yahoo';
+          debugReason = `Setting=zerodha but no vault in localStorage`;
+        } else {
+          const vault = getVaultBlob();
+          const gateToken = getGateToken();
+          if (!vault || !gateToken) {
+            usedSource = 'yahoo';
+            debugReason = `Setting=zerodha, vault=${!!vault}, gateToken=${!!gateToken} — missing credentials`;
+          } else {
+            debugReason = `Setting=zerodha, vault=yes, gateToken=yes — calling Zerodha API`;
+            result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
+            if (result.error && /HTTP 40[13]|TokenException|InputException|Incorrect.*api_key|expired/i.test(result.error)) {
+              clearVault();
+              try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
+              setDataSourceState('yahoo');
+              setZerodhaExpiredMsg('Zerodha token expired — switched to Yahoo Finance. Reconnect in Settings.');
+              debugReason += ` → auth error: ${result.error} → cleared vault, fallback Yahoo`;
+              result = null;
+              usedSource = 'yahoo';
+            } else if (result.error) {
+              debugReason += ` → error: ${result.error} → fallback Yahoo`;
+              result = null;
+              usedSource = 'yahoo';
+            } else {
+              debugReason += ` → success (${result.candles?.length || 0} candles)`;
+            }
+          }
         }
+      } else {
+        debugReason = `Setting=yahoo`;
       }
 
       // Fallback to Yahoo Finance
       if (!result || (!result.candles?.length && !result.error)) {
+        if (usedSource !== 'yahoo' || !debugReason.includes('fallback')) {
+          debugReason += debugReason ? ' → ' : '';
+          debugReason += 'Using Yahoo Finance';
+        }
         result = await fetchOHLCV(s, timeframe);
         usedSource = 'yahoo';
       }
@@ -389,6 +405,7 @@ export default function App() {
       setYahooSym(yahooSymbol || '');
       setSimulated(!!sim);
       setLastUsedSource(usedSource);
+      setSourceDebugReason(debugReason);
       setLive(!!lv);
 
       // Grow search universe with newly discovered symbols
@@ -806,6 +823,15 @@ export default function App() {
             highlightSignals={highlightSignals}
           />
           <DataDelayDisclaimer candles={candles} simulated={simulated} dataSource={lastUsedSource} lastScan={lastScan} />
+          {debugMode && sourceDebugReason && (
+            <div style={{
+              fontSize: 10, color: '#64748b', background: '#f8fafc', border: '1px solid #e2e5eb',
+              borderRadius: 6, padding: '6px 10px', marginBottom: 8, fontFamily: "'SF Mono', Menlo, monospace",
+              lineHeight: 1.5, wordBreak: 'break-all',
+            }}>
+              <strong>Source:</strong> {lastUsedSource} | {sourceDebugReason}
+            </div>
+          )}
           {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
         </>
       )}
