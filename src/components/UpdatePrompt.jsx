@@ -105,10 +105,12 @@ export default function UpdatePrompt() {
       setChecking(false);
     } catch (e) {
       setChecking(false);
-      if (manual) {
-        setCheckError('Could not check for updates. Please try again later.');
-      }
-      // Silent fail on automatic checks — don't bother the user
+      const msg = e?.message || '';
+      const isNetwork = msg.includes('fetch') || msg.includes('network') || msg.includes('Failed') || !navigator.onLine;
+      const hint = isNetwork
+        ? 'Network error — check your connection and try again.'
+        : `Could not check for updates (${msg || 'unknown error'}). Try again later.`;
+      setCheckError(hint);
     }
   }, [currentVersion]);
 
@@ -131,6 +133,13 @@ export default function UpdatePrompt() {
     } catch { /* localStorage unavailable */ }
     checkGitHubRelease(false);
   }, [checkGitHubRelease, currentVersion]);
+
+  // Auto-dismiss error banner after 6 seconds
+  useEffect(() => {
+    if (!checkError) return;
+    const t = setTimeout(() => setCheckError(''), 6000);
+    return () => clearTimeout(t);
+  }, [checkError]);
 
   // Manual trigger from Settings "Check for updates" button
   useEffect(() => {
@@ -213,8 +222,9 @@ export default function UpdatePrompt() {
           boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
         }}>
           <span>
-            {forceReload ? 'Update available' : 'New version available'}
+            New version available
             {newVersion ? ` (${newVersion})` : ''}
+            {currentVersion ? ` — current: ${currentVersion}` : ''}
           </span>
           <button
             type="button"
