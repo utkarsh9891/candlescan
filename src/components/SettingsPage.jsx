@@ -179,42 +179,10 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
     setTokenUserName('');
   }, []);
 
-  const [switchWarning, setSwitchWarning] = useState(null); // { from, to } | null
-
   const handleSourceChange = useCallback((src) => {
-    const current = dataSource;
-    // Check if switching away from a premium source that has credentials
-    const hasZerodhaKeys = !!(getSavedApiKey() || getSavedApiSecret());
-    const hasDhanCreds = !!(() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID); } catch { return ''; } })();
-
-    if (current === 'zerodha' && hasZerodhaKeys && src !== 'zerodha') {
-      setSwitchWarning({ from: 'Zerodha', to: src });
-      return;
-    }
-    if (current === 'dhan' && hasDhanCreds && src !== 'dhan') {
-      setSwitchWarning({ from: 'Dhan', to: src });
-      return;
-    }
     setDataSourceState(src);
     setDataSource(src);
-  }, [dataSource]);
-
-  const confirmSourceSwitch = useCallback(() => {
-    if (!switchWarning) return;
-    // Clear the old source's credentials
-    if (switchWarning.from === 'Zerodha') {
-      try { localStorage.removeItem(LS_ZERODHA_API_KEY); localStorage.removeItem(LS_ZERODHA_API_SECRET); } catch { /* ok */ }
-      setApiKey(''); setApiSecret('');
-      setTokenStatus('none'); setTokenUserName('');
-    } else if (switchWarning.from === 'Dhan') {
-      try { localStorage.removeItem(LS_DHAN_CLIENT_ID); } catch { /* ok */ }
-      setDhanClientId(''); setDhanStatus('none');
-    }
-    clearVault();
-    setDataSourceState(switchWarning.to);
-    setDataSource(switchWarning.to);
-    setSwitchWarning(null);
-  }, [switchWarning]);
+  }, []);
 
   const handleSaveApiKeys = useCallback(() => {
     if (!apiKey.trim() || !apiSecret.trim()) {
@@ -260,14 +228,14 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
 
   const handleClearVault = useCallback(() => {
     try {
-      clearGate();
+      clearVault(); // Only clear vault blob, NOT gate hash/pubkey
       localStorage.removeItem(LS_ZERODHA_API_KEY);
       localStorage.removeItem(LS_ZERODHA_API_SECRET);
       setTokenStatus('none');
       setTokenUserName('');
       setApiKey('');
       setApiSecret('');
-      setVaultMsg('Credentials cleared');
+      setVaultMsg('Zerodha credentials cleared');
       setVaultMsgColor('#8892a8');
     } catch { /* ok */ }
   }, []);
@@ -453,8 +421,8 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
     try { localStorage.removeItem(LS_DHAN_CLIENT_ID); } catch { /* ok */ }
     setDhanClientId('');
     setDhanStatus('none');
-    setDhanMsg('Credentials cleared');
-    setDhanMsgColor('#8892a8');
+    setDhanMsg('Credentials cleared. Note: Dhan allows token generation once every 2 minutes.');
+    setDhanMsgColor('#d97706');
     setDhanShowAuth(false);
   }, []);
 
@@ -569,21 +537,6 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
             <span style={{ fontSize: 10, fontWeight: 600, color: '#2563eb', marginLeft: 6, background: '#eff6ff', borderRadius: 4, padding: '2px 6px' }}>Premium</span>
           </span>
         </label>
-        {switchWarning && (
-          <div style={{
-            marginTop: 10, padding: '10px 12px', borderRadius: 8,
-            background: '#fefce8', border: '1px solid #fde68a',
-            fontSize: 12, color: '#92400e', lineHeight: 1.5,
-          }}>
-            Switching will clear <strong>{switchWarning.from}</strong> credentials.
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={confirmSourceSwitch}
-                style={{ ...btnPrimary, fontSize: 11, padding: '5px 12px' }}>Confirm</button>
-              <button type="button" onClick={() => setSwitchWarning(null)}
-                style={{ ...btnSecondary, fontSize: 11, padding: '5px 12px' }}>Cancel</button>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Zerodha Setup */}
@@ -720,12 +673,6 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
                   Clear Credentials
                 </button>
               </>
-            )}
-            {dhanStatus === 'none' && !dhanShowAuth && (
-              <button type="button" onClick={() => setDhanShowAuth(true)}
-                style={{ ...btnPrimary, background: '#387ed1' }}>
-                Connect Dhan
-              </button>
             )}
             {dhanStatus === 'expired' && !dhanShowAuth && (
               <button type="button" onClick={() => setDhanShowAuth(true)}
