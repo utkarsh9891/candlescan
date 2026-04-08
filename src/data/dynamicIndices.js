@@ -31,7 +31,7 @@ const HEADERS = {
   Referer: 'https://www.nseindia.com/',
 };
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes (data is live market)
+const CACHE_TTL_MS = 30 * 1000; // 30 seconds — auto-refreshed by App.jsx interval
 const _cache = { gainers: null, losers: null, gainersTs: 0, losersTs: 0 };
 
 /**
