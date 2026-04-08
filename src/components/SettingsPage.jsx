@@ -190,6 +190,10 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       setVaultMsgColor('#dc2626');
       return;
     }
+    // Clear Dhan credentials when configuring Zerodha
+    try { localStorage.removeItem(LS_DHAN_CLIENT_ID); } catch { /* ok */ }
+    setDhanClientId(''); setDhanStatus('none'); setDhanMsg('');
+    clearVault();
     try {
       localStorage.setItem(LS_ZERODHA_API_KEY, apiKey.trim());
       localStorage.setItem(LS_ZERODHA_API_SECRET, apiSecret.trim());
@@ -291,6 +295,10 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       setDhanMsgColor('#dc2626');
       return;
     }
+    // Clear Zerodha credentials when configuring Dhan
+    try { localStorage.removeItem(LS_ZERODHA_API_KEY); localStorage.removeItem(LS_ZERODHA_API_SECRET); } catch { /* ok */ }
+    setApiKey(''); setApiSecret(''); setTokenStatus('none'); setTokenUserName(''); setVaultMsg('');
+    clearVault();
     try { localStorage.setItem(LS_DHAN_CLIENT_ID, dhanClientId.trim()); } catch { /* ok */ }
     setDhanMsg('Client ID saved.');
     setDhanMsgColor('#16a34a');

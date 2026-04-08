@@ -228,31 +228,36 @@ export default forwardRef(function Chart({
     if (!el) return;
 
     // Crosshair behavior:
-    // 1. Long-press (300ms hold) → activates crosshair
+    // 1. Long-press (300ms hold, no move) → activates crosshair at finger position
     // 2. Drag while holding → moves crosshair
-    // 3. Lift finger → crosshair STAYS (no auto-dismiss)
-    // 4. Subsequent touch-move → moves crosshair around
-    // 5. Tap "+" → adds line, dismisses crosshair
-    // 6. Short tap (no move) → dismisses crosshair
+    // 3. Lift finger → crosshair STAYS
+    // 4. Subsequent touch + drag → moves crosshair with OFFSET (finger doesn't snap
+    //    to crosshair center — crosshair moves relative to drag distance, so you can
+    //    position it precisely from a distance without your thumb covering it)
+    // 5. Tap "+" → adds hline, dismisses crosshair
+    // 6. Short tap (no drag) on chart → dismisses crosshair
     // While crosshair is active, chart pan is disabled.
 
     const onTouchStart = (e) => {
       const t = touchRef.current;
       t.fingers = e.touches.length;
       t.moved = false;
+      t.crosshairDragging = false;
 
       if (e.touches.length === 1) {
         t.startX = e.touches[0].clientX;
         t.startY = e.touches[0].clientY;
         t.panStart = panOffsetRef.current;
 
-        // If crosshair is already visible, subsequent touch moves it
         if (crosshairRef.current) {
-          longPressActive.current = true;
-          return;
+          // Crosshair exists — store offset between finger and crosshair center
+          // so subsequent drag moves crosshair by delta, not snapping to finger
+          t.chOffsetX = crosshairRef.current.x - (e.touches[0].clientX - el.getBoundingClientRect().left);
+          t.chOffsetY = crosshairRef.current.y - (e.touches[0].clientY - el.getBoundingClientRect().top);
+          return; // Don't start long-press timer
         }
 
-        // Start long-press timer
+        // No crosshair — start long-press timer
         longPressActive.current = false;
         longPressTimer.current = setTimeout(() => {
           longPressActive.current = true;
@@ -279,14 +284,23 @@ export default forwardRef(function Chart({
       t.moved = true;
 
       if (e.touches.length === 1 && t.fingers === 1) {
-        // If crosshair active, move crosshair (not chart)
+        // If crosshair exists or long-press activated, move crosshair with offset
         if (longPressActive.current || crosshairRef.current) {
           e.preventDefault();
+          t.crosshairDragging = true;
           const rect = el.getBoundingClientRect();
-          setCrosshair({
-            x: e.touches[0].clientX - rect.left,
-            y: e.touches[0].clientY - rect.top,
-          });
+          const fingerX = e.touches[0].clientX - rect.left;
+          const fingerY = e.touches[0].clientY - rect.top;
+
+          if (longPressActive.current && !crosshairRef.current) {
+            // First activation via long-press — snap to finger
+            setCrosshair({ x: fingerX, y: fingerY });
+          } else {
+            // Subsequent drag — apply offset so crosshair doesn't jump to finger
+            const ox = t.chOffsetX || 0;
+            const oy = t.chOffsetY || 0;
+            setCrosshair({ x: fingerX + ox, y: fingerY + oy });
+          }
           longPressActive.current = true;
           return;
         }
@@ -326,14 +340,16 @@ export default forwardRef(function Chart({
       const t = touchRef.current;
       t.fingers = 0;
 
-      // Short tap without movement while crosshair is showing → dismiss
-      if (crosshairRef.current && !t.moved && !longPressActive.current) {
+      // Short tap (no drag) while crosshair is showing → dismiss
+      if (crosshairRef.current && !t.crosshairDragging && !t.moved) {
         setCrosshair(null);
+        longPressActive.current = false;
         return;
       }
 
-      // After long-press drag, keep crosshair visible (don't dismiss)
+      // After drag, keep crosshair. Reset flags.
       longPressActive.current = false;
+      t.crosshairDragging = false;
     };
 
     el.addEventListener('touchstart', onTouchStart, { passive: false });
@@ -537,8 +553,8 @@ export default forwardRef(function Chart({
       e.stopPropagation();
       setTouchDrawPos({ x, y });
       setMousePos({ x, y });
-    } else {
-      // Not drawing: show OHLCV info for tapped candle
+    } else if (!crosshairRef.current) {
+      // Not drawing and no crosshair: show OHLCV info for tapped candle
       const idx = Math.max(0, Math.min(slice.length - 1, idxFor(x)));
       if (slice[idx]) {
         setTappedCandle({ idx, candle: slice[idx] });
@@ -640,26 +656,33 @@ export default forwardRef(function Chart({
         </div>
       )}
 
-      {/* Mobile OHLCV info bar — shown on candle tap (only when chart renders) */}
+      {/* OHLCV bar — always visible. Shows tapped candle or last candle by default */}
+      {canRender && (() => {
+        const c = tappedCandle?.candle || slice[slice.length - 1];
+        return c ? (
+          <div style={{
+            display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+            padding: '4px 8px', marginBottom: 4, borderRadius: 6,
+            background: tappedCandle ? '#f0f4ff' : '#f8f9fb',
+            border: `1px solid ${tappedCandle ? '#dbeafe' : '#e2e5eb'}`,
+            fontSize: 11, fontFamily: mono, color: '#4a5068',
+          }}>
+            <span>O <b>{c.o.toFixed(2)}</b></span>
+            <span>H <b>{c.h.toFixed(2)}</b></span>
+            <span>L <b>{c.l.toFixed(2)}</b></span>
+            <span>C <b style={{ color: c.c >= c.o ? '#16a34a' : '#dc2626' }}>{c.c.toFixed(2)}</b></span>
+            {c.v != null && <span>V <b>{c.v.toLocaleString()}</b></span>}
+            {c.t && <span style={{ color: '#8892a8' }}>{formatTimestamp(c.t, timeframe)}</span>}
+            {tappedCandle && (
+              <button type="button" onClick={() => { setTappedCandle(null); setMousePos(null); }}
+                style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#8892a8', fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
+            )}
+          </div>
+        ) : null;
+      })()}
+
       {canRender && (
       <>
-      {tappedCandle && tappedCandle.candle && (
-        <div style={{
-          display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-          padding: '4px 8px', marginBottom: 4, borderRadius: 6,
-          background: '#f8f9fb', border: '1px solid #e2e5eb',
-          fontSize: 11, fontFamily: mono, color: '#4a5068',
-        }}>
-          <span>O <b>{tappedCandle.candle.o.toFixed(2)}</b></span>
-          <span>H <b>{tappedCandle.candle.h.toFixed(2)}</b></span>
-          <span>L <b>{tappedCandle.candle.l.toFixed(2)}</b></span>
-          <span>C <b style={{ color: tappedCandle.candle.c >= tappedCandle.candle.o ? '#16a34a' : '#dc2626' }}>{tappedCandle.candle.c.toFixed(2)}</b></span>
-          {tappedCandle.candle.v != null && <span>V <b>{tappedCandle.candle.v.toLocaleString()}</b></span>}
-          {tappedCandle.candle.t && <span style={{ color: '#8892a8' }}>{formatTimestamp(tappedCandle.candle.t, timeframe)}</span>}
-          <button type="button" onClick={() => { setTappedCandle(null); setMousePos(null); }}
-            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#8892a8', fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
-        </div>
-      )}
 
       {/* Drawing mode touch hint */}
       {drawingMode && touchDrawPos && (
