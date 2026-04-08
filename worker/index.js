@@ -671,11 +671,36 @@ export default {
       return new Response('Not found', { status: 404, headers: corsHeaders(origin) });
     }
 
-    // --- GET proxy (Yahoo / NSE) ---
+    // --- GET endpoints ---
     if (request.method !== 'GET') {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders(origin) });
     }
 
+    // GitHub releases proxy — used as fallback when direct GitHub API is blocked (VPN/CORS)
+    if (path === '/github/releases') {
+      const repo = url.searchParams.get('repo');
+      if (!repo || !/^[\w-]+\/[\w-]+$/.test(repo)) {
+        return new Response(JSON.stringify({ error: 'Invalid repo parameter' }), {
+          status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+        });
+      }
+      try {
+        const ghResp = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=1`, {
+          headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'candlescan-proxy' },
+        });
+        const body = await ghResp.text();
+        return new Response(body, {
+          status: ghResp.status,
+          headers: { ...corsHeaders(origin), 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' },
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), {
+          status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    // --- GET proxy (Yahoo / NSE) ---
     const target = url.searchParams.get('url');
 
     if (!target) {
