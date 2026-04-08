@@ -104,7 +104,7 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
   } catch (err) {
     return {
       candles: [],
-      error: err.message || 'Dhan fetch failed',
+      error: `Dhan fetch failed: ${err.message || err}${err.stack ? ' | ' + err.stack.split('\n')[1]?.trim() : ''}`,
       displaySymbol: sym,
     };
   }
