@@ -83,6 +83,7 @@ export default forwardRef(function Chart({
   const countRef = useRef(0);
   const visibleCountRef = useRef(visibleCount);
   const maxVisibleRef = useRef(0);
+  const candlesLenRef = useRef(0);
   const [containerWidth, setContainerWidth] = useState(0);
   // Long-press crosshair state (mobile)
   const [crosshair, setCrosshair] = useState(null); // { x, y } or null
@@ -137,6 +138,7 @@ export default forwardRef(function Chart({
   visibleCountRef.current = visibleCount;
   maxVisibleRef.current = maxVisible;
   crosshairRef.current = crosshair;
+  candlesLenRef.current = candles?.length || 0;
 
   useEffect(() => {
     if (maxVisible <= 0) return;
@@ -184,7 +186,7 @@ export default forwardRef(function Chart({
     const onWheelNative = (e) => {
       const c = countRef.current;
       const mv = maxVisibleRef.current;
-      const len = candles?.length || 0;
+      const len = candlesLenRef.current;
       if (mv <= 0) return;
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
@@ -203,7 +205,7 @@ export default forwardRef(function Chart({
     };
     el.addEventListener('wheel', onWheelNative, { passive: false });
     return () => el.removeEventListener('wheel', onWheelNative);
-  }, [candles?.length]);
+  }, []);
 
   /* ── Touch: pinch = zoom, swipe = pan, long-press = crosshair ── */
   useEffect(() => { panOffsetRef.current = panOffset; }, [panOffset]);
@@ -286,7 +288,7 @@ export default forwardRef(function Chart({
 
         if (!drawingMode) {
           const step = Math.round(dx / 8);
-          const len = candles?.length || 0;
+          const len = candlesLenRef.current;
           const c = countRef.current;
           const newPan = Math.max(0, Math.min(len - c, t.panStart + step));
           setPanOffset(newPan);
@@ -330,7 +332,7 @@ export default forwardRef(function Chart({
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  }, [candles?.length, drawingMode]);
+  }, [drawingMode]);
 
   const canRender = slice.length > 0 && containerWidth > 0;
 
