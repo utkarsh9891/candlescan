@@ -53,8 +53,7 @@ export default function UpdatePrompt() {
       if (reg.waiting) {
         foundRef.current = true;
         setRegistration(reg);
-        // Use cached version from last GitHub check if available
-        try { const v = localStorage.getItem(LS_LATEST_VER); if (v) setNewVersion(v); } catch { /* ok */ }
+        // Don't set newVersion from stale cache — banner will say "New version available"
         setShowUpdate(true);
         return;
       }
@@ -65,7 +64,6 @@ export default function UpdatePrompt() {
           if (sw.state === 'installed' && navigator.serviceWorker.controller) {
             foundRef.current = true;
             setRegistration(reg);
-            try { const v = localStorage.getItem(LS_LATEST_VER); if (v) setNewVersion(v); } catch { /* ok */ }
             setShowUpdate(true);
           }
         });
