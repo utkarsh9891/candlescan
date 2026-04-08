@@ -488,12 +488,6 @@ export default function App() {
 
   const chartH = 260;
 
-  let headerBadge = 'idle';
-  if (loading) headerBadge = 'idle';
-  else if (scanError) headerBadge = 'offline';
-  else if (simulated) headerBadge = 'demo';
-  else if (sym && candles.length) headerBadge = live ? 'live' : 'offline';
-
   // Filter patterns for display (score uses all patterns)
   const filteredPatterns = patterns.filter((p) => activeFilters.has(p.category));
 
@@ -548,7 +542,7 @@ export default function App() {
     <div style={shell}>
       <UpdatePrompt />
       {/* Shared header — single instance, nav action changes per view */}
-      <Header badge={headerBadge} lastScan={lastScan}>
+      <Header>
         <GlobalMenu
           activeFilters={activeFilters}
           onFiltersChange={setActiveFilters}
