@@ -214,44 +214,48 @@ export default function App() {
     }
   }, [view]);
 
-  // Ref to track whether popstate handler should skip (to avoid loops)
-  const handlingPopState = useRef(false);
   const lastBackTime = useRef(0);
+  const viewRef = useRef('main'); // track current view for popstate handler
 
-  // Wrap setView to push browser history state for back gesture/button support
+  // Simple navigation: back always goes to home, double-back exits app.
+  // No history stack — replaceState, not pushState.
   const setView = useCallback((newView) => {
-    if (!handlingPopState.current) {
-      window.history.pushState({ view: newView }, '', '');
-    }
+    viewRef.current = newView;
     setViewRaw(newView);
+    // Push one entry when leaving home so back button can return to home
+    if (newView !== 'main') {
+      window.history.pushState({ view: 'non-main' }, '', '');
+    }
   }, []);
 
-  // Handle back gesture/button via popstate — navigate within app instead of closing
   useEffect(() => {
     window.history.replaceState({ view: 'main' }, '', '');
 
-    const onPopState = (e) => {
-      handlingPopState.current = true;
-      const targetView = e.state?.view;
-
-      if (targetView && targetView !== 'main') {
-        setViewRaw(targetView);
-      } else {
-        // At root — double-back within 2s to close, otherwise stay
-        const now = Date.now();
-        if (now - lastBackTime.current < 2000) {
-          // Let browser handle it (close PWA / navigate away)
-          handlingPopState.current = false;
-          return;
-        }
-        lastBackTime.current = now;
-        window.history.pushState({ view: 'main' }, '', '');
+    const onPopState = () => {
+      if (viewRef.current !== 'main') {
+        // On any non-home page → go straight to home (not previous page)
+        viewRef.current = 'main';
         setViewRaw('main');
         setCameFromBatch(false);
         setCameFromSimulation(false);
+        // Ensure we stay at single history entry
+        window.history.replaceState({ view: 'main' }, '', '');
+      } else {
+        // Already on home — double-back within 2s to exit
+        const now = Date.now();
+        if (now - lastBackTime.current < 2000) {
+          // Let browser close the PWA
+          window.history.back();
+          return;
+        }
+        lastBackTime.current = now;
+        // Re-push so next back press can be caught
+        window.history.pushState({ view: 'home-guard' }, '', '');
       }
-      handlingPopState.current = false;
     };
+
+    // Push one entry as guard for the home double-back
+    window.history.pushState({ view: 'home-guard' }, '', '');
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
