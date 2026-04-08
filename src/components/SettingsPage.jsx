@@ -278,10 +278,11 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
   });
   const [dhanPin, setDhanPin] = useState('');
   const [dhanTotp, setDhanTotp] = useState('');
-  const [dhanStatus, setDhanStatus] = useState('none'); // 'none' | 'checking' | 'valid' | 'expired'
+  const [dhanStatus, setDhanStatus] = useState(() => hasVault() && hasGateToken() ? 'checking' : 'none');
   const [dhanMsg, setDhanMsg] = useState('');
   const [dhanMsgColor, setDhanMsgColor] = useState('#8892a8');
   const [dhanConnecting, setDhanConnecting] = useState(false);
+  const [dhanShowAuth, setDhanShowAuth] = useState(false); // Toggle PIN+TOTP fields
 
   const handleSaveDhanClientId = useCallback(() => {
     if (!dhanClientId.trim()) {
@@ -330,6 +331,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       setDhanMsgColor('#16a34a');
       setDhanPin('');
       setDhanTotp('');
+      setDhanShowAuth(false);
     } catch (err) {
       setDhanMsg(err.message || 'Failed to connect');
       setDhanMsgColor('#dc2626');
@@ -370,7 +372,62 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
     }
   }, []);
 
+  // Auto-validate Dhan token on mount when vault exists and Dhan selected
+  useEffect(() => {
+    if (dataSource !== 'dhan' || !hasVault() || !hasGateToken()) {
+      if (dataSource === 'dhan') setDhanStatus('none');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setDhanStatus('checking');
+      try {
+        const vault = getVaultBlob();
+        const gateToken = getGateToken();
+        if (!vault || !gateToken) { if (!cancelled) setDhanStatus('none'); return; }
+        const clientId = (() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })();
+        const res = await fetch(`${CF_WORKER_URL}/dhan/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
+          body: JSON.stringify({ vault, dhanClientId: clientId }),
+        });
+        if (cancelled) return;
+        const data = await res.json();
+        if (data.valid) {
+          setDhanStatus('valid');
+        } else {
+          setDhanStatus('expired');
+          setDhanMsg('Token expired — reconnect with PIN + TOTP');
+          setDhanMsgColor('#dc2626');
+        }
+      } catch {
+        if (!cancelled) setDhanStatus('valid'); // Network error — assume valid
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [gateUnlocked, dataSource]);
+
+  const handleReconnectDhan = useCallback(() => {
+    if (dhanStatus === 'valid') {
+      const ok = window.confirm('Your current Dhan session is active. Reconnecting will replace it. Continue?');
+      if (!ok) return;
+    }
+    setDhanShowAuth(true);
+  }, [dhanStatus]);
+
+  const handleClearDhan = useCallback(() => {
+    clearVault();
+    try { localStorage.removeItem(LS_DHAN_CLIENT_ID); } catch { /* ok */ }
+    setDhanClientId('');
+    setDhanStatus('none');
+    setDhanMsg('Credentials cleared');
+    setDhanMsgColor('#8892a8');
+    setDhanShowAuth(false);
+  }, []);
+
   const showDhan = gateUnlocked && dataSource === 'dhan';
+  // Show PIN+TOTP fields when: not connected, expired, or user clicked reconnect
+  const dhanNeedsAuth = dhanStatus === 'none' || dhanStatus === 'expired' || dhanShowAuth;
 
   // eslint-disable-next-line no-undef
   // Version now shown only in hamburger menu
@@ -577,48 +634,79 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
             <button type="button" onClick={handleSaveDhanClientId} style={btnSecondary}>Save</button>
           </div>
 
-          {/* Step 2: PIN + TOTP (entered daily, never stored) */}
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
-            2. Authenticate (daily)
-          </div>
-          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
-            Enter your 6-digit Dhan PIN and TOTP from your authenticator app. Neither is stored.
-          </div>
-          <PasteInput value={dhanPin} onChange={setDhanPin} placeholder="Dhan PIN (6 digits)" type="password" useMono />
-          <PasteInput value={dhanTotp} onChange={setDhanTotp} placeholder="TOTP (6 digits)" useMono />
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            <button type="button" onClick={handleConnectDhan}
-              disabled={dhanConnecting}
-              style={{ ...btnPrimary, background: '#387ed1', opacity: dhanConnecting ? 0.5 : 1 }}>
-              {dhanConnecting ? 'Connecting...' : 'Connect Dhan'}
-            </button>
-          </div>
-
           {/* Status */}
           <div style={{
-            fontSize: 12, fontWeight: 600, marginBottom: 6,
+            fontSize: 12, fontWeight: 600, marginBottom: 8,
             color: dhanStatus === 'valid' ? '#16a34a'
               : dhanStatus === 'expired' ? '#dc2626'
               : dhanStatus === 'checking' ? '#d97706'
               : '#8892a8',
           }}>
-            {dhanStatus === 'valid' && 'Connected — token encrypted & saved'}
+            {dhanStatus === 'valid' && 'Connected — token verified'}
             {dhanStatus === 'checking' && 'Checking token...'}
-            {dhanStatus === 'expired' && 'Token expired — reconnect with PIN + TOTP'}
+            {dhanStatus === 'expired' && 'Token expired'}
             {dhanStatus === 'none' && 'Not connected'}
           </div>
 
-          {dhanMsg && <div style={{ fontSize: 12, color: dhanMsgColor, marginBottom: 6 }}>{dhanMsg}</div>}
+          {dhanMsg && <div style={{ fontSize: 12, color: dhanMsgColor, marginBottom: 8 }}>{dhanMsg}</div>}
 
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-            {hasVault() && (
-              <button type="button" onClick={handleValidateDhan}
-                disabled={dhanStatus === 'checking'}
-                style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
-                {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
+          {/* Actions based on state */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {(dhanStatus === 'valid' || dhanStatus === 'checking') && (
+              <>
+                <button type="button" onClick={handleValidateDhan}
+                  disabled={dhanStatus === 'checking'}
+                  style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
+                  {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
+                </button>
+                <button type="button" onClick={handleReconnectDhan} style={btnSecondary}>
+                  Reconnect
+                </button>
+                <button type="button" onClick={handleClearDhan} style={btnDanger}>
+                  Clear Credentials
+                </button>
+              </>
+            )}
+            {dhanStatus === 'none' && !dhanShowAuth && (
+              <button type="button" onClick={() => setDhanShowAuth(true)}
+                style={{ ...btnPrimary, background: '#387ed1' }}>
+                Connect Dhan
+              </button>
+            )}
+            {dhanStatus === 'expired' && !dhanShowAuth && (
+              <button type="button" onClick={() => setDhanShowAuth(true)}
+                style={{ ...btnPrimary, background: '#387ed1' }}>
+                Reconnect
               </button>
             )}
           </div>
+
+          {/* Step 2: PIN + TOTP (shown only when needed) */}
+          {dhanNeedsAuth && (
+            <>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
+                2. Authenticate with PIN + TOTP
+              </div>
+              <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
+                Enter your 6-digit Dhan PIN and TOTP from your authenticator app. Neither is stored.
+              </div>
+              <PasteInput value={dhanPin} onChange={setDhanPin} placeholder="Dhan PIN (6 digits)" type="password" useMono />
+              <PasteInput value={dhanTotp} onChange={setDhanTotp} placeholder="TOTP (6 digits)" useMono />
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <button type="button" onClick={handleConnectDhan}
+                  disabled={dhanConnecting}
+                  style={{ ...btnPrimary, background: '#387ed1', opacity: dhanConnecting ? 0.5 : 1 }}>
+                  {dhanConnecting ? 'Connecting...' : 'Connect'}
+                </button>
+                {dhanShowAuth && (dhanStatus === 'valid' || dhanStatus === 'checking') && (
+                  <button type="button" onClick={() => { setDhanShowAuth(false); setDhanPin(''); setDhanTotp(''); }}
+                    style={btnSecondary}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 
