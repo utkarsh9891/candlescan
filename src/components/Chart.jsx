@@ -205,9 +205,10 @@ export default function Chart({
       const t = touchRef.current;
       if (e.touches.length === 1 && t.fingers === 1 && !drawingMode) {
         // Pan (disabled when drawing)
+        // Drag right (positive dx) → show more recent candles → decrease panOffset
         const dx = e.touches[0].clientX - t.startX;
         const step = Math.round(dx / 8);
-        const newPan = Math.max(0, Math.min((candles?.length || 0) - count, t.panStart + step));
+        const newPan = Math.max(0, Math.min((candles?.length || 0) - count, t.panStart - step));
         setPanOffset(newPan);
       } else if (e.touches.length === 2) {
         e.preventDefault();

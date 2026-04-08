@@ -61,18 +61,16 @@ export default function SearchBar({
       e.stopPropagation();
       e.preventDefault();
     };
-    // Capture phase so we intercept before any handler fires
-    document.addEventListener('click', blocker, true);
-    document.addEventListener('pointerup', blocker, true);
+    // Capture phase so we intercept before any handler or tap highlight fires
+    const events = ['click', 'pointerup', 'pointerdown', 'touchend', 'touchstart', 'mousedown', 'mouseup'];
+    events.forEach(evt => document.addEventListener(evt, blocker, true));
     const id = setTimeout(() => {
       clickGuardRef.current = false;
-      document.removeEventListener('click', blocker, true);
-      document.removeEventListener('pointerup', blocker, true);
+      events.forEach(evt => document.removeEventListener(evt, blocker, true));
     }, 500);
     return () => {
       clearTimeout(id);
-      document.removeEventListener('click', blocker, true);
-      document.removeEventListener('pointerup', blocker, true);
+      events.forEach(evt => document.removeEventListener(evt, blocker, true));
     };
   });
 
