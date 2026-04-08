@@ -570,6 +570,13 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
           <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
             Generate from <a href="https://web.dhan.co" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>Dhan Web</a> → Profile → DhanHQ Trading APIs. Token expires daily — regenerate each trading day.
           </div>
+          <div style={{
+            fontSize: 11, color: '#92400e', background: '#fefce8', border: '1px solid #fde68a',
+            borderRadius: 6, padding: '8px 10px', marginBottom: 12, lineHeight: 1.5,
+          }}>
+            Requires the <strong>DhanHQ Data API subscription</strong> (Rs 499/month).
+            Without it, scans will fall back to Yahoo Finance.
+          </div>
           <input type="text" value={dhanToken} onChange={(e) => setDhanToken(e.target.value)}
             placeholder="Dhan Access Token" style={{ ...inputStyle, fontFamily: mono }} />
           <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
