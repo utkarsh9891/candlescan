@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import CustomIndexInput from './CustomIndexInput.jsx';
 import { SCALP_VARIANTS } from '../engine/scalp-variants/registry.js';
+import ToggleSwitch from './ToggleSwitch.jsx';
 
 const INTRADAY_CATEGORIES = [
   { key: 'engulfing', label: 'Engulfing' },
@@ -220,10 +221,9 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
           {filtersExpanded && (
             <>
               {CATEGORIES.map(({ key, label }) => (
-                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: activeFilters.has(key) ? '#1a1d26' : '#8892a8', borderRadius: 4, WebkitTapHighlightColor: 'transparent' }}>
-                  <input type="checkbox" checked={activeFilters.has(key)} onChange={() => toggleFilter(key)} style={{ accentColor: '#2563eb', margin: 0, width: 16, height: 16 }} />
-                  {label}
-                </label>
+                <div key={key} style={{ padding: '5px 10px' }}>
+                  <ToggleSwitch checked={activeFilters.has(key)} onChange={() => toggleFilter(key)} label={label} compact />
+                </div>
               ))}
               <div style={{ padding: '4px 10px 4px', display: 'flex', gap: 6 }}>
                 <button type="button" onClick={() => onFiltersChange(new Set(CATEGORIES.map(c => c.key)))} style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>

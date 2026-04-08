@@ -10,6 +10,7 @@ import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan } from '../engine/batchScan.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
 import { fetchYahooQuote } from '../engine/yahooQuote.js';
+import ToggleSwitch from './ToggleSwitch.jsx';
 import { getGateToken } from '../utils/batchAuth.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { getScalpVariantFns, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
@@ -343,16 +344,10 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       </div>
 
       {/* Toggles row */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12 }}>
-          <input type="checkbox" checked={margin} onChange={e => setMargin(e.target.checked)} disabled={scanning} />
-          <span style={{ fontWeight: 600 }}>5x Margin (MIS)</span>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12 }}>
-          <input type="checkbox" checked={premiumCharges} onChange={e => setPremiumCharges(e.target.checked)} />
-          <span style={{ fontWeight: 600 }}>Premium Plan</span>
-          <span style={{ fontSize: 10, color: '#8892a8' }}>{premiumCharges ? '(lower exchange fees)' : '(standard fees)'}</span>
-        </label>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <ToggleSwitch checked={margin} onChange={setMargin} label="5x Margin (MIS)" compact disabled={scanning} />
+        <ToggleSwitch checked={premiumCharges} onChange={setPremiumCharges} label="Premium Plan" compact />
+        {premiumCharges && <span style={{ fontSize: 10, color: '#8892a8' }}>(lower exchange fees)</span>}
       </div>
 
       <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, display: 'flex', gap: 12 }}>
