@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getMarketStatus, formatCountdown } from '../utils/marketHours.js';
 
-export default function Header({ badge, lastScan, children }) {
+export default function Header({ children }) {
   const [marketStatus, setMarketStatus] = useState(getMarketStatus);
 
   useEffect(() => {
@@ -9,22 +9,9 @@ export default function Header({ badge, lastScan, children }) {
     return () => clearInterval(id);
   }, []);
 
-  const styles = {
-    live: { bg: '#16a34a', label: 'LIVE' },
-    demo: { bg: '#d97706', label: 'DEMO' },
-    offline: { bg: '#dc2626', label: 'NO DATA' },
-    idle: { bg: '#cbd5e1', label: 'READY' },
-  };
-  const s = styles[badge] || styles.idle;
-
-  const showMarketClosed = !marketStatus.isOpen && (badge === 'idle' || badge === 'live');
-  const displayLabel = showMarketClosed ? 'CLOSED' : s.label;
-  const displayBg = showMarketClosed ? '#64748b' : s.bg;
-
+  const isOpen = marketStatus.isOpen;
   const cd = formatCountdown(marketStatus.nextEventMs, marketStatus.nextLabel);
-  // "Opens 09:15" or "Closes 3h 12m" or "Opens 1h 4m"
-  const cdPrefix = marketStatus.nextEventMs >= 4 * 3600000 ? `${marketStatus.nextLabel}` : `${marketStatus.nextLabel}`;
-  const cdText = `${cdPrefix} ${cd}`;
+  const cdText = `${marketStatus.nextLabel} ${cd}`;
 
   return (
     <header className="cs-header">
@@ -63,10 +50,6 @@ export default function Header({ badge, lastScan, children }) {
           white-space: nowrap;
           flex-shrink: 0;
         }
-        .cs-header__badge {
-          font-weight: 700;
-          font-size: 11px;
-        }
         @media (max-width: 480px) {
           .cs-header__brand { font-size: 18px; }
         }
@@ -76,10 +59,11 @@ export default function Header({ badge, lastScan, children }) {
 
       <div className="cs-header__row">
         <span className="cs-header__status">
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: displayBg, flexShrink: 0 }} />
-          <span className="cs-header__badge" style={{ color: displayBg }}>{displayLabel}</span>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: isOpen ? '#16a34a' : '#64748b', flexShrink: 0 }} />
+          <span style={{ fontWeight: 700, fontSize: 11, color: isOpen ? '#16a34a' : '#64748b' }}>
+            {isOpen ? 'Market Open' : 'Market Closed'}
+          </span>
           <span>· {cdText}</span>
-          {lastScan && <span>· {lastScan}</span>}
         </span>
         <span style={{ flexShrink: 0 }}>{children}</span>
       </div>

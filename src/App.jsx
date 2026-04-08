@@ -36,20 +36,25 @@ import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRul
 import { fetchNseIndexSymbolList, fetchNseIndexWithNames } from './engine/nseIndexFetch.js';
 import { fetchYahooQuote } from './engine/yahooQuote.js';
 
-function DataDelayDisclaimer({ candles, simulated, dataSource }) {
-  const status = getMarketStatus();
-  if (simulated || !candles?.length || !status.isOpen) return null;
-
+function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
   const sourceName = dataSource === 'zerodha' ? 'Zerodha Kite' : 'Yahoo Finance';
+  const status = getMarketStatus();
+  const showDelay = !simulated && candles?.length > 0 && status.isOpen;
+
   // Only show during market hours when data may be delayed
-  const lastTs = candles[candles.length - 1]?.t;
+  const lastTs = candles?.length ? candles[candles.length - 1]?.t : 0;
   const delaySec = lastTs ? Math.floor(Date.now() / 1000 - lastTs) : 0;
   const delayText = delaySec > 120
     ? `${Math.floor(delaySec / 60)}m`
     : delaySec > 0 ? `~${delaySec}s` : '~1-2 min';
+
+  if (!showDelay && !lastScan) return null;
+
   return (
     <div style={{ fontSize: 10, color: '#8892a8', textAlign: 'right', marginTop: -8, marginBottom: 4, paddingRight: 2 }}>
-      Data delayed by {delayText} ({sourceName})
+      {showDelay && <>Data delayed by {delayText} ({sourceName})</>}
+      {showDelay && lastScan && ' · '}
+      {lastScan && <>Scanned {lastScan}</>}
     </div>
   );
 }
@@ -342,7 +347,8 @@ export default function App() {
         if (vault && gateToken) {
           result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
           // If Zerodha fails with auth error, fallback to Yahoo
-          if (result.error && /403|401|token|expired|InputException/i.test(result.error)) {
+          // Match Kite API auth errors: HTTP 403, 401, or explicit "TokenException"/"InputException"
+          if (result.error && /HTTP 40[13]|TokenException|InputException|Incorrect.*api_key|expired/i.test(result.error)) {
             clearVault();
             try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
             setDataSourceState('yahoo');
@@ -488,12 +494,6 @@ export default function App() {
 
   const chartH = 260;
 
-  let headerBadge = 'idle';
-  if (loading) headerBadge = 'idle';
-  else if (scanError) headerBadge = 'offline';
-  else if (simulated) headerBadge = 'demo';
-  else if (sym && candles.length) headerBadge = live ? 'live' : 'offline';
-
   // Filter patterns for display (score uses all patterns)
   const filteredPatterns = patterns.filter((p) => activeFilters.has(p.category));
 
@@ -548,7 +548,7 @@ export default function App() {
     <div style={shell}>
       <UpdatePrompt />
       {/* Shared header — single instance, nav action changes per view */}
-      <Header badge={headerBadge} lastScan={lastScan}>
+      <Header>
         <GlobalMenu
           activeFilters={activeFilters}
           onFiltersChange={setActiveFilters}
@@ -795,7 +795,7 @@ export default function App() {
             patterns={patterns}
             highlightSignals={highlightSignals}
           />
-          <DataDelayDisclaimer candles={candles} simulated={simulated} dataSource={lastUsedSource} />
+          <DataDelayDisclaimer candles={candles} simulated={simulated} dataSource={lastUsedSource} lastScan={lastScan} />
           {mode === 'advanced' ? <AdvancedView {...viewProps} /> : <SimpleView {...viewProps} />}
         </>
       )}

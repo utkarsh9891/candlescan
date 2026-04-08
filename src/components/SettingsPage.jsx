@@ -45,15 +45,16 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   // Derived for backward compat in UI logic
   const vaultSaved = tokenStatus === 'valid' || tokenStatus === 'checking';
 
-  // Validate token on mount when vault exists and Zerodha is selected
+  // Validate token on mount — informational only, never auto-clears vault.
+  // Only scan-time failures should clear the vault (definitive proof token is dead).
   useEffect(() => {
     if (!hasVault() || !hasGateToken()) {
       setTokenStatus('none');
       return;
     }
     if (dataSource !== 'zerodha') {
-      // If vault exists but source isn't zerodha, still show status but skip validation
-      setTokenStatus('checking');
+      setTokenStatus('valid');
+      return;
     }
     let cancelled = false;
     (async () => {
@@ -61,7 +62,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
       try {
         const vault = getVaultBlob();
         const gateToken = getGateToken();
-        if (!vault || !gateToken) { setTokenStatus('none'); return; }
+        if (!vault || !gateToken) { if (!cancelled) setTokenStatus('none'); return; }
         const res = await fetch(`${CF_WORKER_URL}/zerodha/validate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
@@ -73,20 +74,18 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
           setTokenStatus('valid');
           setTokenUserName(data.userName || '');
         } else {
-          // Token expired — clear vault only, keep API key + secret
-          clearVault();
+          // Show expired status but do NOT clear vault — let scan-time handle cleanup
           setTokenStatus('expired');
-          setDataSourceState('yahoo');
-          setDataSource('yahoo');
           setVaultMsg('Token expired. Click "Connect Zerodha" to re-authenticate.');
           setVaultMsgColor('#dc2626');
         }
       } catch {
-        if (!cancelled) setTokenStatus('checking'); // Network error — leave as ambiguous
+        // Network/parse error — assume valid
+        if (!cancelled) setTokenStatus('valid');
       }
     })();
     return () => { cancelled = true; };
-  }, [gateUnlocked]);
+  }, [gateUnlocked, dataSource]);
 
   // Handle OAuth callback — catch request_token from URL
   useEffect(() => {
@@ -201,6 +200,11 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
   }, [apiKey, apiSecret]);
 
   const handleConnectZerodha = useCallback(() => {
+    // If token is currently valid, confirm before invalidating
+    if (tokenStatus === 'valid') {
+      const ok = window.confirm('Your current Zerodha session is active. Reconnecting will invalidate it. Continue?');
+      if (!ok) return;
+    }
     const key = apiKey.trim() || getSavedApiKey();
     if (!key) {
       setVaultMsg('Save your API Key first');
@@ -217,7 +221,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange, mod
     // Redirect to Zerodha OAuth login
     const redirectUrl = window.location.origin + window.location.pathname;
     window.location.href = `https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(key)}&redirect_url=${encodeURIComponent(redirectUrl)}`;
-  }, [apiKey, apiSecret]);
+  }, [apiKey, apiSecret, tokenStatus]);
 
   const handleClearVault = useCallback(() => {
     try {
