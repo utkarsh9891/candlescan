@@ -57,6 +57,12 @@ export default defineConfig({
           {
             urlPattern: /^https:\/\/candlescan-proxy\.utkarsh-dev\.workers\.dev/,
             handler: 'NetworkOnly',
+            method: 'GET',
+          },
+          {
+            urlPattern: /^https:\/\/candlescan-proxy\.utkarsh-dev\.workers\.dev/,
+            handler: 'NetworkOnly',
+            method: 'POST',
           },
         ],
       },
