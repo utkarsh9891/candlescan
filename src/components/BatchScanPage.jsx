@@ -196,19 +196,14 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Dhan has strict rate limits — use lower concurrency and longer delay
-      const isDhan = dataSource === 'dhan';
-      const scanConcurrency = isDhan ? 2 : 5;
-      const scanDelay = isDhan ? 2000 : 200;
-
       const scanResults = await batchScan({
         symbols,
         timeframe,
         gateToken: token,
         engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
-        concurrency: scanConcurrency,
-        delayMs: scanDelay,
+        concurrency: 5,
+        delayMs: 200,
         onProgress: (completed, total, current) => {
           setProgress({ completed, total, current });
         },

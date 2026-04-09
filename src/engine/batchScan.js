@@ -72,7 +72,14 @@ export async function batchScan({
         if (signal?.aborted) return null;
         try {
           const doFetch = fetchFn || fetchOHLCV;
-          const result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
+          let result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
+
+          // Retry on 429 (rate limit) — wait 3s then try once more
+          if (result.error && result.error.includes('429')) {
+            await new Promise(r => setTimeout(r, 3000));
+            result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
+          }
+
           const { candles, companyName, displaySymbol, error } = result;
           if (error || !candles?.length) return null;
 

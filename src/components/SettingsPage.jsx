@@ -9,6 +9,7 @@ const LS_SOURCE_KEY = 'candlescan_data_source';
 const LS_ZERODHA_API_KEY = 'candlescan_zerodha_api_key';
 const LS_ZERODHA_API_SECRET = 'candlescan_zerodha_api_secret';
 const LS_DHAN_CLIENT_ID = 'candlescan_dhan_client_id';
+const LS_DHAN_PIN = 'candlescan_dhan_pin';
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 function getDataSource() {
@@ -281,7 +282,9 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
   const [dhanClientId, setDhanClientId] = useState(() => {
     try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; }
   });
-  const [dhanPin, setDhanPin] = useState('');
+  const [dhanPin, setDhanPin] = useState(() => {
+    try { return localStorage.getItem(LS_DHAN_PIN) || ''; } catch { return ''; }
+  });
   const [dhanTotp, setDhanTotp] = useState('');
   const [dhanStatus, setDhanStatus] = useState(() => hasVault() && hasGateToken() ? 'checking' : 'none');
   const [dhanMsg, setDhanMsg] = useState('');
@@ -426,7 +429,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
 
   const handleClearDhan = useCallback(() => {
     clearVault();
-    try { localStorage.removeItem(LS_DHAN_CLIENT_ID); } catch { /* ok */ }
+    try { localStorage.removeItem(LS_DHAN_CLIENT_ID); localStorage.removeItem(LS_DHAN_PIN); } catch { /* ok */ }
     setDhanClientId('');
     setDhanStatus('none');
     setDhanMsg('Credentials cleared. Note: Dhan allows token generation once every 2 minutes.');
@@ -682,12 +685,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
                 </button>
               </>
             )}
-            {dhanStatus === 'expired' && !dhanShowAuth && (
-              <button type="button" onClick={() => setDhanShowAuth(true)}
-                style={{ ...btnPrimary, background: '#387ed1' }}>
-                Reconnect
-              </button>
-            )}
+            {/* When expired, dhanNeedsAuth is already true — PIN+TOTP fields show automatically */}
           </div>
 
           {/* Step 2: PIN + TOTP (shown only when needed) */}
@@ -697,9 +695,9 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
                 2. Authenticate with PIN + TOTP
               </div>
               <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
-                Enter your 6-digit Dhan PIN and TOTP from your authenticator app. Neither is stored.
+                Enter your 6-digit Dhan PIN (saved locally) and TOTP from your authenticator app.
               </div>
-              <PasteInput value={dhanPin} onChange={setDhanPin} placeholder="Dhan PIN (6 digits)" type="password" useMono />
+              <PasteInput value={dhanPin} onChange={(v) => { setDhanPin(v); try { localStorage.setItem(LS_DHAN_PIN, v); } catch { /* ok */ } }} placeholder="Dhan PIN (6 digits)" type="password" useMono />
               <PasteInput value={dhanTotp} onChange={setDhanTotp} placeholder="TOTP (6 digits)" useMono />
               <div style={{ fontSize: 11, color: '#d97706', marginBottom: 8 }}>
                 Dhan allows token generation once every 2 minutes.

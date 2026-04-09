@@ -661,23 +661,22 @@ export default forwardRef(function Chart({
         const c = tappedCandle?.candle || slice[slice.length - 1];
         return c ? (
           <div style={{
-            display: 'flex', alignItems: 'center',
-            padding: '4px 8px', marginBottom: 4, borderRadius: 6,
+            display: 'flex', gap: 5, alignItems: 'center',
+            padding: '3px 6px', marginBottom: 4, borderRadius: 6,
             background: tappedCandle ? '#f0f4ff' : '#f8f9fb',
             border: `1px solid ${tappedCandle ? '#dbeafe' : '#e2e5eb'}`,
-            fontSize: 11, fontFamily: mono, color: '#4a5068',
+            fontSize: 10, fontFamily: mono, color: '#4a5068',
+            whiteSpace: 'nowrap', overflow: 'hidden',
           }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 0', minWidth: 0 }}>
-              <span>O <b>{c.o.toFixed(2)}</b></span>
-              <span>H <b>{c.h.toFixed(2)}</b></span>
-              <span>L <b>{c.l.toFixed(2)}</b></span>
-              <span>C <b style={{ color: c.c >= c.o ? '#16a34a' : '#dc2626' }}>{c.c.toFixed(2)}</b></span>
-              {c.v != null && <span>V <b>{c.v.toLocaleString()}</b></span>}
-              {c.t && <span style={{ color: '#8892a8' }}>{formatTimestamp(c.t, timeframe)}</span>}
-            </div>
+            <span>O <b>{c.o.toFixed(2)}</b></span>
+            <span>H <b>{c.h.toFixed(2)}</b></span>
+            <span>L <b>{c.l.toFixed(2)}</b></span>
+            <span>C <b style={{ color: c.c >= c.o ? '#16a34a' : '#dc2626' }}>{c.c.toFixed(2)}</b></span>
+            {c.v != null && <span>V <b>{c.v.toLocaleString()}</b></span>}
+            {c.t && <span style={{ color: '#8892a8' }}>{formatTimestamp(c.t, timeframe)}</span>}
             {tappedCandle && (
               <button type="button" onClick={() => { setTappedCandle(null); setMousePos(null); }}
-                style={{ flexShrink: 0, marginLeft: 6, background: 'none', border: 'none', cursor: 'pointer', color: '#8892a8', fontSize: 13, padding: '0 2px', lineHeight: 1 }}>✕</button>
+                style={{ marginLeft: 'auto', flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', color: '#8892a8', fontSize: 12, padding: '0 2px', lineHeight: 1 }}>✕</button>
             )}
           </div>
         ) : null;

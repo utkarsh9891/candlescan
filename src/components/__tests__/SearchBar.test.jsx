@@ -105,7 +105,7 @@ describe('SearchBar', () => {
     });
   });
 
-  it('closes dropdown immediately after selection (click guard blocks pass-through)', () => {
+  it('keeps dropdown in DOM after selection until gesture completes (prevents click-through)', () => {
     const onScan = vi.fn();
     const setInputVal = vi.fn();
     renderSearchBar({ inputVal: 'RE', onScan, setInputVal });
@@ -117,15 +117,19 @@ describe('SearchBar', () => {
     const item = screen.getByText('RELIANCE');
     expect(item).toBeVisible();
 
-    // Select the item via pointerDown
+    // Select the item via pointerDown — dropdown enters "dismissing" state
     const btn = item.closest('button');
     fireEvent.pointerDown(btn);
 
-    // Dropdown should be closed immediately (focused = false)
-    expect(screen.queryByText('Reliance Industries Ltd')).not.toBeInTheDocument();
-
     // setInputVal should have been called
     expect(setInputVal).toHaveBeenCalledWith('RELIANCE');
+
+    // Dropdown is still in DOM (opacity:0) to absorb gesture events
+    expect(screen.queryByText('Reliance Industries Ltd')).toBeInTheDocument();
+
+    // Simulate finger lift — dropdown fully closes
+    fireEvent.pointerUp(document);
+    expect(screen.queryByText('Reliance Industries Ltd')).not.toBeInTheDocument();
   });
 
   describe('keyboard navigation', () => {
