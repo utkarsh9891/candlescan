@@ -15,9 +15,9 @@ export default function SearchBar({
   const [focused, setFocused] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const wrapRef = useRef(null);
-  // Guard: when a dropdown item is selected, block all clicks on underlying
-  // elements for a short window to prevent touch event pass-through.
-  const clickGuardRef = useRef(false);
+  // Timestamp of last dropdown selection — the click guard window is active
+  // for 500ms after this timestamp.
+  const guardUntilRef = useRef(0);
 
   // Fuzzy match: search both symbol and company name
   const suggestions = useMemo(() => {
@@ -39,40 +39,33 @@ export default function SearchBar({
 
   const showDropdown = focused && suggestions.length > 0;
 
-  // Close on outside click — but respect the click guard
+  // Close on outside click — skip during the 500ms guard window after selection
   useEffect(() => {
     if (!showDropdown) return;
     const handle = (e) => {
-      if (clickGuardRef.current) return;
+      if (Date.now() < guardUntilRef.current) return;
       if (wrapRef.current && !wrapRef.current.contains(e.target)) setFocused(false);
     };
     document.addEventListener('pointerdown', handle);
     return () => document.removeEventListener('pointerdown', handle);
   }, [showDropdown]);
 
-  // Block clicks on underlying elements after a dropdown selection.
-  // This is the ONLY reliable way to prevent touch click-through:
-  // capture ALL click events at the document level during the guard window.
+  // Permanent capture-phase blocker — blocks all click/touch/pointer events
+  // outside the search wrapper during the guard window after a dropdown selection.
+  // Registered once on mount to avoid timing issues with dynamic listener registration.
   useEffect(() => {
-    if (!clickGuardRef.current) return;
     const blocker = (e) => {
-      // Allow clicks inside the search wrapper
+      if (Date.now() >= guardUntilRef.current) return;
       if (wrapRef.current && wrapRef.current.contains(e.target)) return;
       e.stopPropagation();
       e.preventDefault();
     };
-    // Capture phase so we intercept before any handler or tap highlight fires
     const events = ['click', 'pointerup', 'pointerdown', 'touchend', 'touchstart', 'mousedown', 'mouseup'];
     events.forEach(evt => document.addEventListener(evt, blocker, true));
-    const id = setTimeout(() => {
-      clickGuardRef.current = false;
-      events.forEach(evt => document.removeEventListener(evt, blocker, true));
-    }, 500);
     return () => {
-      clearTimeout(id);
       events.forEach(evt => document.removeEventListener(evt, blocker, true));
     };
-  });
+  }, []);
 
   // Reset selection when suggestions change
   useEffect(() => { setSelectedIdx(-1); }, [suggestions]);
@@ -81,8 +74,9 @@ export default function SearchBar({
   useEffect(() => { if (loading) setFocused(false); }, [loading]);
 
   const selectSymbol = useCallback((sym) => {
-    // Activate click guard BEFORE closing dropdown
-    clickGuardRef.current = true;
+    // Activate click guard BEFORE closing dropdown —
+    // blocks pointerup/click from this same tap from reaching underlying elements.
+    guardUntilRef.current = Date.now() + 500;
     setInputVal(sym);
     setFocused(false);
     setTimeout(() => onScan(sym), 0);

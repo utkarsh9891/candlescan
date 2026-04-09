@@ -218,14 +218,15 @@ export default function UpdatePrompt() {
         </div>
       )}
 
-      {/* Update available banner */}
+      {/* Update available banner — normal flow (not fixed) so it pushes
+           the header down instead of covering the hamburger icon */}
       {showUpdate && (
         <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 10000,
           padding: '10px 16px', background: '#2563eb', color: '#fff',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           fontSize: 13, fontWeight: 600,
           boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+          margin: '-12px -12px 8px',
         }}>
           <span>
             {newVersion ? `Update to ${newVersion}` : 'New version available'}
