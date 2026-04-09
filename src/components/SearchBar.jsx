@@ -15,9 +15,10 @@ export default function SearchBar({
   const [focused, setFocused] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const wrapRef = useRef(null);
-  // Timestamp of last dropdown selection — the click guard window is active
-  // for 500ms after this timestamp.
-  const guardUntilRef = useRef(0);
+  // When true, the dropdown is being dismissed — it stays in the DOM
+  // (invisible) to absorb the remaining touch events from the gesture
+  // that triggered the selection, preventing click-through.
+  const [dismissing, setDismissing] = useState(false);
 
   // Fuzzy match: search both symbol and company name
   const suggestions = useMemo(() => {
@@ -39,33 +40,15 @@ export default function SearchBar({
 
   const showDropdown = focused && suggestions.length > 0;
 
-  // Close on outside click — skip during the 500ms guard window after selection
+  // Close on outside click
   useEffect(() => {
     if (!showDropdown) return;
     const handle = (e) => {
-      if (Date.now() < guardUntilRef.current) return;
       if (wrapRef.current && !wrapRef.current.contains(e.target)) setFocused(false);
     };
     document.addEventListener('pointerdown', handle);
     return () => document.removeEventListener('pointerdown', handle);
   }, [showDropdown]);
-
-  // Permanent capture-phase blocker — blocks all click/touch/pointer events
-  // outside the search wrapper during the guard window after a dropdown selection.
-  // Registered once on mount to avoid timing issues with dynamic listener registration.
-  useEffect(() => {
-    const blocker = (e) => {
-      if (Date.now() >= guardUntilRef.current) return;
-      if (wrapRef.current && wrapRef.current.contains(e.target)) return;
-      e.stopPropagation();
-      e.preventDefault();
-    };
-    const events = ['click', 'pointerup', 'pointerdown', 'touchend', 'touchstart', 'mousedown', 'mouseup'];
-    events.forEach(evt => document.addEventListener(evt, blocker, true));
-    return () => {
-      events.forEach(evt => document.removeEventListener(evt, blocker, true));
-    };
-  }, []);
 
   // Reset selection when suggestions change
   useEffect(() => { setSelectedIdx(-1); }, [suggestions]);
@@ -74,11 +57,19 @@ export default function SearchBar({
   useEffect(() => { if (loading) setFocused(false); }, [loading]);
 
   const selectSymbol = useCallback((sym) => {
-    // Activate click guard BEFORE closing dropdown —
-    // blocks pointerup/click from this same tap from reaching underlying elements.
-    guardUntilRef.current = Date.now() + 500;
+    // Don't close the dropdown yet — enter "dismissing" state where the
+    // dropdown stays in the DOM (opacity 0) to absorb the pointerup/click
+    // from this same gesture. Close it when the finger lifts.
+    setDismissing(true);
     setInputVal(sym);
-    setFocused(false);
+    const close = () => {
+      setDismissing(false);
+      setFocused(false);
+      document.removeEventListener('pointerup', close);
+      document.removeEventListener('touchend', close);
+    };
+    document.addEventListener('pointerup', close);
+    document.addEventListener('touchend', close);
     setTimeout(() => onScan(sym), 0);
   }, [setInputVal, onScan]);
 
@@ -106,6 +97,10 @@ export default function SearchBar({
     }
   };
 
+  // Dropdown is visible when focused with suggestions, OR when dismissing
+  // (kept in DOM to absorb gesture events but invisible)
+  const dropdownVisible = showDropdown || dismissing;
+
   return (
     <div style={{ marginBottom: 10 }} ref={wrapRef}>
       {/* Search + Scan row */}
@@ -124,17 +119,17 @@ export default function SearchBar({
               minHeight: 44,
               padding: '0 14px',
               fontSize: 14,
-              borderRadius: showDropdown ? '10px 10px 0 0' : 10,
+              borderRadius: dropdownVisible ? '10px 10px 0 0' : 10,
               border: '1px solid #e2e5eb',
               fontFamily: 'inherit',
               boxSizing: 'border-box',
             }}
           />
 
-          {/* Autocomplete dropdown */}
-          {showDropdown && (
+          {/* Autocomplete dropdown — stays in DOM during dismissal (opacity 0)
+              to absorb pointerup/click from the selecting gesture */}
+          {dropdownVisible && (
             <div
-              // Prevent input blur when clicking inside dropdown
               onMouseDown={(e) => e.preventDefault()}
               style={{
                 position: 'absolute',
@@ -149,15 +144,14 @@ export default function SearchBar({
                 zIndex: 100,
                 maxHeight: 260,
                 overflowY: 'auto',
+                opacity: dismissing ? 0 : 1,
+                pointerEvents: dismissing ? 'auto' : undefined,
               }}
             >
               {suggestions.map((s, i) => (
                 <button
                   key={s.sym}
                   type="button"
-                  // Use onPointerDown to select — fires before blur.
-                  // The click guard blocks any click events from reaching
-                  // elements underneath after the dropdown is removed.
                   onPointerDown={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
