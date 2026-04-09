@@ -286,6 +286,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
     try { return localStorage.getItem(LS_DHAN_PIN) || ''; } catch { return ''; }
   });
   const [dhanTotp, setDhanTotp] = useState('');
+  const [dhanPastedToken, setDhanPastedToken] = useState('');
   const [dhanStatus, setDhanStatus] = useState(() => hasVault() && hasGateToken() ? 'checking' : 'none');
   const [dhanMsg, setDhanMsg] = useState('');
   const [dhanMsgColor, setDhanMsgColor] = useState('#8892a8');
@@ -351,6 +352,24 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       setDhanConnecting(false);
     }
   }, [dhanClientId, dhanPin, dhanTotp, apiKey, apiSecret]);
+
+  const handlePasteToken = useCallback(async () => {
+    const token = dhanPastedToken.trim();
+    if (!token) { setDhanMsg('Paste an access token first'); setDhanMsgColor('#dc2626'); return; }
+    try {
+      const pubKey = getGatePublicKey();
+      if (!pubKey) throw new Error('RSA public key not found. Re-unlock premium first.');
+      await encryptToVault(pubKey, { dhanAccessToken: token });
+      setDhanStatus('valid');
+      setDhanMsg('Access token encrypted & saved.');
+      setDhanMsgColor('#16a34a');
+      setDhanPastedToken('');
+      setDhanShowAuth(false);
+    } catch (err) {
+      setDhanMsg(err.message || 'Failed to save token');
+      setDhanMsgColor('#dc2626');
+    }
+  }, [dhanPastedToken]);
 
   const handleValidateDhan = useCallback(async () => {
     if (!hasVault() || !hasGateToken()) {
@@ -692,7 +711,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
           {dhanNeedsAuth && (
             <>
               <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
-                2. Authenticate with PIN + TOTP
+                2a. Authenticate with PIN + TOTP
               </div>
               <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
                 Enter your 6-digit Dhan PIN (saved locally) and TOTP from your authenticator app.
@@ -714,6 +733,29 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
                     Cancel
                   </button>
                 )}
+              </div>
+
+              {/* Divider */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0' }}>
+                <div style={{ flex: 1, height: 1, background: '#e2e5eb' }} />
+                <span style={{ fontSize: 11, color: '#8892a8', fontWeight: 600 }}>OR</span>
+                <div style={{ flex: 1, height: 1, background: '#e2e5eb' }} />
+              </div>
+
+              {/* Paste access token */}
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
+                2b. Paste access token from web.dhan.co
+              </div>
+              <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
+                Login at web.dhan.co → My Profile → Access DhanHQ APIs → copy the token.
+              </div>
+              <PasteInput value={dhanPastedToken} onChange={setDhanPastedToken} placeholder="Paste access token" useMono />
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <button type="button" onClick={handlePasteToken}
+                  disabled={!dhanPastedToken.trim()}
+                  style={{ ...btnPrimary, background: '#387ed1', opacity: !dhanPastedToken.trim() ? 0.5 : 1 }}>
+                  Save Token
+                </button>
               </div>
             </>
           )}
