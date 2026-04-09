@@ -20,6 +20,12 @@ import { getScalpVariantFns } from '../engine/scalp-variants/registry.js';
 const mono = "'SF Mono', Menlo, monospace";
 const ALL_TFS = ['1m', '5m', '15m', '30m', '1h', '1d'];
 
+const ACTION_RANK = {
+  'STRONG BUY': 5, 'STRONG SHORT': 5,
+  BUY: 4, SHORT: 4,
+  WAIT: 2, 'NO TRADE': 0,
+};
+
 function actionColor(action) {
   if (action === 'STRONG BUY' || action === 'BUY') return '#16a34a';
   if (action === 'STRONG SHORT' || action === 'SHORT') return '#dc2626';
@@ -190,22 +196,39 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Dhan has strict rate limits — use lower concurrency and longer delay
+      const isDhan = dataSource === 'dhan';
+      const scanConcurrency = isDhan ? 2 : 5;
+      const scanDelay = isDhan ? 2000 : 200;
+
       const scanResults = await batchScan({
         symbols,
         timeframe,
         gateToken: token,
         engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
-        concurrency: 5,
-        delayMs: 200,
+        concurrency: scanConcurrency,
+        delayMs: scanDelay,
         onProgress: (completed, total, current) => {
           setProgress({ completed, total, current });
+        },
+        onResult: (result) => {
+          // Progressive rendering — show results as they arrive
+          setResults(prev => {
+            const next = [...prev, result];
+            // Keep sorted: actionable first (by rank desc), then confidence desc
+            next.sort((a, b) => {
+              const ra = ACTION_RANK[a.action] || 0;
+              const rb = ACTION_RANK[b.action] || 0;
+              if (ra !== rb) return rb - ra;
+              return b.confidence - a.confidence;
+            });
+            return next;
+          });
         },
         signal: controller.signal,
         fetchFn: createFetchFn(dataSource || 'yahoo'),
       });
-
-      setResults(scanResults);
     } catch (e) {
       const msg = e?.message || String(e);
       if (msg.includes('403')) {

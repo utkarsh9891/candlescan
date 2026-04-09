@@ -35,6 +35,7 @@ function istDate(t) {
  * @param {number}   [params.concurrency=5]
  * @param {number}   [params.delayMs=200]
  * @param {(completed: number, total: number, current: string) => void} [params.onProgress]
+ * @param {(result: Object) => void} [params.onResult] — called per-stock as results arrive (for progressive rendering)
  * @param {AbortSignal} [params.signal]
  * @returns {Promise<Array>} sorted results
  */
@@ -48,6 +49,7 @@ export async function batchScan({
   concurrency = 5,
   delayMs = 200,
   onProgress,
+  onResult, // optional: called per-stock as results arrive (for progressive rendering)
   signal,
   fetchFn, // optional: custom fetch function (e.g. fetchDhanOHLCV) — defaults to Yahoo
 }) {
@@ -119,6 +121,7 @@ export async function batchScan({
       completed++;
       if (r.status === 'fulfilled' && r.value) {
         results.push(r.value);
+        onResult?.(r.value);
       }
     }
 
