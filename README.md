@@ -69,9 +69,22 @@ Mobile-first NSE candlestick pattern scanner with liquidity box analysis, risk s
 - Persists in localStorage, appears in all dropdowns with "(custom)" label
 - Remove via minus button in the menu
 
-### Two View Modes
-- **Simple**: Compact decision card — price, action, score ring, top patterns, entry/SL/target
-- **Advanced**: Adds bid/ask quote, exit timer, full score breakdown, R:R display
+### Data Sources
+- **Yahoo Finance** (default, free) — 1-2 minute delay, no subscription needed
+- **Zerodha Kite Connect** (premium, ₹2000/month) — real-time, requires API subscription
+- **Dhan HQ** (premium, ₹499/month) — real-time, requires Data API subscription + TOTP
+
+All scan modes (Stock, Batch, Simulation, Paper Trading) automatically use the configured data source.
+
+### Simulation
+- **Historical Simulation** — bar-by-bar replay of a trading day with zero lookahead
+- Engine-agnostic: runs with any pattern engine variant (scalp/intraday/classic)
+- Tracks P&L, win rate, max drawdown, transaction costs
+- Best-signal-first: picks top candidates by confidence at each bar
+
+### Paper Trading
+- **Live Simulation** — real-time price polling with live signal detection
+- Scan index → pick signals → track live → get notified → see P&L → repeat
 
 ---
 
@@ -84,6 +97,7 @@ Mobile-first NSE candlestick pattern scanner with liquidity box analysis, risk s
 | Chart | Custom SVG (no D3/Chart.js) |
 | Data | Yahoo Finance v8 chart API |
 | Data (alt) | Zerodha Kite Connect API (optional, premium) |
+| Data (alt) | Dhan HQ Data API (optional, premium) |
 | Index data | NSE India equity-stockIndices API |
 | CORS proxy | Cloudflare Worker (production) |
 | PWA | vite-plugin-pwa (Workbox) |
@@ -149,12 +163,15 @@ candlescan/
 │   │   ├── SimpleView.jsx       # Compact result card (price, action, score ring)
 │   │   ├── AdvancedView.jsx     # Extended view (quote, timer, breakdown)
 │   │   ├── BatchScanPage.jsx    # Index scanner: progress, results, filters
-│   │   ├── SettingsPage.jsx     # Premium gate, data source, Zerodha credential management
+│   │   ├── SimulationPage.jsx   # Historical bar-by-bar simulation
+│   │   ├── PaperTradingPage.jsx # Live paper trading with real-time polling
+│   │   ├── SettingsPage.jsx     # Premium gate, data source, Zerodha/Dhan credentials
 │   │   ├── GlobalMenu.jsx       # Hamburger menu: signal filters + page nav
 │   │   ├── Header.jsx           # Brand, status badge, mode toggle
-│   │   ├── SearchBar.jsx        # Symbol input + index button + scan
-│   │   ├── TimeframePills.jsx   # 1m/5m/15m/30m/1h/1d selector
+│   │   ├── SearchBar.jsx        # Symbol input + autocomplete + scan
+│   │   ├── TimeframePills.jsx   # 1m/5m/15m/25m/30m/1h/1d selector
 │   │   ├── DrawingToolbar.jsx   # H-Line, Box, Clear
+│   │   ├── UpdatePrompt.jsx     # SW + GitHub Release update detection
 │   │   ├── IndexConstituentsSidebar.jsx  # Slide-out stock list
 │   │   ├── RiskRing.jsx         # Circular confidence gauge
 │   │   ├── RiskScoreSignals.jsx # 5-component breakdown display
@@ -162,10 +179,17 @@ candlescan/
 │   ├── engine/
 │   │   ├── fetcher.js           # Yahoo Finance fetch + fallback chain
 │   │   ├── zerodhaFetcher.js    # Zerodha Kite Connect API fetcher
-│   │   ├── patterns.js          # 46-rule pattern detection (8 categories)
+│   │   ├── dhanFetcher.js       # Dhan HQ Data API fetcher
+│   │   ├── dataSourceFetch.js   # Data source switch (Yahoo/Zerodha/Dhan)
+│   │   ├── patterns.js          # Intraday pattern detection (8 categories)
+│   │   ├── patterns-scalp.js    # Scalp-specific patterns (VWAP, ORB, etc.)
+│   │   ├── patterns-classic.js  # Classic swing patterns (MA cross, S/R, channels)
 │   │   ├── liquidityBox.js      # Consolidation box + breakout/trap
-│   │   ├── risk.js              # 5-component risk scoring (0-100)
-│   │   ├── batchScan.js         # Throttled multi-stock scanner
+│   │   ├── risk.js              # Intraday 5-component risk scoring (0-100)
+│   │   ├── risk-scalp.js        # Scalp risk scoring (maxHoldBars ≤ 15)
+│   │   ├── risk-classic.js      # Classic swing risk scoring
+│   │   ├── simulateDay.js       # Bar-by-bar trading simulation engine
+│   │   ├── batchScan.js         # Throttled multi-stock scanner (progressive results)
 │   │   ├── nseIndexFetch.js     # NSE index constituent fetcher
 │   │   ├── nseIndexParse.js     # NSE JSON parser
 │   │   └── yahooQuote.js        # Yahoo v7 quote (bid/ask)
@@ -205,11 +229,11 @@ candlescan/
 ```
 User enters symbol
   → normalizeSymbol() (RELIANCE → RELIANCE.NS, NIFTY50 → ^NSEI)
-  → fetchOHLCV(symbol, timeframe)
-    → If Zerodha configured: try Zerodha Kite API via CF Worker
-    → Fallback: Vite proxy → CF Worker → Jina Reader → allorigins
-    → Parse Yahoo v8 JSON → trim trailing flat candles
-  → detectPatterns(candles)        # 46 rules, 8 categories
+  → createFetchFn(dataSource) → fetchOHLCV(symbol, timeframe)
+    → Yahoo: Vite proxy → CF Worker → Jina Reader → allorigins
+    → Zerodha: CF Worker → decrypt vault → Kite API
+    → Dhan: CF Worker → decrypt vault → Dhan Charts API
+  → detectPatterns(candles)        # engine-specific (scalp/intraday/classic)
   → detectLiquidityBox(candles)    # consolidation zone detection
   → computeRiskScore({candles, patterns, box})
     → 5 components: signal clarity + noise + R:R + reliability + confluence
@@ -376,6 +400,8 @@ Rate limits are enforced via Cloudflare KV. See [worker/OPS.md](worker/OPS.md) f
 | Gate auth 403 | Wrong passphrase — see [worker/OPS.md](worker/OPS.md) |
 | Rate limited | 20/day per IP; unlock premium for unlimited |
 | Zerodha 401 | Access token expired — re-enter in Settings |
+| Dhan 429 | Rate limit — Dhan allows limited requests per minute; batch scan auto-throttles |
+| Dhan timestamps wrong | Worker deployed before timestamp fix — redeploy with `cd worker && npx wrangler deploy` |
 | Vault decrypt error | Keys rotated — re-enter credentials in Settings |
 | Demo data not showing | `?simulate=1` only works in dev, not production |
 | Browse stocks empty | Redeploy CF Worker with NSE allowlist; or NSE is down |

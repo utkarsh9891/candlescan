@@ -23,7 +23,7 @@
 - [Testing](#testing)
 
 ## What is this project?
-CandleScan is a React 18 + Vite 6 mobile-first PWA for NSE (National Stock Exchange of India) candlestick pattern detection, liquidity box analysis, and risk scoring (0-100). It fetches OHLCV data from Yahoo Finance (or optionally Zerodha Kite Connect), renders interactive SVG charts, and includes a batch index scanner with auth-gated access.
+CandleScan is a React 18 + Vite 6 mobile-first PWA for NSE (National Stock Exchange of India) candlestick pattern detection, liquidity box analysis, and risk scoring (0-100). It fetches OHLCV data from Yahoo Finance, Zerodha Kite Connect, or Dhan HQ, renders interactive SVG charts, and includes batch index scanning, historical simulation, and paper trading — all with auth-gated premium access.
 
 ## Quick commands
 ```bash
@@ -104,7 +104,11 @@ Three engines represent fundamentally different trading models — NOT tunable v
 - **Gate auth**: RSA + SHA-256 via CF Worker; `src/utils/batchAuth.js` (gate token) + `src/utils/credentialVault.js` (vault encryption)
 - **Rate limiting**: Cloudflare KV — 20 req/day per IP (unauthenticated); gate token bypasses
 - **Zerodha proxy**: `src/engine/zerodhaFetcher.js` — optional Kite Connect data source via CF Worker
-- **Settings**: `src/components/SettingsPage.jsx` — premium gate, data source, credentials
+- **Dhan proxy**: `src/engine/dhanFetcher.js` — optional Dhan HQ Data API source via CF Worker (PIN + TOTP auth)
+- **Data source switch**: `src/engine/dataSourceFetch.js` — `createFetchFn(dataSource)` returns the right fetcher
+- **Settings**: `src/components/SettingsPage.jsx` — premium gate, data source, Zerodha/Dhan credentials
+- **Simulation**: `src/components/SimulationPage.jsx` + `src/engine/simulateDay.js` — historical bar-by-bar replay
+- **Paper Trading**: `src/components/PaperTradingPage.jsx` — live price polling with signal detection
 - **Index constituents**: NSE `equity-stockIndices` at runtime; dev uses Vite proxy; prod uses CF Worker
 - **Local chart cache**: `cache/charts/` (gitignored) — `vite-plugin-chart-cache.mjs` serves from disk in dev
 
@@ -125,6 +129,11 @@ Three engines represent fundamentally different trading models — NOT tunable v
 | `src/components/IndexConstituentsSidebar.jsx` | Slide-out modal: index dropdown + searchable symbol list |
 | `src/engine/fetcher.js` | Yahoo Finance v8 fetch with fallback chain: Vite proxy → CF Worker → Jina Reader → allorigins. Optional `gateToken` header. Simulated data in dev. |
 | `src/engine/zerodhaFetcher.js` | Zerodha Kite Connect OHLCV fetcher via CF Worker |
+| `src/engine/dhanFetcher.js` | Dhan HQ Data API fetcher via CF Worker. Timeframes: 1m/5m/15m/25m/1h/1d |
+| `src/engine/dataSourceFetch.js` | `createFetchFn(dataSource)` — returns Yahoo/Zerodha/Dhan fetcher with vault credentials |
+| `src/engine/simulateDay.js` | Bar-by-bar trading simulation engine (zero lookahead), engine-agnostic |
+| `src/components/SimulationPage.jsx` | Historical simulation UI with multi-variant engine support |
+| `src/components/PaperTradingPage.jsx` | Live paper trading: real-time polling, signal detection, P&L tracking |
 | `src/engine/patterns.js` | 46-rule pattern detection across 8 categories. Returns `{ name, direction, strength, reliability, category, candleIndices }` |
 | `src/engine/liquidityBox.js` | Consolidation box detection (last 25 candles, segments 5-12 bars). ATR-relative thresholds, volume-aware scoring, breakout strength + trap depth |
 | `src/engine/risk.js` | 5-component scoring: signal clarity (0-25), low noise (0-20), risk:reward (0-25), pattern reliability (0-15), confluence (0-15). Rescaled 40-100. Action thresholds: ≥72 STRONG, ≥58 BUY/SHORT, ≥50 WAIT |
@@ -149,10 +158,11 @@ Three engines represent fundamentally different trading models — NOT tunable v
 ### Single Stock Scan
 ```
 SearchBar input → App.runScan(symbol)
-  → fetchOHLCV(symbol, timeframe, {gateToken?})
+  → createFetchFn(dataSource) → fetchOHLCV(symbol, timeframe, {gateToken?})
     → normalizeSymbol: RELIANCE → RELIANCE.NS, NIFTY50 → ^NSEI
     → Data source: Yahoo (fallback chain: Vite proxy → CF Worker → Jina → allorigins)
-                   OR Zerodha Kite Connect (via CF Worker, if configured)
+                   OR Zerodha Kite Connect (via CF Worker, vault-encrypted credentials)
+                   OR Dhan HQ (via CF Worker, vault-encrypted access token)
     → parseChartJson → trimTrailingFlatCandles
   → detectPatterns(candles)         # 46 rules, sorted by strength
   → detectLiquidityBox(candles)     # box detection + breakout/trap
@@ -164,10 +174,13 @@ SearchBar input → App.runScan(symbol)
 ### Batch Index Scan
 ```
 BatchScanPage → Scan All → fetchNseIndexSymbolList(index)
-  → batchScan({symbols, timeframe, gateToken, concurrency:5, delayMs:200})
+  → batchScan({symbols, timeframe, gateToken, concurrency, delayMs})
+    → Yahoo: concurrency=5, delayMs=200
+    → Dhan: concurrency=2, delayMs=2000 (rate limit protection)
     → Per stock: fetchOHLCV → detectPatterns → detectLiquidityBox → computeRiskScore
-    → onProgress callback updates progress bar
-  → Sort results: action rank desc → confidence desc
+    → onResult callback → progressive rendering (results appear as they arrive)
+    → onProgress callback → updates progress bar
+  → Results sorted by action rank desc → confidence desc (re-sorted on each new result)
   → Display cards with filters (actionable/all, buy/short, search)
   → Tap card → App.onSelectSymbol → switch to main view + scan that stock
 ```
@@ -203,7 +216,7 @@ Navigation via shared GlobalMenu:
 
 - **Zoom**: Ctrl+wheel (desktop), pinch (mobile), or +/- buttons. Range: 30-300 visible candles
 - **Pan**: Horizontal scroll/swipe. `panOffset` state
-- **Crosshair**: Always-on hover with price pill + time pill
+- **Crosshair**: Long-press activates crosshair with offset-based precision (doesn't jump to finger)
 - **Drawing tools** (per-symbol, memory-only):
   - H-Line: horizontal line, draggable vertically
   - Box: rectangle with directional label (+X.X / -X.X / =0.0)
@@ -249,7 +262,8 @@ Navigation via shared GlobalMenu:
 | NSE symbols | sessionStorage | 45 min | Browser tab |
 | Mode + history | localStorage | Permanent | Browser |
 | Gate token | localStorage | Permanent | Browser |
-| Zerodha vault | localStorage | Permanent | Browser (RSA-encrypted) |
+| Credential vault | localStorage | Permanent | Browser (RSA-encrypted, Zerodha OR Dhan) |
+| Dhan client ID | localStorage | Permanent | Browser (plain text, not sensitive) |
 | HTTP cache | None (`no-store`) | N/A | All fetches |
 | PWA assets | Service worker | Until new deploy | Browser |
 
@@ -269,6 +283,15 @@ Navigation via shared GlobalMenu:
 - Decrypted server-side by CF Worker using the corresponding private key
 - Gate token required to unlock vault operations
 
+### Dhan Auth
+- Dhan uses daily PIN + TOTP authentication (neither stored)
+- `POST /dhan/session` with PIN + TOTP → Dhan returns access token
+- Access token RSA-encrypted to vault (same mechanism as Zerodha)
+- `dhanClientId` stored separately in localStorage (not sensitive)
+- Saving Dhan credentials clears Zerodha vault and vice versa
+- Dhan rate limits: batch scan uses concurrency=2, delayMs=2000 to avoid 429s
+- Dhan timestamps are epoch seconds — worker uses them directly (not wrapped in `new Date()`)
+
 ### Rate Limiting
 - Free tier: 20 requests/day per IP (KV key: `rl:{SHA256(IP)}:{YYYY-MM-DD}`, TTL: 86400s)
 - Premium (gate token): unlimited, bypasses rate limiting entirely
@@ -287,8 +310,10 @@ Navigation via shared GlobalMenu:
 - **Manifest**: name "CandleScan", standalone display, portrait orientation
 - **Icons**: SVG at `public/icons/icon-192.svg` and `icon-512.svg`
 - **Service worker**: Workbox-generated, caches `**/*.{js,css,html,svg,png}`
-- **Runtime caching**: `NetworkOnly` for CF Worker URLs (always fresh data)
+- **Runtime caching**: `NetworkOnly` for CF Worker URLs — **both GET and POST** (POST is required for Dhan API calls)
 - **Auto-update**: On new deploy, SW detects change and updates on next visit
+- **Update detection**: Two mechanisms — passive SW change detection + GitHub Releases API check (once per 24h)
+- **Update banner**: Normal flow (not fixed-position) — pushes header down instead of covering hamburger icon
 
 ---
 

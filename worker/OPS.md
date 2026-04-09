@@ -358,6 +358,49 @@ The Worker proxies Zerodha Kite API calls for premium users.
 
 ---
 
+## 12. Dhan Proxy
+
+The Worker proxies Dhan HQ Data API calls for premium users.
+
+### Endpoints
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/dhan/session` | POST | Exchange PIN + TOTP for access token via Dhan login API |
+| `/dhan/historical` | POST | Fetch OHLCV candles via Dhan Charts API v2 |
+| `/dhan/validate` | POST | Validate an existing access token |
+
+### How it works
+1. Browser sends RSA-encrypted vault + gate token to `POST /dhan/historical`
+2. Worker validates gate token, decrypts vault to get `accessToken` + `dhanClientId`
+3. Worker calls `api.dhan.co/v2/charts/historical` (intraday) or `/v2/charts/historical` (daily)
+4. Worker converts response arrays (`open[], high[], low[], close[], volume[], timestamp[]`) to `{candles: [{t, o, h, l, c, v}]}`
+5. Dhan timestamps are epoch seconds — used directly without conversion
+
+### Dhan instrument resolution
+- Dhan uses numeric `securityId` instead of symbol names
+- Instrument mapping is pre-cached in `CANDLESCAN_KV` as `dhan_nse_instruments` (175KB JSON, ~9472 NSE symbols)
+- Worker looks up `securityId` from KV by symbol name
+- The 32MB Dhan scrip master CSV is too large for CF Workers — never download it at runtime
+
+### Refreshing Dhan instrument cache
+```bash
+# Generate and upload the instruments JSON (from local machine)
+npx wrangler kv key put \
+  --namespace-id 00f596cbf39d47cf87bd42bfafd48340 \
+  --remote dhan_nse_instruments \
+  --path /tmp/dhan_instruments_fixed.json \
+  --ttl 86400
+```
+
+### Troubleshooting
+- **403 on `/dhan/*`**: Invalid gate token
+- **400 "Failed to decrypt"**: Keys rotated — reconnect in Settings
+- **429 from Dhan API**: Rate limit hit — batch scan auto-throttles (concurrency=2, delay=2s)
+- **"Instrument not found"**: Symbol missing from KV cache — refresh `dhan_nse_instruments`
+- **Wrong timestamps on chart**: Worker not deployed with timestamp fix — `cd worker && npx wrangler deploy`
+
+---
+
 ## Security Notes
 
 - **Secrets are safe.** `GATE_PASSPHRASE_HASH` is stored in Cloudflare's encrypted
