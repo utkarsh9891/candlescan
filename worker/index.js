@@ -567,8 +567,12 @@ async function handleDhanHistorical(request, env, origin) {
 
     const candles = [];
     for (let i = 0; i < timestamps.length; i++) {
+      // Dhan returns epoch seconds as numbers — use directly.
+      // If it's a string (e.g. ISO 8601), parse it.
+      const raw = timestamps[i];
+      const tSec = typeof raw === 'number' ? raw : Math.floor(new Date(raw).getTime() / 1000);
       candles.push({
-        t: Math.floor(new Date(timestamps[i]).getTime() / 1000),
+        t: tSec,
         o: opens[i],
         h: highs[i],
         l: lows[i],
