@@ -92,13 +92,34 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const cur = candles[candles.length - 1];
   const barIndex = opts?.barIndex ?? candles.length;
 
-  // Hard gate: skip first 12 bars (9:15–9:27) — opening range chaos
-  if (barIndex < 12) return noTrade(cur, candles, box);
+  // Hard gate: skip first 15 bars (9:15–9:30) — opening range chaos
+  if (barIndex < 15) return noTrade(cur, candles, box);
 
-  // Volume gate: use average of recent 5 candles (last candle often has 0 in Yahoo 1m data)
+  // Hard gate: drop low-reliability patterns (Prev Day Break, Volume Climax, Breakout Retest)
+  // These generate too many noisy signals with 0.55 reliability
+  if (!top || top.reliability < 0.68) return noTrade(cur, candles, box);
+
+  // Volume gate
   const recentVols = candles.slice(-6, -1).map(c => c.v || 0);
   const recentAvgVol = recentVols.length ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length : 0;
   if (recentAvgVol < 5000) return noTrade(cur, candles, box);
+
+  // Trend alignment gate — pattern direction must match EMA5 vs EMA13
+  // Rejects counter-trend signals that cause chop-day losses
+  const trendDir = top.direction === 'bearish' ? 'short' : 'long';
+  const ema5h = emaVal(candles.slice(-6), 5);
+  const ema13h = emaVal(candles.slice(-14), 13);
+  if (ema5h != null && ema13h != null) {
+    if (trendDir === 'long' && ema5h < ema13h) return noTrade(cur, candles, box);
+    if (trendDir === 'short' && ema5h > ema13h) return noTrade(cur, candles, box);
+  }
+
+  // VWAP alignment gate — price must be on the right side of VWAP
+  const vwapGate = vwapProxy(candles, 20);
+  if (vwapGate != null) {
+    if (trendDir === 'long' && cur.c < vwapGate) return noTrade(cur, candles, box);
+    if (trendDir === 'short' && cur.c > vwapGate) return noTrade(cur, candles, box);
+  }
 
   // Extreme mover filter: boost confidence for stocks with big intraday moves
   // Applied as soft bonus rather than hard gate — let the scoring discriminate
@@ -122,30 +143,29 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const chop = Math.min(1, atr10 / (avgBody * 3));
   const lowNoise = (1 - chop) * 20;
 
-  /* ── 3. Risk:Reward (max 25) — tight scalp levels ──────────── */
+  /* ── 3. Risk:Reward (max 25) — asymmetric scalp levels ──────── */
   const direction = top?.direction === 'bearish' ? 'short' : top?.direction === 'bullish' ? 'long' : 'long';
   const atrVal = atrLike(candles, 14);
-
-  // Zero slippage — entry at candle close (NIFTY 200 stocks are institutional-grade liquid)
   const entry = cur.c;
 
-  // SL: tight — exit losers before TIME exit catches them with bigger loss
-  const avgBarRange = candles.slice(-10).reduce((s, c) => s + (c.h - c.l), 0) / 10;
-  const slDist = Math.max(atrVal * 1.5, avgBarRange * 3, entry * 0.01);
-  const targetFloor = entry * 0.007; // 0.7% minimum
+  // SL: tight — 0.5% or ATR*1.0, whichever is tighter
+  // This cuts losers fast before they become catastrophic
+  const slDist = Math.min(
+    Math.max(atrVal * 1.0, entry * 0.005), // at least 0.5% or 1 ATR
+    entry * 0.008, // cap at 0.8% — never wider
+  );
 
-  let targetDist;
+  // Target: 2× the SL distance minimum, giving 2:1 R:R
+  // This is the key fix — target must exceed SL to be profitable after tx costs
+  const targetFloor = Math.max(entry * 0.012, slDist * 2.0); // 1.2% or 2× SL
+  let targetDist = targetFloor;
+
   let sl, target;
-
   if (direction === 'long') {
     sl = entry - slDist;
-    const resistanceDist = box?.high ? Math.max(0, box.high - entry) : Infinity;
-    targetDist = Math.max(Math.min(resistanceDist, atrVal * 2.0), targetFloor);
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
-    const supportDist = box?.low ? Math.max(0, entry - box.low) : Infinity;
-    targetDist = Math.max(Math.min(supportDist, atrVal * 2.0), targetFloor);
     target = entry - targetDist;
   }
 
@@ -153,9 +173,6 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rrClamped = Math.min(9, Math.max(0.1, rr));
   // R:R scoring: continuous, favoring higher R:R
   const rrScore = Math.round(25 * (1 - Math.exp(-2.5 * rrClamped)));
-
-  // Min target 0.2% of entry
-  if (targetDist < entry * 0.002) return noTrade(cur, candles, box);
 
   /* ── 4. Pattern reliability (max 15) ───────────────────────── */
   const patternRel = top ? top.reliability * 15 : 3;
@@ -215,13 +232,13 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 15;
   }
 
-  // Extreme mover bonus: reward stocks with big intraday moves (your edge)
-  if (absIntradayPct >= 0.02) confidence += 8;        // 2%+ move: strong bonus
-  else if (absIntradayPct >= 0.015) confidence += 5;   // 1.5%+ move: moderate bonus
-  else if (absIntradayPct >= 0.01) confidence += 2;    // 1%+ move: small bonus
-  // Direction alignment bonus
-  if (top?.direction === 'bullish' && intradayPct > 0.01) confidence += 3; // riding the rise
-  if (top?.direction === 'bearish' && intradayPct < -0.01) confidence += 3; // momentum short
+  // Trend alignment bonus: pattern direction should match intraday drift
+  // Moderate bonus — don't overweight (it's momentum chasing)
+  if (top?.direction === 'bullish' && intradayPct > 0.003) confidence += 2;
+  if (top?.direction === 'bearish' && intradayPct < -0.003) confidence += 2;
+  // Counter-trend penalty
+  if (top?.direction === 'bullish' && intradayPct < -0.01) confidence -= 8;
+  if (top?.direction === 'bearish' && intradayPct > 0.01) confidence -= 8;
 
   // Day-of-week awareness
   const dow = opts?.dayOfWeek;
@@ -245,22 +262,22 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   };
 
   let level = 'low';
-  if (confidence >= 75) level = 'high';
-  else if (confidence >= 60) level = 'moderate';
+  if (confidence >= 82) level = 'high';
+  else if (confidence >= 70) level = 'moderate';
 
   let action = 'NO TRADE';
-  if (confidence >= 75 && top && top.direction !== 'neutral') {
+  if (confidence >= 82 && top && top.direction !== 'neutral') {
     action = top.direction === 'bearish' ? 'STRONG SHORT' : 'STRONG BUY';
-  } else if (confidence >= 65 && top && top.direction !== 'neutral') {
+  } else if (confidence >= 75 && top && top.direction !== 'neutral') {
     action = top.direction === 'bearish' ? 'SHORT' : 'BUY';
-  } else if (confidence >= 50 && top) {
+  } else if (confidence >= 60 && top) {
     action = 'WAIT';
   }
 
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 20, // 20 minutes — optimal
+    maxHoldBars: 12, // 12 minutes — cut sideways trades fast to avoid tx cost drag
   };
 }
 
@@ -270,6 +287,6 @@ function noTrade(cur, candles, box) {
     total: 0, confidence: 20, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
-    maxHoldBars: 20,
+    maxHoldBars: 12,
   };
 }
