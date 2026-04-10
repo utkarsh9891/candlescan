@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { unlockGate, encryptToVault, getVaultBlob, hasVault, clearVault, clearGate, getGatePublicKey } from '../utils/credentialVault.js';
+import { fetchDhanInstruments, clearDhanInstruments, getInstrumentsMeta, hasCachedInstruments } from '../engine/dhanInstruments.js';
 import PasteInput from './PasteInput.jsx';
 import ToggleSwitch from './ToggleSwitch.jsx';
 
@@ -340,11 +341,20 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       await encryptToVault(pubKey, { ...existing, dhanAccessToken: data.accessToken });
 
       setDhanStatus('valid');
-      setDhanMsg(`Connected${data.clientName ? ` — ${data.clientName}` : ''}! Token encrypted & saved.`);
+      setDhanMsg(`Connected${data.clientName ? ` — ${data.clientName}` : ''}! Token encrypted. Loading instruments…`);
       setDhanMsgColor('#16a34a');
       setDhanPin('');
       setDhanTotp('');
       setDhanShowAuth(false);
+      // Fetch instrument master now so all subsequent historical calls can
+      // resolve securityId locally (no Worker KV lookup on the hot path).
+      try {
+        const meta = await fetchDhanInstruments(getGateToken());
+        setDhanMsg(`Connected! ${meta.count} NSE instruments loaded.`);
+      } catch (instrErr) {
+        setDhanMsg(`Connected, but instrument list failed: ${instrErr.message}. Tap Refresh instrument list.`);
+        setDhanMsgColor('#d97706');
+      }
     } catch (err) {
       setDhanMsg(err.message || 'Failed to connect');
       setDhanMsgColor('#dc2626');
@@ -361,15 +371,48 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       if (!pubKey) throw new Error('RSA public key not found. Re-unlock premium first.');
       await encryptToVault(pubKey, { dhanAccessToken: token });
       setDhanStatus('valid');
-      setDhanMsg('Access token encrypted & saved.');
+      setDhanMsg('Access token encrypted. Loading instruments…');
       setDhanMsgColor('#16a34a');
       setDhanPastedToken('');
       setDhanShowAuth(false);
+      // Fetch instrument master now so historical calls resolve client-side.
+      try {
+        const meta = await fetchDhanInstruments(getGateToken());
+        setDhanMsg(`Token saved. ${meta.count} NSE instruments loaded.`);
+      } catch (instrErr) {
+        setDhanMsg(`Token saved, but instrument list failed: ${instrErr.message}. Tap Refresh instrument list.`);
+        setDhanMsgColor('#d97706');
+      }
     } catch (err) {
       setDhanMsg(err.message || 'Failed to save token');
       setDhanMsgColor('#dc2626');
     }
   }, [dhanPastedToken]);
+
+  // Manual refresh — used when a new NSE listing isn't in the cached map yet,
+  // or after an app reinstall that wiped localStorage.
+  const [refreshingInstruments, setRefreshingInstruments] = useState(false);
+  const handleRefreshInstruments = useCallback(async () => {
+    const gateToken = getGateToken();
+    if (!gateToken) {
+      setDhanMsg('Unlock premium first.');
+      setDhanMsgColor('#dc2626');
+      return;
+    }
+    setRefreshingInstruments(true);
+    setDhanMsg('Refreshing instrument list from Dhan…');
+    setDhanMsgColor('#2563eb');
+    try {
+      const meta = await fetchDhanInstruments(gateToken, { forceRefresh: true });
+      setDhanMsg(`Instrument list refreshed: ${meta.count} NSE instruments.`);
+      setDhanMsgColor('#16a34a');
+    } catch (err) {
+      setDhanMsg(`Refresh failed: ${err.message || err}`);
+      setDhanMsgColor('#dc2626');
+    } finally {
+      setRefreshingInstruments(false);
+    }
+  }, []);
 
   const handleValidateDhan = useCallback(async () => {
     if (!hasVault() || !hasGateToken()) {
@@ -448,6 +491,7 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
 
   const handleClearDhan = useCallback(() => {
     clearVault();
+    clearDhanInstruments();
     try { localStorage.removeItem(LS_DHAN_CLIENT_ID); localStorage.removeItem(LS_DHAN_PIN); } catch { /* ok */ }
     setDhanClientId('');
     setDhanStatus('none');
@@ -685,6 +729,18 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
 
           {dhanMsg && <div style={{ fontSize: 12, color: dhanMsgColor, marginBottom: 8 }}>{dhanMsg}</div>}
 
+          {/* Instrument list status — shows cached count + last fetch */}
+          {hasCachedInstruments() && (() => {
+            const meta = getInstrumentsMeta();
+            if (!meta) return null;
+            const fetched = meta.fetchedAt ? new Date(meta.fetchedAt).toLocaleDateString() : 'unknown';
+            return (
+              <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 8 }}>
+                Instrument list: {meta.count} NSE symbols (loaded {fetched})
+              </div>
+            );
+          })()}
+
           {/* Actions based on state */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
             {(dhanStatus === 'valid' || dhanStatus === 'checking') && (
@@ -693,6 +749,12 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
                   disabled={dhanStatus === 'checking'}
                   style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
                   {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
+                </button>
+                <button type="button" onClick={handleRefreshInstruments}
+                  disabled={refreshingInstruments}
+                  title="Fetch the latest NSE scrip master from Dhan. Use this if a new listing is missing from the symbol list."
+                  style={{ ...btnSecondary, opacity: refreshingInstruments ? 0.5 : 1 }}>
+                  {refreshingInstruments ? 'Refreshing…' : 'Refresh instrument list'}
                 </button>
                 {!dhanShowAuth && (
                   <button type="button" onClick={handleReconnectDhan} style={btnSecondary}>

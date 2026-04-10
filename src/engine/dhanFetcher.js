@@ -1,8 +1,12 @@
 /**
  * Dhan HQ API fetcher for OHLCV data.
  * Routes through a Cloudflare Worker proxy at candlescan-proxy.
- * No external dependencies — plain JS only.
+ * Symbol → securityId resolution happens client-side via dhanInstruments.js
+ * (local cache populated on token connect) — the Worker hot path never does
+ * a KV lookup.
  */
+
+import { resolveDhanSecurityId, hasCachedInstruments } from './dhanInstruments.js';
 
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
@@ -64,6 +68,25 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
     };
   }
 
+  // Resolve symbol → securityId from local cache. If the cache isn't populated,
+  // surface an actionable error asking the user to refresh the instrument list
+  // (Settings → Dhan → Refresh instrument list).
+  if (!hasCachedInstruments()) {
+    return {
+      candles: [],
+      error: 'Dhan instrument list not loaded. Open Settings → Dhan → Refresh instrument list.',
+      displaySymbol: sym,
+    };
+  }
+  const securityId = resolveDhanSecurityId(sym);
+  if (!securityId) {
+    return {
+      candles: [],
+      error: `Symbol "${sym}" not in Dhan NSE instrument master.`,
+      displaySymbol: sym,
+    };
+  }
+
   const isIntraday = interval !== 'day';
   const lookback = LOOKBACK_DAYS[interval];
   const today = new Date();
@@ -76,6 +99,7 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
   try {
     const reqBody = {
       symbol: sym,
+      securityId,
       interval,
       from: fromStr,
       to: toStr,
@@ -83,10 +107,6 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
       dhanClientId: (() => { try { return localStorage.getItem('candlescan_dhan_client_id') || ''; } catch { return ''; } })(),
     };
     const bodyStr = JSON.stringify(reqBody);
-    // Debug: log body size to help diagnose "Failed to fetch"
-    if (typeof console !== 'undefined') {
-      console.log(`[Dhan] POST /dhan/historical — body: ${bodyStr.length} bytes, symbol: ${sym}, interval: ${interval}, vault: ${vault ? vault.length + ' chars' : 'MISSING'}`);
-    }
     const res = await fetch(`${CF_WORKER_URL}/dhan/historical`, {
       method: 'POST',
       headers: {
@@ -114,7 +134,7 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
   } catch (err) {
     return {
       candles: [],
-      error: `Dhan fetch failed: ${err.message || err}${err.stack ? ' | ' + err.stack.split('\n')[1]?.trim() : ''}`,
+      error: `Dhan fetch failed: ${err.message || err}`,
       displaySymbol: sym,
     };
   }
