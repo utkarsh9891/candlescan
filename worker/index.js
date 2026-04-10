@@ -419,13 +419,18 @@ async function handleZerodhaValidate(request, env, origin) {
  * Resolve NSE tradingsymbol to Dhan securityId.
  * Downloads the scrip master CSV, parses it, caches in KV for 24h.
  */
-async function resolveDhanSecurityId(symbol, env) {
+/**
+ * Load the full Dhan NSE instrument map (symbol → securityId).
+ * Uses a 7-day KV cache to avoid re-fetching the 32MB CSV on every request.
+ * Returns the full map — used by the /dhan/instruments endpoint so the
+ * client can cache it locally and do all symbol resolution client-side.
+ */
+async function loadDhanInstrumentMap(env, { forceRefresh = false } = {}) {
   const KV_KEY = 'dhan_nse_instruments';
-  const sym = symbol.toUpperCase();
 
-  if (env.CANDLESCAN_KV) {
+  if (!forceRefresh && env.CANDLESCAN_KV) {
     const cached = await env.CANDLESCAN_KV.get(KV_KEY, 'json');
-    if (cached && cached[sym]) return cached[sym];
+    if (cached && Object.keys(cached).length > 0) return cached;
   }
 
   const resp = await fetch('https://images.dhan.co/api-data/api-scrip-master.csv');
@@ -446,19 +451,58 @@ async function resolveDhanSecurityId(symbol, env) {
     if (cols.length <= symIdx) continue;
     const exch = (cols[exchIdx] || '').trim();
     const instr = (cols[instrIdx] || '').trim();
-    // Only NSE equities
+    // Only NSE equities and indices
     if (exch !== 'NSE' || (instr !== 'EQUITY' && instr !== 'INDEX')) continue;
     const tradingSym = (cols[symIdx] || '').replace(/"/g, '').trim();
     const secId = (cols[secIdIdx] || '').trim();
     if (tradingSym && secId) map[tradingSym] = secId;
   }
 
+  // Cache for 7 days — Dhan adds listings infrequently (weekly at most).
   if (env.CANDLESCAN_KV) {
-    try { await env.CANDLESCAN_KV.put(KV_KEY, JSON.stringify(map), { expirationTtl: 86400 }); } catch { /* ok */ }
+    try { await env.CANDLESCAN_KV.put(KV_KEY, JSON.stringify(map), { expirationTtl: 7 * 86400 }); } catch { /* ok */ }
   }
 
-  if (!map[sym]) throw new Error(`Symbol "${sym}" not found in Dhan NSE instruments`);
-  return map[sym];
+  return map;
+}
+
+/**
+ * Handle /dhan/instruments — serves the full NSE equity symbol → securityId map.
+ * Called once by the client on Dhan token connect; result cached in localStorage.
+ * Supports ?refresh=1 query param to force a fresh CSV pull (bypasses KV).
+ * Gate token required.
+ */
+async function handleDhanInstruments(request, env, origin) {
+  try {
+    const authResult = await validateGateToken(request, env);
+    if (authResult !== true) {
+      return new Response(JSON.stringify({ error: 'Premium access required' }), {
+        status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+
+    const url = new URL(request.url);
+    const forceRefresh = url.searchParams.get('refresh') === '1';
+    const map = await loadDhanInstrumentMap(env, { forceRefresh });
+
+    return new Response(JSON.stringify({
+      instruments: map,
+      count: Object.keys(map).length,
+      generatedAt: new Date().toISOString(),
+    }), {
+      status: 200,
+      headers: {
+        ...corsHeaders(origin),
+        'Content-Type': 'application/json',
+        // Client should cache locally forever — re-fetch only on manual refresh
+        'Cache-Control': 'private, max-age=604800', // 7 days
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Failed to load instruments: ${err.message || err}` }), {
+      status: 500, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
 }
 
 /**
@@ -474,10 +518,18 @@ async function handleDhanHistorical(request, env, origin) {
   }
 
   const body = await request.json();
-  const { symbol, interval, from, to, vault, dhanClientId } = body;
+  const { symbol, securityId: clientSecurityId, interval, from, to, vault, dhanClientId } = body;
 
   if (!symbol || !interval || !from || !to || !vault) {
     return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+  if (!clientSecurityId) {
+    return new Response(JSON.stringify({
+      error: 'Missing securityId — client out of date. Refresh instrument list in Settings.',
+      code: 'STALE_CLIENT',
+    }), {
       status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
     });
   }
@@ -507,15 +559,10 @@ async function handleDhanHistorical(request, env, origin) {
   // Client ID from request body (stored in localStorage on client)
   const clientId = dhanClientId || '';
 
-  // Resolve symbol to securityId
-  let securityId;
-  try {
-    securityId = await resolveDhanSecurityId(symbol, env);
-  } catch (err) {
-    return new Response(JSON.stringify({ error: `Instrument lookup failed: ${err.message}` }), {
-      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
-    });
-  }
+  // Client supplies the resolved securityId from its own instrument cache.
+  // Worker no longer maintains a per-request KV lookup on the hot path —
+  // that role has moved to /dhan/instruments + client-side cache.
+  const securityId = String(clientSecurityId);
 
   const isIntraday = interval !== 'day';
   const dhanUrl = isIntraday
@@ -764,6 +811,11 @@ export default {
     // --- GET endpoints ---
     if (request.method !== 'GET') {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders(origin) });
+    }
+
+    // Dhan instrument master — called once by client on token connect
+    if (path === '/dhan/instruments') {
+      return handleDhanInstruments(request, env, origin);
     }
 
     // GitHub releases proxy — used as fallback when direct GitHub API is blocked (VPN/CORS)
