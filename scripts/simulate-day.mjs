@@ -195,7 +195,10 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap }) {
   const trades = [];
   const openPositions = [];
-  const cooldownUntil = {}; // sym -> barIdx when cooldown expires (prevent whipsaw)
+  // Per-symbol blacklist: once a symbol has been traded, don't re-enter same day.
+  // Prevents "double-down" scenario where the same pattern re-fires on a stock
+  // that already failed (gambler's fallacy).
+  const tradedSymbols = new Set();
   let currentCapital = CAPITAL;
   let peakCapital = CAPITAL;
   let maxDrawdown = 0;
@@ -253,8 +256,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         });
 
         openPositions.splice(p, 1);
-        // Set cooldown: don't re-enter same stock for 2 bars
-        cooldownUntil[pos.sym] = barIdx + 2;
+        tradedSymbols.add(pos.sym); // blacklist for rest of day
       }
     }
 
@@ -266,7 +268,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
     const candidates = [];
     for (const sym of Object.keys(stockDataForWindow)) {
       if (openPositions.some(p => p.sym === sym)) continue;
-      if (cooldownUntil[sym] && barIdx < cooldownUntil[sym]) continue;
+      if (tradedSymbols.has(sym)) continue; // already traded today — blacklisted
 
       const sd = stockDataForWindow[sym];
       if (barIdx >= sd.windowCandles.length) continue;
@@ -537,16 +539,27 @@ async function main() {
     const niftyJson = readCachedChartJson(niftySym, tf.interval, resolvedDate);
     if (niftyJson) {
       const niftyParsed = parseChartJson(niftyJson);
-      if (niftyParsed?.candles?.length >= 20) {
-        const nc = niftyParsed.candles;
-        const closes = nc.map(c => c.c);
-        const sma10 = closes.slice(-10).reduce((a, b) => a + b, 0) / 10;
-        const sma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-        const last5 = nc.slice(-5);
-        const momentum = (last5[last5.length - 1].c - last5[0].c) / last5[0].c;
-        if (sma10 > sma20 && momentum > 0) indexDirection = { direction: 'bullish', strength: Math.min(1, Math.abs(momentum) * 100) };
-        else if (sma10 < sma20 && momentum < 0) indexDirection = { direction: 'bearish', strength: Math.min(1, Math.abs(momentum) * 100) };
-        console.log(`Index direction: ${indexDirection.direction} (strength: ${indexDirection.strength.toFixed(2)})`);
+      if (niftyParsed?.candles?.length >= 15) {
+        // CRITICAL: use only candles up to the sim start time (no lookahead).
+        // Parse fromTime as minutes from midnight IST, then filter candles.
+        const [fromH, fromM] = fromTime.split(':').map(Number);
+        const fromMins = fromH * 60 + fromM;
+        const IST_OFFSET = 19800;
+        const candlesUpToStart = niftyParsed.candles.filter(c => {
+          const d = new Date((c.t + IST_OFFSET) * 1000);
+          return d.getUTCHours() * 60 + d.getUTCMinutes() < fromMins;
+        });
+        if (candlesUpToStart.length >= 5) {
+          // Use the opening move (open → close of pre-window) as direction.
+          // This measures how the market opened — bullish/bearish gap + initial drift.
+          const first = candlesUpToStart[0];
+          const last = candlesUpToStart[candlesUpToStart.length - 1];
+          const move = (last.c - first.o) / first.o;
+          const absMove = Math.abs(move);
+          if (move > 0.0015) indexDirection = { direction: 'bullish', strength: Math.min(1, absMove * 100) };
+          else if (move < -0.0015) indexDirection = { direction: 'bearish', strength: Math.min(1, absMove * 100) };
+          console.log(`Index direction: ${indexDirection.direction} (strength: ${indexDirection.strength.toFixed(3)}, pre-window move: ${(move * 100).toFixed(2)}%)`);
+        }
       }
     } else {
       console.log('Warning: NIFTY cache not found — index direction filter disabled');

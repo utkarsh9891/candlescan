@@ -117,6 +117,10 @@ export async function batchScan({
             rr: risk.rr,
             topPattern: patterns[0]?.name || 'None',
             context: risk.context,
+            // Signal freshness — when the pattern fired (unix seconds) and
+            // how long it remains actionable. Used to hide stale cards.
+            signalBarTs: risk.signalBarTs || null,
+            validTillTs: risk.validTillTs || null,
           };
         } catch {
           return null;

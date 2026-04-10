@@ -97,9 +97,23 @@ function PassphraseModal({ onSubmit, onCancel }) {
   );
 }
 
+/** Format a unix timestamp as HH:MM IST. */
+function formatIstTime(ts) {
+  if (!ts) return '';
+  const d = new Date((ts + 19800) * 1000); // shift to IST wall clock
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+/** Is a signal still within its valid window? */
+function isSignalFresh(r, nowSec = Math.floor(Date.now() / 1000)) {
+  if (!r.validTillTs) return true; // no timestamp → assume fresh (legacy)
+  return nowSec <= r.validTillTs;
+}
+
 function ResultCard({ r, onTap }) {
   const color = actionColor(r.action);
   const bg = actionBg(r.action);
+  const fresh = isSignalFresh(r);
   return (
     <button
       type="button"
@@ -145,6 +159,17 @@ function ResultCard({ r, onTap }) {
           {r.topPattern}
         </span>
       </div>
+      {/* Row 3: Signal freshness — fire time + valid till */}
+      {r.validTillTs && (
+        <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#8892a8' }}>
+          <span style={{ fontFamily: mono }}>
+            Fired {formatIstTime(r.signalBarTs)}
+          </span>
+          <span style={{ fontFamily: mono, color: fresh ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
+            {fresh ? `Valid till ${formatIstTime(r.validTillTs)}` : `Expired at ${formatIstTime(r.validTillTs)}`}
+          </span>
+        </div>
+      )}
     </button>
   );
 }
@@ -260,8 +285,14 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
   }, [startScan]);
 
   const sq = searchQuery.trim().toUpperCase();
+  // Freshness cutoff — only applies while scanning is "live" (within a few
+  // minutes of the scan completing). Expired signals are hidden from the
+  // actionable view; still visible under "All".
+  const nowSec = Math.floor(Date.now() / 1000);
   const displayed = results.filter((r) => {
     if (filter === 'actionable' && (r.action === 'NO TRADE' || r.action === 'WAIT')) return false;
+    // Hide expired signals from the actionable view — the entry window is gone
+    if (filter === 'actionable' && r.validTillTs && nowSec > r.validTillTs) return false;
     if (dirFilter === 'long' && r.direction !== 'long') return false;
     if (dirFilter === 'short' && r.direction !== 'short') return false;
     if (sq && !r.symbol.includes(sq) && !(r.companyName || '').toUpperCase().includes(sq)) return false;
