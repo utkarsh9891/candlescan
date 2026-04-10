@@ -198,6 +198,9 @@ export default function App() {
   });
   const [cameFromBatch, setCameFromBatch] = useState(false);
   const [cameFromSimulation, setCameFromSimulation] = useState(false);
+  // Remember the view the user was on before entering Settings so "Back"
+  // returns there instead of always jumping to the stock scanner.
+  const [settingsReturnView, setSettingsReturnView] = useState('main');
 
   // Re-sync dataSource from localStorage when returning from Settings or on page reload
   useEffect(() => {
@@ -648,7 +651,11 @@ export default function App() {
           }}
           settingsAction={{
             label: 'Settings',
-            onClick: () => setView('settings'),
+            onClick: () => {
+              // Remember where we are so Back from Settings returns here
+              if (view !== 'settings') setSettingsReturnView(view);
+              setView('settings');
+            },
           }}
           customIndices={customIndices}
           onAddCustomIndex={handleAddCustomIndex}
@@ -709,7 +716,7 @@ export default function App() {
 
       {/* Settings page */}
       {view === 'settings' && (
-        <SettingsPage onBack={() => setView('main')} debugMode={debugMode} onDebugModeChange={setDebugMode} />
+        <SettingsPage onBack={() => setView(settingsReturnView)} debugMode={debugMode} onDebugModeChange={setDebugMode} />
       )}
 
       {/* Main view — hidden when not active */}
