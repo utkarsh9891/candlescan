@@ -202,8 +202,8 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
         gateToken: token,
         engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
-        concurrency: 5,
-        delayMs: 200,
+        concurrency: 8,
+        delayMs: 0, // no fixed throttle — 429 retry is the safety net
         onProgress: (completed, total, current) => {
           setProgress({ completed, total, current });
         },
