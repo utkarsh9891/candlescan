@@ -681,6 +681,7 @@ export default function App() {
           engineVersion={engineVersion}
           scalpVariant={scalpVariant}
           dataSource={dataSource}
+          debugMode={debugMode}
         />
       </div>
 

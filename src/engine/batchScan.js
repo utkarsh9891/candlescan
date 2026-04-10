@@ -20,29 +20,13 @@ const ACTION_RANK = {
   'NO TRADE': 0,
 };
 
-// ─── Global rate-limit backoff ──────────────────────────────────────
-// When a 429 hits, we set a "pause until" timestamp. All concurrent
-// fetches in this scan check this on retry and wait until it clears.
-// This prevents thundering-herd retries that immediately re-trigger 429s.
-let globalPauseUntil = 0;
-
-function triggerGlobalPause(durationMs) {
-  const target = Date.now() + durationMs;
-  if (target > globalPauseUntil) globalPauseUntil = target;
-}
-
-async function waitForGlobalPause(signal) {
-  while (Date.now() < globalPauseUntil) {
-    if (signal?.aborted) return;
-    const wait = Math.min(500, globalPauseUntil - Date.now());
-    if (wait <= 0) break;
-    await new Promise((r) => setTimeout(r, wait));
-  }
-}
-
-/** Reset the global pause — call at the start of each new scan. */
+/**
+ * No-op kept for API compatibility — earlier versions used a global pause
+ * coordinator that ended up serializing scans. We removed it because the
+ * user wants per-request retries only, never blocking unrelated requests.
+ */
 export function resetBatchScanRateLimitState() {
-  globalPauseUntil = 0;
+  // intentionally empty
 }
 
 const IST_OFFSET = 19800; // +5:30 in seconds
@@ -87,41 +71,72 @@ export async function batchScan({
   let completed = 0;
   const total = symbols.length;
 
+  // ── Telemetry ────────────────────────────────────────────────────
+  // Tracked for the lifetime of this scan and surfaced via the
+  // returned `telemetry` field. Keeps the engine honest about its
+  // own perf and lets the UI show meaningful diagnostics.
+  const telemetry = {
+    startTs: Date.now(),
+    endTs: 0,
+    totalMs: 0,
+    symbolsRequested: total,
+    symbolsScanned: 0,
+    symbolsWithCandles: 0,
+    symbolsActionable: 0,
+    symbolsErrored: 0,
+    fetchCalls: 0,         // total fetch invocations (incl. retries)
+    fetchErrors: 0,        // any non-429 fetch failures
+    rateLimitHits: 0,      // count of 429 responses
+    retriesPerformed: 0,   // count of retry attempts
+    retriesRecovered: 0,   // retries that ultimately succeeded
+    retriesFailed: 0,      // retries that gave up after max attempts
+    concurrency,
+    delayMs,
+  };
+
   for (let i = 0; i < total; i += concurrency) {
     if (signal?.aborted) break;
 
     const chunk = symbols.slice(i, i + concurrency);
-
-    // If a previous batch hit 429, wait it out before firing the next batch.
-    // This is the front-line throttle that prevents repeated 429 cascades.
-    await waitForGlobalPause(signal);
-    if (signal?.aborted) break;
 
     const settled = await Promise.allSettled(
       chunk.map(async (sym) => {
         if (signal?.aborted) return null;
         try {
           const doFetch = fetchFn || fetchOHLCV;
+          telemetry.fetchCalls++;
           let result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
 
-          // Retry on 429 with exponential backoff: 2s, 5s, 15s.
-          // Dhan's rate limit recovers slowly so a single short retry isn't enough.
-          // Multiple retries with growing waits give the token bucket time to refill.
-          const RETRY_DELAYS_MS = [2000, 5000, 15000];
+          // Retry ONLY the failed request with short, local backoff.
+          // No global coordinator — other in-flight requests keep flowing.
+          // Backoffs: 1s → 2s → 4s. Most 429s recover within the first 1s
+          // because Dhan's token bucket refills in <1s and only the
+          // unlucky few who hit the exact limit need to wait.
+          const RETRY_DELAYS_MS = [1000, 2000, 4000];
+          let recovered = false;
           for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
             if (!result.error || !result.error.includes('429')) break;
             if (signal?.aborted) return null;
-            // If global pause is engaged, wait for it to clear before retrying
-            await waitForGlobalPause(signal);
-            await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
-            // After a 429 burst, trigger a brief global pause so other in-flight
-            // requests don't keep hammering the rate-limited endpoint.
-            triggerGlobalPause(RETRY_DELAYS_MS[attempt]);
+            telemetry.rateLimitHits++;
+            telemetry.retriesPerformed++;
+            await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+            telemetry.fetchCalls++;
             result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
+            if (!result.error || !result.error.includes('429')) {
+              recovered = true;
+              telemetry.retriesRecovered++;
+              break;
+            }
+          }
+          // If still 429 after all retries, count as a failed retry
+          if (result.error && result.error.includes('429') && !recovered) {
+            telemetry.retriesFailed++;
           }
 
           const { candles, companyName, displaySymbol, error } = result;
+          if (error) telemetry.fetchErrors++;
           if (error || !candles?.length) return null;
+          telemetry.symbolsWithCandles++;
 
           // Compute ORB + prev day levels for pattern context
           const lastDate = istDate(candles[candles.length - 1].t);
@@ -170,9 +185,15 @@ export async function batchScan({
 
     for (const r of settled) {
       completed++;
+      telemetry.symbolsScanned++;
       if (r.status === 'fulfilled' && r.value) {
         results.push(r.value);
+        if (r.value.action && r.value.action !== 'NO TRADE' && r.value.action !== 'WAIT') {
+          telemetry.symbolsActionable++;
+        }
         onResult?.(r.value);
+      } else if (r.status === 'rejected') {
+        telemetry.symbolsErrored++;
       }
     }
 
@@ -192,5 +213,17 @@ export async function batchScan({
     return b.confidence - a.confidence;
   });
 
+  // Finalize telemetry
+  telemetry.endTs = Date.now();
+  telemetry.totalMs = telemetry.endTs - telemetry.startTs;
+  telemetry.aborted = !!signal?.aborted;
+
+  // Return results array (preserving the existing API) with a non-enumerable
+  // `telemetry` property attached so callers that destructure as an array
+  // still work. Callers that want the metrics can read results.telemetry.
+  Object.defineProperty(results, 'telemetry', {
+    value: telemetry,
+    enumerable: false,
+  });
   return results;
 }
