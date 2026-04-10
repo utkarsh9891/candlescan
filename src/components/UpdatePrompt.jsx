@@ -22,16 +22,14 @@ function parseSemver(v) {
   return m ? [+m[1], +m[2], +m[3]] : null;
 }
 
-/** Returns true if `a` is strictly newer than `b` (both "vX.Y.Z" strings) */
-function isNewer(a, b) {
+/** Returns true if `a` and `b` are different semver strings.
+ * We intentionally match any mismatch (not just "newer") so that deleting
+ * recent releases on GitHub rolls clients back to the current latest. */
+function isDifferent(a, b) {
   const pa = parseSemver(a);
   const pb = parseSemver(b);
   if (!pa || !pb) return false;
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] > pb[i]) return true;
-    if (pa[i] < pb[i]) return false;
-  }
-  return false;
+  return pa[0] !== pb[0] || pa[1] !== pb[1] || pa[2] !== pb[2];
 }
 
 export default function UpdatePrompt() {
@@ -44,9 +42,14 @@ export default function UpdatePrompt() {
   const foundRef = useRef(false);
 
   const currentVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
+  // Suppress update banner entirely in dev mode — the local git-describe
+  // version is often stale vs deployed releases, causing a persistent banner
+  // that can't actually update anything.
+  const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV;
 
   // ── Passive SW detection (no extra network requests) ──────────────
   useEffect(() => {
+    if (isDev) return; // no update checks in dev
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.getRegistration().then(reg => {
       if (!reg) return;
@@ -102,7 +105,7 @@ export default function UpdatePrompt() {
         localStorage.setItem(LS_LATEST_VER, latest);
       } catch { /* quota */ }
 
-      if (isNewer(latest, currentVersion)) {
+      if (isDifferent(latest, currentVersion)) {
         setNewVersion(latest);
         setForceReload(true);
         setShowUpdate(true);
@@ -122,13 +125,14 @@ export default function UpdatePrompt() {
 
   // Auto-check: once per 24 h on mount
   useEffect(() => {
+    if (isDev) return; // no update checks in dev
     if (foundRef.current) return;
     try {
       const last = Number(localStorage.getItem(LS_LAST_CHECK) || '0');
       if (Date.now() - last < CHECK_INTERVAL_MS) {
         // Still within window — check cached result instead
         const cached = localStorage.getItem(LS_LATEST_VER);
-        if (cached && isNewer(cached, currentVersion)) {
+        if (cached && isDifferent(cached, currentVersion)) {
           setNewVersion(cached);
           setForceReload(true);
           setShowUpdate(true);

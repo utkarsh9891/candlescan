@@ -291,7 +291,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
             color: '#1a1d26', cursor: scanning ? 'not-allowed' : 'pointer',
           }}
         >
-          {NSE_INDEX_OPTIONS.map((o) => (
+          {allOptions.slice(0, NSE_INDEX_OPTIONS.length).map((o) => (
             <option key={o.id} value={o.id}>{o.label}</option>
           ))}
           {allOptions.length > NSE_INDEX_OPTIONS.length && (
