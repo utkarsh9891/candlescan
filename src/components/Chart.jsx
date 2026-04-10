@@ -33,24 +33,6 @@ const btnStyle = {
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 
-function countLatestSessionCandles(candles) {
-  if (!candles?.length) return 0;
-  // Use the last candle's date as "today's session" (handles weekends, holidays, after-hours)
-  const lastTs = candles[candles.length - 1].t;
-  const lastDate = new Date(lastTs * 1000);
-  const sessionStart = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate()).getTime() / 1000;
-  let count = 0;
-  for (let i = candles.length - 1; i >= 0; i--) {
-    if (candles[i].t >= sessionStart) count++;
-    else break;
-  }
-  // If very few candles in current session (e.g., market just opened), include some from prior session
-  if (count < MIN_VISIBLE && candles.length > count) {
-    count = Math.min(candles.length, Math.max(MIN_VISIBLE, count + 20));
-  }
-  return count;
-}
-
 function formatTimestamp(ts, timeframe, prevTs) {
   const d = new Date(ts * 1000);
   if (timeframe === '1d') {
@@ -84,10 +66,11 @@ export default forwardRef(function Chart({
   highlightSignals = false,
 }, ref) {
   const [visibleCount, setVisibleCount] = useState(() => {
-    const today = countLatestSessionCandles(candles);
     const isMobile = window.innerWidth < 500;
-    const cap = isMobile ? 40 : 80;
-    return today > 0 ? Math.min(cap, today, MAX_VISIBLE_CAP) : cap;
+    const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
+    const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
+    const have = candles?.length || 0;
+    return have > 0 ? Math.min(cap, have, MAX_VISIBLE_CAP) : cap;
   });
   const [panOffset, setPanOffset] = useState(0);
   const panOffsetRef = useRef(0);
@@ -126,17 +109,18 @@ export default forwardRef(function Chart({
   // Track previous sym+length to detect when we need to recalculate zoom
   const prevKeyRef = useRef('');
 
-  // Reset zoom to today's candles when symbol or data changes
+  // Reset zoom to the default visible cap when symbol or data changes.
+  // Use the full DEFAULT_VISIBLE cap regardless of time of day — this keeps
+  // the chart view consistent whether market is open, mid-session, or closed.
   useEffect(() => {
     if (!candles?.length) return;
     const key = `${sym}:${candles.length}:${timeframe}`;
     if (key === prevKeyRef.current) return;
     prevKeyRef.current = key;
-    const today = countLatestSessionCandles(candles);
     const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
     const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
     const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
-    const defaultCount = today > 0 ? Math.min(cap, today, candles.length, MAX_VISIBLE_CAP) : Math.min(cap, candles.length, MAX_VISIBLE_CAP);
+    const defaultCount = Math.min(cap, candles.length, MAX_VISIBLE_CAP);
     setVisibleCount(defaultCount);
     setPanOffset(0);
   }, [sym, candles, timeframe]);
@@ -175,14 +159,12 @@ export default forwardRef(function Chart({
   }, [maxVisible]);
 
   const zoomFit = useCallback(() => {
-    const today = countLatestSessionCandles(candles);
     const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
     const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
     const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
-    const defaultCount = today > 0 ? Math.min(cap, today, maxVisible) : Math.min(cap, maxVisible);
-    setVisibleCount(defaultCount);
+    setVisibleCount(Math.min(cap, maxVisible));
     setPanOffset(0);
-  }, [maxVisible, candles]);
+  }, [maxVisible, timeframe]);
 
   // Expose zoom controls to parent via ref
   useImperativeHandle(ref, () => ({
