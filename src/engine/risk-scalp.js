@@ -121,6 +121,45 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     if (trendDir === 'short' && cur.c > vwapGate) return noTrade(cur, candles, box);
   }
 
+  // Hard index-direction gate — don't fight the tape
+  // If the broader market is trending (|strength| ≥ 0.15%), reject counter-trend signals.
+  // Trading individual stock breakdowns in a rising market invites short-squeeze losses
+  // (and vice-versa). This is the #1 cause of chop-day clustered losses.
+  const idxDirGate = opts?.indexDirection;
+  if (idxDirGate?.direction && typeof idxDirGate?.strength === 'number') {
+    const trending = Math.abs(idxDirGate.strength) >= 0.0015; // 0.15%
+    if (trending) {
+      if (trendDir === 'long' && idxDirGate.direction === 'bearish') return noTrade(cur, candles, box);
+      if (trendDir === 'short' && idxDirGate.direction === 'bullish') return noTrade(cur, candles, box);
+    }
+  }
+
+  // Don't chase blow-off tops/bottoms — the #1 scalp failure mode
+  // Reject signals where the current bar is an extreme move (> 2x prior bar range
+  // AND body > 120% of prior range). Those are exhaustion candles where the
+  // retail momentum has already played out; the next move is usually a reversal.
+  if (candles.length >= 3) {
+    const prev = candles[candles.length - 2];
+    const curBody = Math.abs(cur.c - cur.o);
+    const prevRange = Math.max(prev.h - prev.l, 1e-9);
+    const curRange = cur.h - cur.l;
+    if (curRange > prevRange * 2.0 && curBody > prevRange * 1.2) {
+      return noTrade(cur, candles, box);
+    }
+    // Additionally, reject longs where current close is within 0.1% of the
+    // last 5-bar high (price is at the top of its range — chasing the peak).
+    // Reject shorts at the bottom of the 5-bar range.
+    const last5 = candles.slice(-5);
+    const hi5 = Math.max(...last5.map(c => c.h));
+    const lo5 = Math.min(...last5.map(c => c.l));
+    if (trendDir === 'long' && cur.c >= hi5 * 0.999) {
+      return noTrade(cur, candles, box);
+    }
+    if (trendDir === 'short' && cur.c <= lo5 * 1.001) {
+      return noTrade(cur, candles, box);
+    }
+  }
+
   // Extreme mover filter: boost confidence for stocks with big intraday moves
   // Applied as soft bonus rather than hard gate — let the scoring discriminate
   const dayStartIdx = Math.max(0, candles.length - barIndex);
@@ -152,11 +191,10 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   // This cuts losers fast before they become catastrophic
   const slDist = Math.min(
     Math.max(atrVal * 1.0, entry * 0.005), // at least 0.5% or 1 ATR
-    entry * 0.008, // cap at 0.8% — never wider
+    entry * 0.008, // cap at 0.8%
   );
 
   // Target: 2× the SL distance minimum, giving 2:1 R:R
-  // This is the key fix — target must exceed SL to be profitable after tx costs
   const targetFloor = Math.max(entry * 0.012, slDist * 2.0); // 1.2% or 2× SL
   let targetDist = targetFloor;
 
@@ -274,10 +312,16 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     action = 'WAIT';
   }
 
+  // Signal fired on the current (most recent) bar. For scalp on 1m, the entry
+  // window is ~3 bars (3 min) — after that the setup is stale.
+  const signalBarTs = cur.t || null;
+  const validTillTs = signalBarTs ? signalBarTs + 3 * 60 : null; // 3 minutes for 1m scalp
+
   return {
     total: rawClamped, confidence, breakdown, level, action,
     entry, sl, target, rr: rrClamped, direction, context,
     maxHoldBars: 12, // 12 minutes — cut sideways trades fast to avoid tx cost drag
+    signalBarTs, validTillTs,
   };
 }
 
@@ -288,5 +332,6 @@ function noTrade(cur, candles, box) {
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
     maxHoldBars: 12,
+    signalBarTs: cur.t || null, validTillTs: null,
   };
 }

@@ -48,31 +48,35 @@ export async function getIndexDirection(indexName, gateToken) {
   try {
     const result = await fetchOHLCV(yahooSym, '1m', { gateToken });
     const candles = result.candles;
-    if (!candles?.length || candles.length < 20) {
+    if (!candles?.length || candles.length < 15) {
       return { direction: 'neutral', strength: 0 };
     }
 
-    const closes = candles.map(c => c.c);
-    const sma10 = sma(closes, 10);
-    const sma20 = sma(closes, 20);
+    // Use only candles up to "now" — current bar AND the opening move.
+    // We measure direction as the net move from market open → current bar.
+    // This matches what a trader sees intraday: "is the market up or down today?"
+    const IST_OFFSET = 19800;
+    const today = candles.filter(c => {
+      const d = new Date((c.t + IST_OFFSET) * 1000);
+      return d.getUTCHours() >= 9; // today's session from 09:15 IST onwards
+    });
+    if (today.length < 15) {
+      return { direction: 'neutral', strength: 0 };
+    }
 
-    // Last 5 bars momentum
-    const last5 = candles.slice(-5);
-    const momentum = (last5[last5.length - 1].c - last5[0].c) / last5[0].c;
+    const first = today[0];
+    const last = today[today.length - 1];
+    const move = (last.c - first.o) / first.o;
+    const absMove = Math.abs(move);
 
     let direction = 'neutral';
     let strength = 0;
-
-    if (sma10 != null && sma20 != null) {
-      if (sma10 > sma20 && momentum > 0) {
-        direction = 'bullish';
-        strength = Math.min(1, Math.abs(momentum) * 100);
-      } else if (sma10 < sma20 && momentum < 0) {
-        direction = 'bearish';
-        strength = Math.min(1, Math.abs(momentum) * 100);
-      } else {
-        strength = Math.min(1, Math.abs(momentum) * 50);
-      }
+    if (move > 0.0015) {
+      direction = 'bullish';
+      strength = Math.min(1, absMove * 100);
+    } else if (move < -0.0015) {
+      direction = 'bearish';
+      strength = Math.min(1, absMove * 100);
     }
 
     const res = { direction, strength };

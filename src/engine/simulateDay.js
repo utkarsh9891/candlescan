@@ -187,7 +187,11 @@ export async function runSimulation({
   // Phase 3: Bar-by-bar simulation
   const trades = [];
   const openPositions = [];
-  const cooldownUntil = {}; // sym -> barIdx when cooldown expires
+  // Per-symbol blacklist: once a symbol has been traded (any exit reason), don't
+  // re-enter same day. This prevents re-chasing failed setups on the same stock
+  // and the classic "double-down" gambler's fallacy where the same breakdown
+  // pattern fires again 20 minutes later on a stock that already failed.
+  const tradedSymbols = new Set();
   let currentCapital = capital;
   let peakCapital = capital;
   let maxDrawdown = 0;
@@ -249,7 +253,7 @@ export async function runSimulation({
           confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
         });
         openPositions.splice(p, 1);
-        cooldownUntil[pos.sym] = barIdx + 2; // 2-bar cooldown (matches CLI)
+        tradedSymbols.add(pos.sym); // blacklist for rest of day
       }
     }
 
@@ -264,7 +268,7 @@ export async function runSimulation({
     for (const sym of Object.keys(stockData)) {
       if (signal?.aborted) break;
       if (openPositions.some(p => p.sym === sym)) continue;
-      if (cooldownUntil[sym] && barIdx < cooldownUntil[sym]) continue;
+      if (tradedSymbols.has(sym)) continue; // already traded today — blacklisted
 
       const sd = stockData[sym];
       if (barIdx >= sd.windowCandles.length) continue;

@@ -180,7 +180,11 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     action = 'WAIT';
   }
 
-  return { total: rawClamped, confidence, breakdown, level, action, entry, sl, target, rr: rrClamped, direction, context };
+  // Signal fired on current daily bar; entry window is next session open (~18h for daily)
+  const signalBarTs = cur.t || null;
+  const validTillTs = signalBarTs ? signalBarTs + 18 * 3600 : null; // ~18 hours for 1d classic
+
+  return { total: rawClamped, confidence, breakdown, level, action, entry, sl, target, rr: rrClamped, direction, context, signalBarTs, validTillTs };
 }
 
 function noTrade(cur, candles, box) {
@@ -189,5 +193,6 @@ function noTrade(cur, candles, box) {
     total: 0, confidence: 30, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
+    signalBarTs: cur.t || null, validTillTs: null,
   };
 }
