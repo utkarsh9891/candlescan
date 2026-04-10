@@ -192,26 +192,28 @@ function getEngineFns(engineVersion, scalpVariant) {
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant, dataSource }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant, dataSource, debugMode }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [nseIndex, setNseIndex] = useState(savedIndex || DEFAULT_NSE_INDEX_ID);
   const [timeframe, setTimeframe] = useState('5m');
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState({ completed: 0, total: 0, current: '' });
   const [results, setResults] = useState([]);
+  const [telemetry, setTelemetry] = useState(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('actionable'); // 'all' | 'actionable'
   const [dirFilter, setDirFilter] = useState('any'); // 'any' | 'long' | 'short'
   const [searchQuery, setSearchQuery] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
+  const [copyStatus, setCopyStatus] = useState('');
   const abortRef = useRef(null);
 
   const startScan = useCallback(async (token) => {
     setScanning(true);
     setError('');
     setResults([]);
+    setTelemetry(null);
     setProgress({ completed: 0, total: 0, current: 'Loading index...' });
-    // Clear any pause carried over from a previous scan
     resetBatchScanRateLimitState();
 
     try {
@@ -235,21 +237,19 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Per-source concurrency: Dhan has a stricter rate limit than Yahoo.
-      // 8 concurrent Dhan requests reliably triggers cascading 429s; 3 is
-      // the highest concurrency Dhan can sustain without hitting the limit.
-      // Yahoo has no comparable limit, so we keep 8 there for speed.
-      const isDhan = (dataSource || 'yahoo') === 'dhan';
-      const scanConcurrency = isDhan ? 3 : 8;
-
+      // High concurrency for both sources. Dhan does hit 429s sometimes, but
+      // batchScan handles those with per-request retries (1s/2s/4s) — only
+      // the failing call waits, the rest of the scan keeps moving. Lowering
+      // concurrency to "avoid 429s" was the wrong fix because it serialized
+      // the entire scan even on happy-path days.
       const scanResults = await batchScan({
         symbols,
         timeframe,
         gateToken: token,
         engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
-        concurrency: scanConcurrency,
-        delayMs: 0, // no fixed throttle — 429 retry + global pause are the safety net
+        concurrency: 8,
+        delayMs: 0, // no fixed throttle — failed requests retry locally, others keep moving
         onProgress: (completed, total, current) => {
           setProgress({ completed, total, current });
         },
@@ -270,6 +270,10 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
         signal: controller.signal,
         fetchFn: createFetchFn(dataSource || 'yahoo'),
       });
+      // Capture telemetry attached as a non-enumerable property on the result array
+      if (scanResults && scanResults.telemetry) {
+        setTelemetry({ ...scanResults.telemetry, dataSource: dataSource || 'yahoo', index: nseIndex, timeframe, engine: engineVersion, scalpVariant });
+      }
     } catch (e) {
       const msg = e?.message || String(e);
       if (msg.includes('403')) {
@@ -418,6 +422,89 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
           color: '#991b1b', fontSize: 13, marginBottom: 12, lineHeight: 1.4,
         }}>
           {error}
+        </div>
+      )}
+
+      {/* Telemetry — visible to all users (compact summary) */}
+      {telemetry && (
+        <div style={{
+          padding: '8px 10px', borderRadius: 8, background: '#f0f4ff', border: '1px solid #dbeafe',
+          marginBottom: 10, fontSize: 11, color: '#4a5068',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: mono, fontWeight: 700, color: '#2563eb' }}>
+              {(telemetry.totalMs / 1000).toFixed(1)}s
+            </span>
+            <span>·</span>
+            <span><strong>{telemetry.symbolsScanned}</strong>/{telemetry.symbolsRequested} scanned</span>
+            <span>·</span>
+            <span><strong>{telemetry.symbolsActionable}</strong> actionable</span>
+            {telemetry.rateLimitHits > 0 && (
+              <>
+                <span>·</span>
+                <span style={{ color: '#d97706' }}>
+                  {telemetry.rateLimitHits} 429s ({telemetry.retriesRecovered} recovered{telemetry.retriesFailed > 0 ? `, ${telemetry.retriesFailed} failed` : ''})
+                </span>
+              </>
+            )}
+            {telemetry.fetchErrors > 0 && (
+              <>
+                <span>·</span>
+                <span style={{ color: '#dc2626' }}>{telemetry.fetchErrors} errors</span>
+              </>
+            )}
+            {debugMode && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const report = {
+                    generatedAt: new Date().toISOString(),
+                    telemetry,
+                    sample: results.slice(0, 5).map((r) => ({
+                      symbol: r.symbol, action: r.action, confidence: r.confidence,
+                      direction: r.direction, entry: r.entry, sl: r.sl, target: r.target,
+                      pattern: r.topPattern, signalBarTs: r.signalBarTs, validTillTs: r.validTillTs,
+                    })),
+                    counts: {
+                      total: results.length,
+                      actionable: results.filter((r) => r.action !== 'NO TRADE' && r.action !== 'WAIT').length,
+                      strongBuy: results.filter((r) => r.action === 'STRONG BUY').length,
+                      buy: results.filter((r) => r.action === 'BUY').length,
+                      strongShort: results.filter((r) => r.action === 'STRONG SHORT').length,
+                      short: results.filter((r) => r.action === 'SHORT').length,
+                      wait: results.filter((r) => r.action === 'WAIT').length,
+                      noTrade: results.filter((r) => r.action === 'NO TRADE').length,
+                    },
+                  };
+                  const text = JSON.stringify(report, null, 2);
+                  try {
+                    await navigator.clipboard.writeText(text);
+                    setCopyStatus('Copied');
+                  } catch {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    try { document.execCommand('copy'); setCopyStatus('Copied'); }
+                    catch { setCopyStatus('Failed'); /* eslint-disable-next-line no-console */ console.log(text); }
+                    document.body.removeChild(ta);
+                  }
+                  setTimeout(() => setCopyStatus(''), 2500);
+                }}
+                style={{
+                  marginLeft: 'auto', padding: '3px 8px', fontSize: 10, fontWeight: 600,
+                  borderRadius: 5, border: '1px solid #dbeafe',
+                  background: copyStatus ? '#f0fdf4' : '#fff',
+                  color: copyStatus ? '#16a34a' : '#4a5068',
+                  cursor: 'pointer',
+                }}
+              >
+                {copyStatus || '📋 Copy Debug'}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
