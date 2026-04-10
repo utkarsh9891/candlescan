@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
-import { batchScan } from '../engine/batchScan.js';
+import { batchScan, resetBatchScanRateLimitState } from '../engine/batchScan.js';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
 // Engine-specific imports for engine-aware batch scanning
@@ -120,8 +120,11 @@ function ResultCard({ r, onTap }) {
       onClick={() => onTap(r.symbol)}
       style={{
         width: '100%', textAlign: 'left', cursor: 'pointer',
-        padding: 12, borderRadius: 10, border: '1px solid #e2e5eb', background: '#fff',
+        padding: 12, borderRadius: 10,
+        border: fresh ? '1px solid #e2e5eb' : '1px dashed #cbd0d9',
+        background: fresh ? '#fff' : '#fafbfc',
         display: 'block', marginBottom: 8,
+        opacity: fresh ? 1 : 0.78,
       }}
     >
       {/* Row 1: Symbol + Action badge + Confidence */}
@@ -134,6 +137,15 @@ function ResultCard({ r, onTap }) {
             </span>
           )}
         </div>
+        {!fresh && (
+          <span style={{
+            fontSize: 9, fontWeight: 800, padding: '2px 6px', borderRadius: 4,
+            background: '#fef2f2', color: '#dc2626', whiteSpace: 'nowrap',
+            border: '1px solid #fecaca', letterSpacing: 0.4,
+          }}>
+            EXPIRED
+          </span>
+        )}
         <span style={{
           fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 6,
           background: bg, color, whiteSpace: 'nowrap',
@@ -199,6 +211,8 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
     setError('');
     setResults([]);
     setProgress({ completed: 0, total: 0, current: 'Loading index...' });
+    // Clear any pause carried over from a previous scan
+    resetBatchScanRateLimitState();
 
     try {
       // 1. Fetch constituents
@@ -221,14 +235,21 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Per-source concurrency: Dhan has a stricter rate limit than Yahoo.
+      // 8 concurrent Dhan requests reliably triggers cascading 429s; 3 is
+      // the highest concurrency Dhan can sustain without hitting the limit.
+      // Yahoo has no comparable limit, so we keep 8 there for speed.
+      const isDhan = (dataSource || 'yahoo') === 'dhan';
+      const scanConcurrency = isDhan ? 3 : 8;
+
       const scanResults = await batchScan({
         symbols,
         timeframe,
         gateToken: token,
         engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
-        concurrency: 8,
-        delayMs: 0, // no fixed throttle — 429 retry is the safety net
+        concurrency: scanConcurrency,
+        delayMs: 0, // no fixed throttle — 429 retry + global pause are the safety net
         onProgress: (completed, total, current) => {
           setProgress({ completed, total, current });
         },
@@ -285,14 +306,12 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
   }, [startScan]);
 
   const sq = searchQuery.trim().toUpperCase();
-  // Freshness cutoff — only applies while scanning is "live" (within a few
-  // minutes of the scan completing). Expired signals are hidden from the
-  // actionable view; still visible under "All".
-  const nowSec = Math.floor(Date.now() / 1000);
+  // Expired signals remain visible in the Actionable filter — they're still
+  // valid trade ideas that fired, just past their entry window. The card
+  // renders an EXPIRED badge so the user knows not to chase the entry, but
+  // can still drill in to see the chart and what happened.
   const displayed = results.filter((r) => {
     if (filter === 'actionable' && (r.action === 'NO TRADE' || r.action === 'WAIT')) return false;
-    // Hide expired signals from the actionable view — the entry window is gone
-    if (filter === 'actionable' && r.validTillTs && nowSec > r.validTillTs) return false;
     if (dirFilter === 'long' && r.direction !== 'long') return false;
     if (dirFilter === 'short' && r.direction !== 'short') return false;
     if (sq && !r.symbol.includes(sq) && !(r.companyName || '').toUpperCase().includes(sq)) return false;
