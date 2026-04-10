@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
-import { NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
+import { NSE_INDEX_OPTIONS, getBuiltInIndexOptions } from '../config/nseIndices.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -157,7 +157,7 @@ export default function IndexConstituentsSidebar({
                       borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
                       maxHeight: 280, overflowY: 'auto', zIndex: 200,
                     }}>
-                      {NSE_INDEX_OPTIONS.map(opt => (
+                      {getBuiltInIndexOptions().map(opt => (
                         <button key={opt.id} type="button"
                           onClick={() => { onNseIndexChange(opt.id); setDropdownOpen(false); }}
                           style={{

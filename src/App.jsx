@@ -28,7 +28,7 @@ import SettingsPage from './components/SettingsPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { getMarketStatus } from './utils/marketHours.js';
-import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions } from './config/nseIndices.js';
+import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions, getBuiltInIndexOptions } from './config/nseIndices.js';
 import { hasGateToken, getGateToken } from './utils/batchAuth.js';
 import { getVaultBlob, hasVault, clearVault } from './utils/credentialVault.js';
 import { fetchZerodhaOHLCV } from './engine/zerodhaFetcher.js';
@@ -159,7 +159,9 @@ export default function App() {
     return DEFAULT_NSE_INDEX_ID;
   });
   const [customIndices, setCustomIndices] = useState(() => getCustomIndices());
-  const allIndexOptions = [...NSE_INDEX_OPTIONS, ...customIndices];
+  // Use getBuiltInIndexOptions() so TOP GAINERS/LOSERS labels reflect live market state.
+  // Recomputed on every render — cheap, keeps labels fresh as the market opens/closes.
+  const allIndexOptions = [...getBuiltInIndexOptions(), ...customIndices];
 
   const handleAddCustomIndex = useCallback((id) => {
     const updated = addCustomIndex(id);
@@ -690,6 +692,7 @@ export default function App() {
           scalpVariant={scalpVariant}
           onScalpVariantChange={setScalpVariant}
           dataSource={dataSource}
+          debugMode={debugMode}
         />
       </div>
 

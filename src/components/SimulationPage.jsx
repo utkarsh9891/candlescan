@@ -88,7 +88,7 @@ const ENGINE_PRESETS = {
   v1:     { from: '09:15', to: '15:30', maxOpen: 3, maxTrades: 2 },
 };
 
-export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant: parentVariant, onScalpVariantChange, dataSource }) {
+export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant: parentVariant, onScalpVariantChange, dataSource, debugMode }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [localEngine, setLocalEngine] = useState(engineVersion || 'scalp');
   const [localVariant, setLocalVariant] = useState(parentVariant || DEFAULT_SCALP_VARIANT);
@@ -180,6 +180,68 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
 
   const pct = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0;
   const s = results?.summary;
+
+  // Copy debug report — all parameters + per-trade details + summary
+  const [copyStatus, setCopyStatus] = useState('');
+  const handleCopyDebug = useCallback(async () => {
+    if (!results) return;
+    const params = {
+      index: nseIndex,
+      date,
+      window: `${startTime}-${endTime}`,
+      engine: localEngine,
+      scalpVariant: localEngine === 'scalp' ? localVariant : null,
+      timeframe: localEngine === 'scalp' ? '1m' : '5m',
+      capital,
+      positionSize,
+      maxConcurrent,
+      maxTotalTrades,
+      margin,
+      marginMultiplier: margin ? MARGIN_MULTIPLIER : 1,
+      dataSource: dataSource || 'yahoo',
+    };
+    const trades = (results.trades || []).map((t) => ({
+      sym: t.sym,
+      direction: t.direction,
+      entry: t.entry,
+      sl: t.sl,
+      target: t.target,
+      exit: t.exit,
+      shares: t.shares,
+      entryTime: t.entryTime,
+      exitTime: t.exitTime,
+      reason: t.reason,
+      pattern: t.pattern,
+      confidence: t.confidence,
+      grossPnl: t.grossPnl,
+      txCost: t.txCost,
+      netPnl: t.netPnl,
+      returnPct: t.returnPct,
+    }));
+    const report = {
+      generatedAt: new Date().toISOString(),
+      parameters: params,
+      summary: results.summary,
+      trades,
+    };
+    const text = JSON.stringify(report, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyStatus('Copied to clipboard');
+    } catch {
+      // Fallback for non-https contexts
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); setCopyStatus('Copied to clipboard'); }
+      catch { setCopyStatus('Copy failed — see console'); /* eslint-disable-next-line no-console */ console.log(text); }
+      document.body.removeChild(ta);
+    }
+    setTimeout(() => setCopyStatus(''), 2500);
+  }, [results, nseIndex, date, startTime, endTime, localEngine, localVariant, capital, positionSize, maxConcurrent, maxTotalTrades, margin, dataSource]);
 
   const inputStyle = {
     padding: '8px 10px', fontSize: 13, borderRadius: 6,
@@ -332,8 +394,26 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
         <div style={{
           padding: 14, borderRadius: 10, border: '1px solid #e2e5eb', background: '#fff', marginBottom: 12,
         }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
-            Simulation — {s.date} ({s.stocksScanned} stocks)
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>
+              Simulation — {s.date} ({s.stocksScanned} stocks)
+            </div>
+            {debugMode && (
+              <button
+                type="button"
+                onClick={handleCopyDebug}
+                title="Copy full simulation report (params + summary + all trades) as JSON"
+                style={{
+                  padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                  borderRadius: 6, border: '1px solid #e2e5eb',
+                  background: copyStatus ? '#f0fdf4' : '#fff',
+                  color: copyStatus ? '#16a34a' : '#4a5068',
+                  cursor: 'pointer',
+                }}
+              >
+                {copyStatus || '📋 Copy Debug'}
+              </button>
+            )}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 12, fontFamily: mono, color: '#4a5068' }}>
             <div>
