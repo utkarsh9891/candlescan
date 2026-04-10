@@ -20,6 +20,31 @@ const ACTION_RANK = {
   'NO TRADE': 0,
 };
 
+// ─── Global rate-limit backoff ──────────────────────────────────────
+// When a 429 hits, we set a "pause until" timestamp. All concurrent
+// fetches in this scan check this on retry and wait until it clears.
+// This prevents thundering-herd retries that immediately re-trigger 429s.
+let globalPauseUntil = 0;
+
+function triggerGlobalPause(durationMs) {
+  const target = Date.now() + durationMs;
+  if (target > globalPauseUntil) globalPauseUntil = target;
+}
+
+async function waitForGlobalPause(signal) {
+  while (Date.now() < globalPauseUntil) {
+    if (signal?.aborted) return;
+    const wait = Math.min(500, globalPauseUntil - Date.now());
+    if (wait <= 0) break;
+    await new Promise((r) => setTimeout(r, wait));
+  }
+}
+
+/** Reset the global pause — call at the start of each new scan. */
+export function resetBatchScanRateLimitState() {
+  globalPauseUntil = 0;
+}
+
 const IST_OFFSET = 19800; // +5:30 in seconds
 function istDate(t) {
   return new Date((t + IST_OFFSET) * 1000).toISOString().slice(0, 10);
@@ -67,6 +92,11 @@ export async function batchScan({
 
     const chunk = symbols.slice(i, i + concurrency);
 
+    // If a previous batch hit 429, wait it out before firing the next batch.
+    // This is the front-line throttle that prevents repeated 429 cascades.
+    await waitForGlobalPause(signal);
+    if (signal?.aborted) break;
+
     const settled = await Promise.allSettled(
       chunk.map(async (sym) => {
         if (signal?.aborted) return null;
@@ -74,9 +104,19 @@ export async function batchScan({
           const doFetch = fetchFn || fetchOHLCV;
           let result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
 
-          // Retry on 429 (rate limit) — wait 3s then try once more
-          if (result.error && result.error.includes('429')) {
-            await new Promise(r => setTimeout(r, 3000));
+          // Retry on 429 with exponential backoff: 2s, 5s, 15s.
+          // Dhan's rate limit recovers slowly so a single short retry isn't enough.
+          // Multiple retries with growing waits give the token bucket time to refill.
+          const RETRY_DELAYS_MS = [2000, 5000, 15000];
+          for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+            if (!result.error || !result.error.includes('429')) break;
+            if (signal?.aborted) return null;
+            // If global pause is engaged, wait for it to clear before retrying
+            await waitForGlobalPause(signal);
+            await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+            // After a 429 burst, trigger a brief global pause so other in-flight
+            // requests don't keep hammering the rate-limited endpoint.
+            triggerGlobalPause(RETRY_DELAYS_MS[attempt]);
             result = await doFetch(sym, timeframe, { gateToken: gateToken || batchToken });
           }
 
