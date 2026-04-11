@@ -9,7 +9,6 @@ import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
 import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
 import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
 import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
-import { getScalpVariantFns, SCALP_VARIANTS, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
 import { runSimulation, getLastTradingDay } from '../engine/simulateDay.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
 import ToggleSwitch from './ToggleSwitch.jsx';
@@ -88,10 +87,9 @@ const ENGINE_PRESETS = {
   v1:     { from: '09:15', to: '15:30', maxOpen: 3, maxTrades: 2 },
 };
 
-export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant: parentVariant, onScalpVariantChange, dataSource, debugMode }) {
+export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, dataSource, debugMode }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [localEngine, setLocalEngine] = useState(engineVersion || 'scalp');
-  const [localVariant, setLocalVariant] = useState(parentVariant || DEFAULT_SCALP_VARIANT);
   const preset = ENGINE_PRESETS[localEngine] || ENGINE_PRESETS.scalp;
   const [date, setDate] = useState(getLastTradingDay);
   const [startTime, setStartTime] = useState(preset.from);
@@ -137,7 +135,11 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
 
     let engineFns;
     if (localEngine === 'scalp') {
-      engineFns = getScalpVariantFns(localVariant);
+      engineFns = {
+        detectPatterns: detectPatternsScalp,
+        detectLiquidityBox: detectLiquidityBoxScalp,
+        computeRiskScore: computeRiskScoreScalp,
+      };
     } else if (localEngine === 'v2') {
       engineFns = { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
     } else {
@@ -190,7 +192,6 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       date,
       window: `${startTime}-${endTime}`,
       engine: localEngine,
-      scalpVariant: localEngine === 'scalp' ? localVariant : null,
       timeframe: localEngine === 'scalp' ? '1m' : '5m',
       capital,
       positionSize,
@@ -241,7 +242,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       document.body.removeChild(ta);
     }
     setTimeout(() => setCopyStatus(''), 2500);
-  }, [results, nseIndex, date, startTime, endTime, localEngine, localVariant, capital, positionSize, maxConcurrent, maxTotalTrades, margin, dataSource]);
+  }, [results, nseIndex, date, startTime, endTime, localEngine, capital, positionSize, maxConcurrent, maxTotalTrades, margin, dataSource]);
 
   const inputStyle = {
     padding: '8px 10px', fontSize: 13, borderRadius: 6,
@@ -274,29 +275,6 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
           ))}
         </div>
       </div>
-
-      {/* 1b. Scalp variant selector */}
-      {localEngine === 'scalp' && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={labelStyle}>Scalp Variant</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-            {SCALP_VARIANTS.map(v => (
-              <button key={v.key} type="button" disabled={running}
-                title={v.description}
-                onClick={() => { setLocalVariant(v.key); if (onScalpVariantChange) onScalpVariantChange(v.key); }}
-                style={{
-                  padding: '6px 10px', fontSize: 10, fontWeight: 700, borderRadius: 6,
-                  border: localVariant === v.key ? 'none' : '1px solid #e2e5eb',
-                  background: localVariant === v.key ? v.color : '#fff',
-                  color: localVariant === v.key ? '#fff' : '#4a5068',
-                  cursor: running ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
-                }}>
-                {v.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* 2. Date + Time window */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>

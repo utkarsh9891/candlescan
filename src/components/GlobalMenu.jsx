@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 import CustomIndexInput from './CustomIndexInput.jsx';
-import { SCALP_VARIANTS } from '../engine/scalp-variants/registry.js';
 import ToggleSwitch from './ToggleSwitch.jsx';
 
 const INTRADAY_CATEGORIES = [
@@ -40,7 +39,12 @@ const CLASSIC_CATEGORIES_UI = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, noviceAction, simulationAction, paperTradingAction, settingsAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, scalpVariant, onScalpVariantChange }) {
+export default function GlobalMenu({
+  activeFilters, onFiltersChange, navAction, simulationAction, paperTradingAction, settingsAction,
+  customIndices, onAddCustomIndex, onRemoveCustomIndex,
+  engineVersion, onEngineVersionChange,
+  noviceMode, onNoviceModeChange,
+}) {
   const [open, setOpen] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const ref = useRef(null);
@@ -122,15 +126,33 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
               <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
             </>
           )}
-          {noviceAction && (
+          {/* Simple Mode master switch — ON simplifies every surface,
+              OFF restores expert depth. Prominently placed at the top. */}
+          {onNoviceModeChange && (
             <>
-              <button type="button" onClick={() => { setOpen(false); noviceAction.onClick(); }}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 700, color: '#16a34a', background: '#f0fdf4', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <div style={{
+                padding: '10px 12px', background: noviceMode ? '#f0fdf4' : '#f8fafc',
+                border: noviceMode ? '1px solid #bbf7d0' : '1px solid #e2e5eb',
+                borderRadius: 8, marginBottom: 6,
+                display: 'flex', alignItems: 'center', gap: 10,
+              }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                  stroke={noviceMode ? '#16a34a' : '#64748b'}
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                 </svg>
-                {noviceAction.label}
-              </button>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#1a1d26' }}>
+                    Simple Mode
+                  </div>
+                  <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>
+                    {noviceMode
+                      ? 'One button, plain-english trades. No jargon.'
+                      : 'Full expert UI — charts, filters, engine depth.'}
+                  </div>
+                </div>
+                <ToggleSwitch checked={noviceMode} onChange={onNoviceModeChange} label="" compact />
+              </div>
               <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
             </>
           )}
@@ -190,22 +212,6 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
                 ].map((v) => (
                   <button key={v.key} type="button" onClick={() => onEngineVersionChange(v.key)}
                     style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '8px 0', border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 6, cursor: 'pointer', background: engineVersion === v.key ? v.color : '#fff', color: engineVersion === v.key ? '#fff' : '#4a5068' }}>
-                    {v.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* 1b. Scalp variant selector */}
-          {engineVersion === 'scalp' && onScalpVariantChange && (
-            <>
-              <div style={{ padding: '4px 10px 2px', fontSize: 10, fontWeight: 700, color: '#8892a8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Scalp Variant</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, padding: '3px 10px 8px' }}>
-                {SCALP_VARIANTS.map((v) => (
-                  <button key={v.key} type="button" onClick={() => onScalpVariantChange(v.key)}
-                    title={v.description}
-                    style={{ fontSize: 10, fontWeight: 600, padding: '5px 8px', border: scalpVariant === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 5, cursor: 'pointer', background: scalpVariant === v.key ? v.color : '#fff', color: scalpVariant === v.key ? '#fff' : '#4a5068', whiteSpace: 'nowrap' }}>
                     {v.label}
                   </button>
                 ))}

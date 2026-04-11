@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { DEFAULT_SCALP_VARIANT } from './engine/scalp-variants/registry.js';
 import { useStockScan } from './hooks/useStockScan.js';
 import { useIndexUniverse } from './hooks/useIndexUniverse.js';
 import { useAppView } from './hooks/useAppView.js';
+import { useScheduledChecks } from './hooks/useScheduledChecks.js';
+import ScheduledChecksPanel from './components/ScheduledChecksPanel.jsx';
 import Header from './components/Header.jsx';
 import TimeframePills, { SOURCE_TIMEFRAMES } from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
@@ -65,9 +66,23 @@ export default function App() {
   const [engineVersion, setEngineVersion] = useState(() => {
     try { return localStorage.getItem('candlescan_engine') || 'scalp'; } catch { return 'scalp'; }
   });
-  const [scalpVariant, setScalpVariant] = useState(() => {
-    try { return localStorage.getItem('candlescan_scalp_variant') || DEFAULT_SCALP_VARIANT; } catch { return DEFAULT_SCALP_VARIANT; }
+
+  // Novice Mode: global master switch. When ON, the hamburger's
+  // "Index Scanner" action opens a simplified single-button layout
+  // (NoviceModePage) instead of the expert BatchScanPage, and the
+  // expert page hides jargon + filters. Same scan pipeline under the
+  // hood — only the scaffolding changes.
+  const [noviceMode, setNoviceMode] = useState(() => {
+    try {
+      const v = localStorage.getItem('candlescan_novice_mode');
+      // Default novice ON for a first-time visitor (safer for the target user).
+      // Once they flip the switch, we respect their choice.
+      return v == null ? true : v === 'true';
+    } catch { return true; }
   });
+  useEffect(() => {
+    try { localStorage.setItem('candlescan_novice_mode', String(noviceMode)); } catch { /* quota */ }
+  }, [noviceMode]);
 
   useEffect(() => {
     try { localStorage.setItem('candlescan_engine', engineVersion); } catch { /* quota */ }
@@ -78,9 +93,6 @@ export default function App() {
     else if (engineVersion === 'v2') setTimeframe('5m');
     // Classic: no auto-set (user picks, typically 1d)
   }, [engineVersion]);
-  useEffect(() => {
-    try { localStorage.setItem('candlescan_scalp_variant', scalpVariant); } catch { /* quota */ }
-  }, [scalpVariant]);
   const [timeframe, setTimeframe] = useState(() => {
     try {
       const eng = localStorage.getItem('candlescan_engine') || 'scalp';
@@ -161,9 +173,21 @@ export default function App() {
     history, setHistory,
   } = useStockScan({
     dataSource, setDataSourceState,
-    engineVersion, scalpVariant, timeframe, nseIndex,
+    engineVersion, timeframe, nseIndex,
     onDiscoverSymbol: handleDiscoverSymbol,
   });
+
+  // Scheduled Checks — global. Any view can add a schedule via the
+  // ScheduleCheckButton component; the hook owns the state + timer
+  // loop and fires a single-symbol re-scan at the scheduled time.
+  // The panel surfaces the full list regardless of which view the
+  // user is currently on.
+  const handleOpenSymbol = useCallback((s) => {
+    setInputVal(s);
+    runScan(s);
+    setView('main');
+  }, [runScan, setView]);
+  const scheduledChecks = useScheduledChecks({ dataSource, nseIndex });
 
   // Merge broad NIFTY 500 universe + current index for homepage search
   const searchSymbols = useMemo(() => {
@@ -256,10 +280,8 @@ export default function App() {
             ? { label: 'Index Scanner', onClick: () => setView('batch') }
             : { label: 'Stock Scanner', onClick: () => setView('main') }
           }
-          noviceAction={{
-            label: view === 'novice' ? 'Back to Stock Scanner' : 'Novice Mode',
-            onClick: () => setView(view === 'novice' ? 'main' : 'novice'),
-          }}
+          noviceMode={noviceMode}
+          onNoviceModeChange={setNoviceMode}
           simulationAction={{
             label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
             onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
@@ -281,27 +303,52 @@ export default function App() {
           onRemoveCustomIndex={handleRemoveCustomIndex}
           engineVersion={engineVersion}
           onEngineVersionChange={setEngineVersion}
-          scalpVariant={scalpVariant}
-          onScalpVariantChange={setScalpVariant}
         />
       </Header>
 
-      {/* Batch scan page — always mounted, hidden when not active */}
+      {/* Global Scheduled Checks panel — visible in every view. Shows
+          a compact strip when schedules exist; expands to a full list
+          on tap. The hook owns the timer + fire logic; this component
+          only renders. */}
+      <ScheduledChecksPanel
+        scheduledChecks={scheduledChecks}
+        onOpen={handleOpenSymbol}
+      />
+
+      {/* Batch scan view — always mounted, hidden when not active.
+          Dispatches between the simplified Novice layout and the
+          expert Index Scanner layout based on the noviceMode master
+          switch. Both paths run the same batchScan internally. */}
       <div style={{ display: view === 'batch' ? 'block' : 'none' }}>
-        <BatchScanPage
-          onSelectSymbol={(s) => {
-            setInputVal(s);
-            onQuick(s);
-            setView('main');
-            setCameFromBatch(true);
-          }}
-          savedIndex={nseIndex}
-          indexOptions={allIndexOptions}
-          engineVersion={engineVersion}
-          scalpVariant={scalpVariant}
-          dataSource={dataSource}
-          debugMode={debugMode}
-        />
+        {noviceMode ? (
+          <NoviceModePage
+            savedIndex={nseIndex}
+            indexOptions={allIndexOptions}
+            dataSource={dataSource}
+            onSelectSymbol={(s) => {
+              setInputVal(s);
+              onQuick(s);
+              setView('main');
+              setCameFromBatch(true);
+            }}
+            scheduledChecks={scheduledChecks}
+          />
+        ) : (
+          <BatchScanPage
+            onSelectSymbol={(s) => {
+              setInputVal(s);
+              onQuick(s);
+              setView('main');
+              setCameFromBatch(true);
+            }}
+            savedIndex={nseIndex}
+            indexOptions={allIndexOptions}
+            engineVersion={engineVersion}
+            dataSource={dataSource}
+            debugMode={debugMode}
+            scheduledChecks={scheduledChecks}
+          />
+        )}
       </div>
 
       {/* Simulation page — always mounted, hidden when not active */}
@@ -316,8 +363,6 @@ export default function App() {
           savedIndex={nseIndex}
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
-          scalpVariant={scalpVariant}
-          onScalpVariantChange={setScalpVariant}
           dataSource={dataSource}
           debugMode={debugMode}
         />
@@ -329,24 +374,7 @@ export default function App() {
           savedIndex={nseIndex}
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
-          scalpVariant={scalpVariant}
           dataSource={dataSource}
-        />
-      </div>
-
-      {/* Novice mode page — always mounted, hidden when not active.
-          One-button UX for non-technical users. Leaf view: taps flow
-          back into the main stock scanner via onSelectSymbol. */}
-      <div style={{ display: view === 'novice' ? 'block' : 'none' }}>
-        <NoviceModePage
-          savedIndex={nseIndex}
-          indexOptions={allIndexOptions}
-          dataSource={dataSource}
-          onSelectSymbol={(s) => {
-            setInputVal(s);
-            onQuick(s);
-            setView('main');
-          }}
         />
       </div>
 
