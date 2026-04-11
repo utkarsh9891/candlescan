@@ -36,7 +36,12 @@ const TIMEFRAME_MAP = {
   '15m': { interval: '15m' },
 };
 
-const TX_COST_PCT = 0.0005; // 0.05% per side
+// Premium-broker round-trip cost: ~0.04% (Rs 600 per trade on 15L leveraged).
+// 0.02% per side × 2 sides ≈ Rs 600 all-in on a Rs 15L position (matches
+// Zerodha Pro / Dhan Premium MIS on large/mid caps: flat ~Rs 20 +
+// STT + exchange + GST). Standard retail plans are ~0.05% per side;
+// configure differently if needed.
+const TX_COST_PCT = 0.0002;
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
 function parseArgs() {
@@ -195,9 +200,6 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap }) {
   const trades = [];
   const openPositions = [];
-  // Per-symbol blacklist: once a symbol has been traded, don't re-enter same day.
-  // Prevents "double-down" scenario where the same pattern re-fires on a stock
-  // that already failed (gambler's fallacy).
   const tradedSymbols = new Set();
   let currentCapital = CAPITAL;
   let peakCapital = CAPITAL;
@@ -256,7 +258,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         });
 
         openPositions.splice(p, 1);
-        tradedSymbols.add(pos.sym); // blacklist for rest of day
+        tradedSymbols.add(pos.sym);
       }
     }
 
@@ -278,20 +280,45 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       const candlesSoFar = [...sd.priorCandles, ...preWindow, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
       if (candlesSoFar.length < 10) continue;
 
+      // Compute index intraday % AT this bar's timestamp (no lookahead)
+      // — the NIFTY bar closest to but not later than cur.t.
+      const curTs = candlesSoFar[candlesSoFar.length - 1].t;
+      let indexAtBar = indexDirection;
+      if (indexDirection?.candles?.length && indexDirection.dayOpen) {
+        // Find the latest NIFTY bar at or before cur.t
+        let niftyCur = null;
+        for (let k = indexDirection.candles.length - 1; k >= 0; k--) {
+          if (indexDirection.candles[k].t <= curTs) { niftyCur = indexDirection.candles[k]; break; }
+        }
+        const niftyIntraPct = niftyCur ? (niftyCur.c - indexDirection.dayOpen) / indexDirection.dayOpen : 0;
+        indexAtBar = { ...indexDirection, intradayPct: niftyIntraPct };
+      }
+
+      // Today's session open = the first candle of the day, 9:15 IST.
+      // Passing explicitly avoids the pattern having to figure it out from
+      // a concatenated array (prior day + pre-window + today so far).
+      const stockDayOpen = sd.dayCandles[0]?.o || null;
+
       const patterns = detectPatterns(candlesSoFar, {
         barIndex: barIdx,
         orbHigh: sd.orbHigh,
         orbLow: sd.orbLow,
         prevDayHigh: sd.prevDayHigh,
         prevDayLow: sd.prevDayLow,
+        indexDirection: indexAtBar,
+        stockDayOpen,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen } });
 
       if (risk.confidence < MIN_CONFIDENCE) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
 
-      const shares = Math.floor(POSITION_SIZE / risk.entry);
+      // Apply 5x margin leverage when margin is enabled — Rs 3L capital
+      // controls Rs 15L of stock. The per-trade P&L is calculated on the
+      // leveraged exposure, matching how Indian intraday margin (MIS) works.
+      const effectivePositionSize = marginEnabled ? POSITION_SIZE * MARGIN_MULTIPLIER : POSITION_SIZE;
+      const shares = Math.floor(effectivePositionSize / risk.entry);
       if (shares < 1) continue;
 
       candidates.push({ sym, risk, patterns, shares });
@@ -528,37 +555,48 @@ async function main() {
   console.log('─'.repeat(100));
 
   // Compute index direction — use same symbol mapping as browser (indexDirection.js)
+  // All indices use NIFTY 50 (^NSEI) as the market-direction proxy.
+  // The broader NIFTY is the most reliable intraday reference and small
+  // caps strongly correlate with it (beta ~1.1-1.3). Dedicated small-cap
+  // index data is often sparse/delayed on Yahoo, so ^NSEI is preferred.
   const INDEX_SYMBOL_MAP = {
     'NIFTY 50': '^NSEI', 'NIFTY NEXT 50': '^NSEI', 'NIFTY 100': '^NSEI', 'NIFTY 200': '^NSEI',
-    'NIFTY MIDCAP 50': 'NIFTY_MIDCAP_50.NS', 'NIFTY MIDCAP 100': 'NIFTY_MIDCAP_50.NS', 'NIFTY MIDCAP 150': 'NIFTY_MIDCAP_50.NS',
-    'NIFTY SMALLCAP 50': 'NIFTY_SMLCAP_50.NS', 'NIFTY SMALLCAP 100': 'NIFTY_SMLCAP_50.NS', 'NIFTY SMALLCAP 250': 'NIFTY_SMLCAP_50.NS',
+    'NIFTY MIDCAP 50': '^NSEI', 'NIFTY MIDCAP 100': '^NSEI', 'NIFTY MIDCAP 150': '^NSEI',
+    'NIFTY SMALLCAP 50': '^NSEI', 'NIFTY SMALLCAP 100': '^NSEI', 'NIFTY SMALLCAP 250': '^NSEI',
   };
-  let indexDirection = { direction: 'neutral', strength: 0 };
+  // Load NIFTY candles for the full day so each bar can compute index
+  // relative strength at that moment (no lookahead). We store the raw
+  // candle array on indexDirection so pattern/risk engines can look up
+  // the index intraday % at any given timestamp.
+  let indexDirection = { direction: 'neutral', strength: 0, candles: null, dayOpen: null };
   if (engine === 'scalp') {
     const niftySym = INDEX_SYMBOL_MAP[indexName] || '^NSEI';
     const niftyJson = readCachedChartJson(niftySym, tf.interval, resolvedDate);
     if (niftyJson) {
       const niftyParsed = parseChartJson(niftyJson);
       if (niftyParsed?.candles?.length >= 15) {
-        // CRITICAL: use only candles up to the sim start time (no lookahead).
-        // Parse fromTime as minutes from midnight IST, then filter candles.
         const [fromH, fromM] = fromTime.split(':').map(Number);
         const fromMins = fromH * 60 + fromM;
         const IST_OFFSET = 19800;
-        const candlesUpToStart = niftyParsed.candles.filter(c => {
+        const niftyCandles = niftyParsed.candles;
+        // Pre-window direction — established before trading starts
+        const candlesUpToStart = niftyCandles.filter(c => {
           const d = new Date((c.t + IST_OFFSET) * 1000);
           return d.getUTCHours() * 60 + d.getUTCMinutes() < fromMins;
         });
         if (candlesUpToStart.length >= 5) {
-          // Use the opening move (open → close of pre-window) as direction.
-          // This measures how the market opened — bullish/bearish gap + initial drift.
           const first = candlesUpToStart[0];
           const last = candlesUpToStart[candlesUpToStart.length - 1];
           const move = (last.c - first.o) / first.o;
           const absMove = Math.abs(move);
-          if (move > 0.0015) indexDirection = { direction: 'bullish', strength: Math.min(1, absMove * 100) };
-          else if (move < -0.0015) indexDirection = { direction: 'bearish', strength: Math.min(1, absMove * 100) };
-          console.log(`Index direction: ${indexDirection.direction} (strength: ${indexDirection.strength.toFixed(3)}, pre-window move: ${(move * 100).toFixed(2)}%)`);
+          indexDirection = {
+            direction: move > 0.0015 ? 'bullish' : move < -0.0015 ? 'bearish' : 'neutral',
+            strength: Math.min(1, absMove * 100),
+            candles: niftyCandles,        // full day — pattern engine filters by ts
+            dayOpen: first.o,             // the index's session open price
+            preWindowMove: move,          // net % move during the pre-window
+          };
+          console.log(`Index direction: ${indexDirection.direction} (pre-window move: ${(move * 100).toFixed(2)}%)`);
         }
       }
     } else {

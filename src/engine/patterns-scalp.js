@@ -1,44 +1,44 @@
 /**
- * Scalping pattern detection engine.
- * Optimized for 1m candles, 5-10 min hold times, 9:30-11:00 AM window.
+ * Scalping pattern detection — "Hot Mover Pullback" strategy.
  *
- * Patterns (7 scalp-specific):
- *  1. VWAP Breakout/Rejection — institutional anchor cross
- *  2. Micro Momentum Burst — 2-3 consecutive directional candles + volume
- *  3. Opening Range Breakout (ORB) — first 10-15 bar range break
- *  4. EMA Crossover (5/13) — short-term trend change
- *  5. Volume Climax Reversal — exhaustion bar + reversal
- *  6. Previous Day High/Low Breakout — key institutional levels
- *  7. Micro Double Bottom/Top — support/resistance confirmation
+ * Strategy rationale (from empirical April 2026 backtest):
+ *   Pure ORB breakouts on small caps fail because small caps whipsaw
+ *   aggressively around the 9:15-9:30 range. Most "breakouts" are fades.
+ *   What DID work on winning days (Apr 2, 6, 10) was chasing stocks that
+ *   were ALREADY moving with conviction and entering on small pullbacks.
  *
- * All patterns require volume factor >= 1.3× (no signal without volume).
+ * The single pattern fired by this module:
+ *
+ *   HOT MOVER PULLBACK CONTINUATION
+ *
+ * Setup for LONG:
+ *   1. Past 09:30 (barIndex >= 15)
+ *   2. Stock is up >= 1% from the session open (meaningful move)
+ *   3. Stock is outperforming the index by >= 0.5% (relative strength)
+ *   4. Current price is within 0.4% of the 20-VWAP (a pullback, not a peak)
+ *   5. Current bar is bullish (close > open, close > prev close)
+ *   6. Current bar has above-average volume (>= 1.3x)
+ *   7. EMA5 > EMA13 (trend still intact after pullback)
+ *   8. Index direction not bearish
+ *   9. Not at the session high (within 0.1%)
+ *
+ * SHORT is the mirror: stock down >= 1%, underperforming index, pullback
+ * to VWAP from below, bearish candle, etc.
+ *
+ * Why this works (in theory):
+ *   - Filters to stocks WITH momentum (already moved 1%+)
+ *   - Entry on pullback — not buying the top
+ *   - VWAP as the pullback anchor (institutional reference)
+ *   - Relative strength = the stock is the strongest in its peer group today
+ *   - Multiple confirmations prevent false signals
  */
 
-function body(c) { return Math.abs(c.c - c.o); }
-function range(c) { return c.h - c.l; }
-function isBull(c) { return c.c >= c.o; }
-
-function rsi(candles, period = 14) {
-  if (candles.length < period + 1) return null;
-  let avgGain = 0, avgLoss = 0;
-  for (let i = candles.length - period; i < candles.length; i++) {
-    const change = candles[i].c - candles[i - 1].c;
-    if (change > 0) avgGain += change;
-    else avgLoss += Math.abs(change);
-  }
-  avgGain /= period;
-  avgLoss /= period;
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
-}
-
-function ema(candles, period, field = 'c') {
+function ema(candles, period) {
   if (candles.length < period) return null;
   const k = 2 / (period + 1);
-  let val = candles[0][field];
+  let val = candles[0].c;
   for (let i = 1; i < candles.length; i++) {
-    val = candles[i][field] * k + val * (1 - k);
+    val = candles[i].c * k + val * (1 - k);
   }
   return val;
 }
@@ -54,176 +54,136 @@ function vwapProxy(candles, n = 20) {
   return sumV > 0 ? sumPV / sumV : null;
 }
 
-function volFactor(candles, n) {
-  const vols = candles.slice(Math.max(0, n - 11), n - 1).map(c => c.v || 0);
-  if (!vols.length) return 1;
-  const avg = vols.reduce((a, b) => a + b, 0) / vols.length;
+function volFactor(candles) {
+  const n = candles.length;
+  if (n < 11) return 1;
+  const refVols = candles.slice(n - 11, n - 1).map(c => c.v || 0);
+  const avg = refVols.reduce((a, b) => a + b, 0) / refVols.length;
   if (avg <= 0) return 1;
-  // Use max of current vol and recent 3-bar avg (Yahoo 1m last candle often has 0 volume)
-  const recent3 = candles.slice(Math.max(0, n - 4), n - 1).map(c => c.v || 0);
-  const recent3avg = recent3.length ? recent3.reduce((a, b) => a + b, 0) / recent3.length : 0;
-  const effectiveVol = Math.max(candles[n - 1].v || 0, recent3avg);
-  return Math.min(3, effectiveVol / avg);
-}
-
-function avgBody(candles, lookback = 10) {
-  const slice = candles.slice(-lookback - 1, -1);
-  if (!slice.length) return 1;
-  return slice.reduce((s, c) => s + body(c), 0) / slice.length || 1;
+  const tail3 = candles.slice(Math.max(0, n - 4), n - 1).map(c => c.v || 0);
+  const tail3avg = tail3.length ? tail3.reduce((a, b) => a + b, 0) / tail3.length : 0;
+  const effective = Math.max(candles[n - 1].v || 0, tail3avg);
+  return effective / avg;
 }
 
 /**
- * @param {Array} candles — full candle array (prior days + current day bars seen so far)
- * @param {{ barIndex?: number, prevDayHigh?: number, prevDayLow?: number, orbHigh?: number, orbLow?: number }} [opts]
+ * @param {Array} candles — full candle array (prior days + current day so far)
+ * @param {{
+ *   barIndex?: number,
+ *   orbHigh?: number, orbLow?: number,
+ *   prevDayHigh?: number, prevDayLow?: number,
+ *   indexDirection?: { direction, strength, intradayPct? },
+ * }} [opts]
  */
 export function detectPatterns(candles, opts) {
-  if (!candles?.length || candles.length < 15) return [];
+  if (!candles?.length || candles.length < 20) return [];
 
   const n = candles.length;
   const cur = candles[n - 1];
   const prev = candles[n - 2];
-  const patterns = [];
-  const vf = volFactor(candles, n);
+  const barIndex = opts?.barIndex ?? n;
 
-  // Require above-average volume
-  if (vf < 1.0) return [];
+  // Gate 1: trading window — 09:45 to 10:15 on 1m.
+  // Skip first 15 min (opening chop) and last 45 min (not enough room
+  // for a 1% target to hit before the 11:00 hard close).
+  // Effective window: bars 15..60 on 1m (09:45 to 10:15 from 9:15 start).
+  // From the CLI sim's perspective (barIdx 0 = 9:30), this is barIdx 0..45.
+  // But we measure barIndex from simulateDay which is window-relative —
+  // so 0 = first window bar. Window is 9:30-11:00 = 90 bars. We allow
+  // entries in bars 0..45 which is 9:30-10:15.
+  if (barIndex > 45) return [];
 
-  const ab = avgBody(candles, 10);
+  // Gate 2: stock intraday move — be STRONG. Must be 1.5%+ from open.
+  const dayOpen = opts?.stockDayOpen != null
+    ? opts.stockDayOpen
+    : (candles[Math.max(0, n - barIndex - 15)]?.o || cur.c);
+  const stockIntraPct = (cur.c - dayOpen) / dayOpen;
+
+  // Gate 3: index direction + RS
+  const idxDir = opts?.indexDirection || null;
+  const idxIntraPct = idxDir?.intradayPct ?? 0;
+
+  // Gate 4: index must be clearly trending (not chop). Skip day if not.
+  // The pre-window move is a reliable day-regime proxy; if it's < 0.2%
+  // either way, the day is likely chop and scalping fails.
+  if (idxDir?.preWindowMove == null) return [];
+  const absPreMove = Math.abs(idxDir.preWindowMove);
+  if (absPreMove < 0.002) return []; // 0.2% threshold
+
+  // Gate 5: VWAP anchor
   const vwap = vwapProxy(candles, 20);
+  if (vwap == null) return [];
+  const pullbackPct = Math.abs(cur.c - vwap) / vwap;
 
-  // --- 1. VWAP Breakout/Rejection ---
-  if (vwap && prev) {
-    const prevSide = prev.c > vwap ? 'above' : 'below';
-    const curSide = cur.c > vwap ? 'above' : 'below';
+  // Gate 6: EMA trend
+  const ema5 = ema(candles.slice(-6), 5);
+  const ema13 = ema(candles.slice(-14), 13);
+  if (ema5 == null || ema13 == null) return [];
 
-    // Bullish VWAP breakout: was below, now above
-    if (prevSide === 'below' && curSide === 'above' && cur.c > cur.o) {
-      patterns.push({
-        name: 'VWAP Breakout', direction: 'bullish',
-        strength: Math.min(0.95, 0.65 * Math.min(2, vf)),
-        category: 'vwap', emoji: '📊',
-        tip: 'Price crossed above VWAP with volume — institutional buying',
-        description: 'Price reclaimed VWAP from below with volume confirmation. Strong bullish signal.',
-        reliability: 0.72, candleIndices: [n - 1],
-      });
-    }
-    // Bearish VWAP breakdown
-    if (prevSide === 'above' && curSide === 'below' && cur.c < cur.o) {
-      patterns.push({
-        name: 'VWAP Breakdown', direction: 'bearish',
-        strength: Math.min(0.95, 0.63 * Math.min(2, vf)),
-        category: 'vwap', emoji: '📊',
-        tip: 'Price broke below VWAP with volume — institutional selling',
-        description: 'Price lost VWAP from above with volume confirmation. Strong bearish signal.',
-        reliability: 0.70, candleIndices: [n - 1],
-      });
-    }
+  // Gate 7: volume — require strong confirmation (1.5x vs 1.3x earlier)
+  const vf = volFactor(candles);
+  if (vf < 1.5) return [];
+
+  // Session extremes — don't chase the top/bottom of the day
+  const sessionLen = Math.max(1, barIndex + 15);
+  const session = candles.slice(-sessionLen);
+  const sessionHigh = Math.max(...session.map(c => c.h));
+  const sessionLow = Math.min(...session.map(c => c.l));
+
+  // ─── LONG setup ───
+  // Strict: stock up 1.5%+, RS 0.8%+, NIFTY trending up, pullback to VWAP.
+  const longConditions =
+    stockIntraPct >= 0.015 &&                         // up 1.5%+ on the day
+    (stockIntraPct - idxIntraPct) >= 0.008 &&         // RS >= 0.8%
+    idxDir?.preWindowMove > 0.002 &&                  // NIFTY must be bullish on opening move
+    pullbackPct <= 0.003 &&                           // within 0.3% of VWAP (tighter pullback)
+    cur.c > vwap &&                                   // above VWAP
+    cur.c >= cur.o &&                                 // bullish bar
+    cur.c > prev.c &&                                 // upticking
+    ema5 > ema13 &&                                   // trend intact
+    cur.c < sessionHigh * 0.997;                      // not within 0.3% of session high
+
+  if (longConditions) {
+    const rs = stockIntraPct - idxIntraPct;
+    return [{
+      name: 'Strong Momo Pullback (Long)',
+      direction: 'bullish',
+      strength: Math.min(0.95, 0.80 + Math.min(0.10, rs * 5) + Math.min(0.05, (vf - 1.5) * 0.1)),
+      category: 'momentum',
+      emoji: '🔥',
+      tip: 'Strong leader pulled back to VWAP, resuming with volume',
+      description: `Day +${(stockIntraPct * 100).toFixed(1)}%, RS +${(rs * 100).toFixed(2)}%, vol ${vf.toFixed(1)}x`,
+      reliability: 0.80,
+      candleIndices: [n - 1],
+    }];
   }
 
-  // --- 2. Opening Range Breakout (ORB) ---
-  if (opts?.orbHigh != null && opts?.orbLow != null) {
-    const orbRange = opts.orbHigh - opts.orbLow;
-    if (orbRange > 0) {
-      if (cur.c > opts.orbHigh && cur.c > cur.o && body(cur) > orbRange * 0.3) {
-        patterns.push({
-          name: 'ORB Breakout (Bull)', direction: 'bullish',
-          strength: Math.min(0.95, 0.70 * Math.min(2, vf)),
-          category: 'orb', emoji: '🔓',
-          tip: 'Price broke above opening range — strong directional move',
-          description: `Price broke above the opening range high (${opts.orbHigh.toFixed(1)}) with conviction.`,
-          reliability: 0.75, candleIndices: [n - 1],
-        });
-      }
-      if (cur.c < opts.orbLow && cur.c < cur.o && body(cur) > orbRange * 0.3) {
-        patterns.push({
-          name: 'ORB Breakdown (Bear)', direction: 'bearish',
-          strength: Math.min(0.95, 0.68 * Math.min(2, vf)),
-          category: 'orb', emoji: '🔓',
-          tip: 'Price broke below opening range — selling pressure',
-          description: `Price broke below the opening range low (${opts.orbLow.toFixed(1)}) with conviction.`,
-          reliability: 0.73, candleIndices: [n - 1],
-        });
-      }
-    }
+  // ─── SHORT setup ───
+  const shortConditions =
+    stockIntraPct <= -0.015 &&                        // down 1.5%+ on the day
+    (idxIntraPct - stockIntraPct) >= 0.008 &&         // RS <= -0.8%
+    idxDir?.preWindowMove < -0.002 &&                 // NIFTY must be bearish on opening move
+    pullbackPct <= 0.003 &&                           // within 0.3% of VWAP
+    cur.c < vwap &&                                   // below VWAP
+    cur.c <= cur.o &&                                 // bearish bar
+    cur.c < prev.c &&                                 // ticking down
+    ema5 < ema13 &&                                   // downtrend intact
+    cur.c > sessionLow * 1.003;                       // not within 0.3% of session low
+
+  if (shortConditions) {
+    const rs = idxIntraPct - stockIntraPct;
+    return [{
+      name: 'Strong Momo Pullback (Short)',
+      direction: 'bearish',
+      strength: Math.min(0.95, 0.80 + Math.min(0.10, rs * 5) + Math.min(0.05, (vf - 1.5) * 0.1)),
+      category: 'momentum',
+      emoji: '❄️',
+      tip: 'Strong loser bounced into VWAP, rolling over with volume',
+      description: `Day ${(stockIntraPct * 100).toFixed(1)}%, RS -${(rs * 100).toFixed(2)}%, vol ${vf.toFixed(1)}x`,
+      reliability: 0.80,
+      candleIndices: [n - 1],
+    }];
   }
 
-  // --- 4. Volume Climax Reversal (lower reliability — counter-trend) ---
-  if (n >= 3 && vf >= 2.5) {
-    if (isBull(prev) && !isBull(cur) && body(cur) > ab * 0.8) {
-      patterns.push({
-        name: 'Volume Climax Reversal (Bear)', direction: 'bearish',
-        strength: Math.min(0.90, 0.65 * Math.min(2, vf / 2)),
-        category: 'volume-climax', emoji: '💥',
-        tip: 'Extreme volume exhaustion — buyers done, reversal likely',
-        description: 'Massive volume spike followed by bearish reversal.',
-        reliability: 0.55, candleIndices: [n - 2, n - 1],
-      });
-    }
-    if (!isBull(prev) && isBull(cur) && body(cur) > ab * 0.8) {
-      patterns.push({
-        name: 'Volume Climax Reversal (Bull)', direction: 'bullish',
-        strength: Math.min(0.90, 0.65 * Math.min(2, vf / 2)),
-        category: 'volume-climax', emoji: '💥',
-        tip: 'Extreme volume exhaustion — sellers done, bounce likely',
-        description: 'Massive volume spike followed by bullish reversal.',
-        reliability: 0.55, candleIndices: [n - 2, n - 1],
-      });
-    }
-  }
-
-  // --- 6. Previous Day High/Low Breakout (lower reliability) ---
-  if (opts?.prevDayHigh != null && opts?.prevDayLow != null) {
-    if (cur.c > opts.prevDayHigh && cur.c > cur.o) {
-      patterns.push({
-        name: 'Prev Day High Break', direction: 'bullish',
-        strength: Math.min(0.92, 0.68 * Math.min(2, vf)),
-        category: 'prev-day', emoji: '📈',
-        tip: 'Broke above yesterday\'s high — fresh buying',
-        description: `Price exceeded previous day high (${opts.prevDayHigh.toFixed(1)}).`,
-        reliability: 0.55, candleIndices: [n - 1],
-      });
-    }
-    if (cur.c < opts.prevDayLow && cur.c < cur.o) {
-      patterns.push({
-        name: 'Prev Day Low Break', direction: 'bearish',
-        strength: Math.min(0.92, 0.66 * Math.min(2, vf)),
-        category: 'prev-day', emoji: '📉',
-        tip: 'Broke below yesterday\'s low — fresh selling',
-        description: `Price broke below previous day low (${opts.prevDayLow.toFixed(1)}).`,
-        reliability: 0.55, candleIndices: [n - 1],
-      });
-    }
-  }
-
-  // --- 7. Breakout Retest (lower reliability) ---
-  if (n >= 15) {
-    const lookback = candles.slice(-15, -3);
-    const recentHigh = Math.max(...lookback.map(c => c.h));
-    const recentLow = Math.min(...lookback.map(c => c.l));
-    const prev2 = candles[n - 3];
-    const prev1 = candles[n - 2];
-    if (prev2.c > recentHigh && prev1.l <= recentHigh * 1.002 && cur.c > recentHigh && isBull(cur)) {
-      patterns.push({
-        name: 'Breakout Retest (Bull)', direction: 'bullish',
-        strength: Math.min(0.92, 0.65 * Math.min(2, vf)),
-        category: 'breakout-retest', emoji: '🔁',
-        tip: 'Broke resistance, retested, now bouncing',
-        description: 'Classic breakout-retest-continuation.',
-        reliability: 0.55, candleIndices: [n - 3, n - 2, n - 1],
-      });
-    }
-    if (prev2.c < recentLow && prev1.h >= recentLow * 0.998 && cur.c < recentLow && !isBull(cur)) {
-      patterns.push({
-        name: 'Breakout Retest (Bear)', direction: 'bearish',
-        strength: Math.min(0.92, 0.63 * Math.min(2, vf)),
-        category: 'breakout-retest', emoji: '🔁',
-        tip: 'Broke support, retested, now rejecting',
-        description: 'Classic breakdown-retest-continuation.',
-        reliability: 0.55, candleIndices: [n - 3, n - 2, n - 1],
-      });
-    }
-  }
-
-  patterns.sort((a, b) => b.strength - a.strength);
-  return patterns;
+  return [];
 }
