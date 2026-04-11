@@ -1,18 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { fetchOHLCV } from './engine/fetcher.js';
-import { fetchLiveGoogleNewsDetailForSymbol } from './engine/marketContextLive.js';
-import { classifyNewsSentiment } from './engine/marketContext.js';
-import { detectPatterns as detectPatternsClassic } from './engine/patterns-classic.js';
-import { detectLiquidityBox as detectLiquidityBoxClassic } from './engine/liquidityBox-classic.js';
-import { computeRiskScore as computeRiskScoreClassic } from './engine/risk-classic.js';
-import { detectPatterns as detectPatternsV2 } from './engine/patterns-v2.js';
-import { detectLiquidityBox as detectLiquidityBoxV2 } from './engine/liquidityBox-v2.js';
-import { computeRiskScore as computeRiskScoreV2 } from './engine/risk-v2.js';
-import { detectPatterns as detectPatternsScalp } from './engine/patterns-scalp.js';
-import { detectLiquidityBox as detectLiquidityBoxScalp } from './engine/liquidityBox-scalp.js';
-import { computeRiskScore as computeRiskScoreScalp } from './engine/risk-scalp.js';
-import { getScalpVariantFns, DEFAULT_SCALP_VARIANT } from './engine/scalp-variants/registry.js';
-import { getIndexDirection } from './engine/indexDirection.js';
+import { DEFAULT_SCALP_VARIANT } from './engine/scalp-variants/registry.js';
+import { useStockScan } from './hooks/useStockScan.js';
+import { useIndexUniverse } from './hooks/useIndexUniverse.js';
+import { useAppView } from './hooks/useAppView.js';
 import Header from './components/Header.jsx';
 import TimeframePills, { SOURCE_TIMEFRAMES } from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
@@ -31,14 +21,7 @@ import SettingsPage from './components/SettingsPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { getMarketStatus } from './utils/marketHours.js';
-import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices, addCustomIndex, removeCustomIndex, getAllIndexOptions, getBuiltInIndexOptions } from './config/nseIndices.js';
-import { hasGateToken, getGateToken } from './utils/batchAuth.js';
-import { getVaultBlob, hasVault, clearVault } from './utils/credentialVault.js';
-import { fetchZerodhaOHLCV } from './engine/zerodhaFetcher.js';
-import { fetchDhanOHLCV } from './engine/dhanFetcher.js';
-import { SIGNAL_CATEGORIES, APPROX_PATTERN_RULES, getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
-import { fetchNseIndexSymbolList, fetchNseIndexWithNames } from './engine/nseIndexFetch.js';
-import { fetchYahooQuote } from './engine/yahooQuote.js';
+import { getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { isDynamicIndex } from './data/dynamicIndices.js';
 
 function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
@@ -64,31 +47,7 @@ function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
   );
 }
 
-// Categories are engine-dependent — initialized after engineVersion state
-
-const NSE_SYM_CACHE_PREFIX = 'candlescan_nse_syms_v1_';
-const NSE_SYM_CACHE_MS = 45 * 60 * 1000;
-
-function readNseSymsCache(indexId) {
-  try {
-    const raw = sessionStorage.getItem(NSE_SYM_CACHE_PREFIX + indexId);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    const { t, syms, companyMap: cm } = parsed;
-    if (!Array.isArray(syms) || Date.now() - t > NSE_SYM_CACHE_MS) return null;
-    return { syms, companyMap: cm || {} };
-  } catch {
-    return null;
-  }
-}
-
-function writeNseSymsCache(indexId, syms, companyMap) {
-  try {
-    sessionStorage.setItem(NSE_SYM_CACHE_PREFIX + indexId, JSON.stringify({ t: Date.now(), syms, companyMap }));
-  } catch {
-    /* quota */
-  }
-}
+// Session-cache helpers for index constituents are owned by useIndexUniverse.
 
 const shell = {
   minHeight: '100vh',
@@ -129,91 +88,39 @@ export default function App() {
     } catch { return '5m'; }
   });
   const [inputVal, setInputVal] = useState('');
-  const [sym, setSym] = useState('');
-  const [companyName, setCompanyName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [simulated, setSimulated] = useState(false);
-  const [scanError, setScanError] = useState('');
-  const [candles, setCandles] = useState([]);
-  const [patterns, setPatterns] = useState([]);
-  const [box, setBox] = useState(null);
-  const [risk, setRisk] = useState(null);
-  const [lastScan, setLastScan] = useState('');
-  const [yahooSym, setYahooSym] = useState('');
-  const [quote, setQuote] = useState(null);
-  // Lazy-prefetch state: increases when the user scrolls near the left edge.
-  // Reset on every fresh scan in runScan() so a new symbol starts at level 0.
-  const [lookbackLevel, setLookbackLevel] = useState(0);
-  const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
-  // Per-stock news for the detail screen — fetched async after a scan,
-  // independent of the technical pipeline. Shape matches batchScan result:
-  // { score, sentiment, headlines: [{title, description, score, source}] }.
-  const [stockNews, setStockNews] = useState(null);
-  const [stockNewsLoading, setStockNewsLoading] = useState(false);
-  const stockNewsReqIdRef = useRef(0);
-  const activeSymRef = useRef('');
   const chartRef = useRef(null);
   const [chartInfo, setChartInfo] = useState({ barCount: 0, atMinZoom: false, atMaxZoom: false });
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
+  const [drawingMode, setDrawingMode] = useState(null);
+  const [drawingsMap, setDrawingsMap] = useState({});
+  const [highlightSignals, setHighlightSignals] = useState(true);
 
   const [dataSource, setDataSourceState] = useState(() => {
     try { return localStorage.getItem('candlescan_data_source') || 'yahoo'; } catch { return 'yahoo'; }
   });
-  const [zerodhaExpiredMsg, setZerodhaExpiredMsg] = useState('');
-  const [lastUsedSource, setLastUsedSource] = useState('yahoo');
-  const [sourceDebugReason, setSourceDebugReason] = useState('');
 
-  const [nseIndex, setNseIndex] = useState(() => {
-    try {
-      const s = localStorage.getItem('candlescan_nse_index');
-      if (s && getAllIndexOptions().some((o) => o.id === s)) return s;
-    } catch {
-      /* ignore */
-    }
-    return DEFAULT_NSE_INDEX_ID;
-  });
-  const [customIndices, setCustomIndices] = useState(() => getCustomIndices());
-  // Use getBuiltInIndexOptions() so TOP GAINERS/LOSERS labels reflect live market state.
-  // Recomputed on every render — cheap, keeps labels fresh as the market opens/closes.
-  const allIndexOptions = [...getBuiltInIndexOptions(), ...customIndices];
+  // Index universe: nseIndex + constituents + broad search universe + custom indices
+  const {
+    nseIndex, setNseIndex,
+    customIndices, allIndexOptions,
+    handleAddCustomIndex, handleRemoveCustomIndex,
+    constituents, constituentsLoading, constituentsError, companyMap,
+    broadSearchSymbols, setBroadSearchSymbols,
+    broadCompanyMap, setBroadCompanyMap,
+    refreshIndex,
+  } = useIndexUniverse();
 
-  const handleAddCustomIndex = useCallback((id) => {
-    const updated = addCustomIndex(id);
-    setCustomIndices(updated);
-  }, []);
-
-  const handleRemoveCustomIndex = useCallback((id) => {
-    const updated = removeCustomIndex(id);
-    setCustomIndices(updated);
-    if (nseIndex === id) setNseIndex(DEFAULT_NSE_INDEX_ID);
-  }, [nseIndex]);
-
-  const [constituents, setConstituents] = useState([]);
-  const [constituentsLoading, setConstituentsLoading] = useState(false);
-  const [constituentsError, setConstituentsError] = useState('');
-  const [companyMap, setCompanyMap] = useState({}); // SYMBOL → "Company Name"
-  const [broadSearchSymbols, setBroadSearchSymbols] = useState([]); // NIFTY 500 symbols for global search
-  const [broadCompanyMap, setBroadCompanyMap] = useState({}); // NIFTY 500 company map
-  const [refreshKey, setRefreshKey] = useState(0); // Bump to force re-fetch constituents
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  // Signal filter state
+  // Signal filter state (depends on engineVersion, so lives in App)
   const [activeFilters, setActiveFilters] = useState(() => new Set(getCategoriesForEngine(engineVersion)));
 
-  // Signal highlight toggle
-  const [highlightSignals, setHighlightSignals] = useState(true);
-
-  // View state: 'main' | 'batch' | 'simulate' | 'paper' | 'novice' | 'settings'
-  // Auto-navigate to settings if returning from Zerodha OAuth callback
-  const [view, setViewRaw] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('request_token') && params.get('action') === 'login') return 'settings';
-    return 'main';
-  });
-  const [cameFromBatch, setCameFromBatch] = useState(false);
-  const [cameFromSimulation, setCameFromSimulation] = useState(false);
-  // Remember the view the user was on before entering Settings so "Back"
-  // returns there instead of always jumping to the stock scanner.
-  const [settingsReturnView, setSettingsReturnView] = useState('main');
+  // View routing + back-button handling
+  const {
+    view, setView,
+    cameFromBatch, setCameFromBatch,
+    cameFromSimulation, setCameFromSimulation,
+    settingsReturnView, setSettingsReturnView,
+  } = useAppView();
 
   // Re-sync dataSource from localStorage when returning from Settings or on page reload
   useEffect(() => {
@@ -232,412 +139,31 @@ export default function App() {
     }
   }, [view]);
 
-  const lastBackTime = useRef(0);
-  const viewRef = useRef('main'); // track current view for popstate handler
+  // When the stock scan discovers a new symbol, grow the broad
+  // autocomplete universe so the next search picks it up.
+  const handleDiscoverSymbol = useCallback((symbol, name) => {
+    if (broadCompanyMap[symbol]) return;
+    setBroadSearchSymbols(prev => prev.includes(symbol) ? prev : [...prev, symbol]);
+    setBroadCompanyMap(prev => ({ ...prev, [symbol]: name }));
+  }, [broadCompanyMap, setBroadSearchSymbols, setBroadCompanyMap]);
 
-  // Simple navigation: back always goes to home, double-back exits app.
-  // No history stack — replaceState, not pushState.
-  const setView = useCallback((newView) => {
-    viewRef.current = newView;
-    setViewRaw(newView);
-    // Push one entry when leaving home so back button can return to home
-    if (newView !== 'main') {
-      window.history.pushState({ view: 'non-main' }, '', '');
-    }
-  }, []);
-
-  useEffect(() => {
-    window.history.replaceState({ view: 'main' }, '', '');
-
-    const onPopState = () => {
-      if (viewRef.current !== 'main') {
-        // On any non-home page → go straight to home (not previous page)
-        viewRef.current = 'main';
-        setViewRaw('main');
-        setCameFromBatch(false);
-        setCameFromSimulation(false);
-        // Ensure we stay at single history entry
-        window.history.replaceState({ view: 'main' }, '', '');
-      } else {
-        // Already on home — double-back within 2s to exit
-        const now = Date.now();
-        if (now - lastBackTime.current < 2000) {
-          // Let browser close the PWA
-          window.history.back();
-          return;
-        }
-        lastBackTime.current = now;
-        // Re-push so next back press can be caught
-        window.history.pushState({ view: 'home-guard' }, '', '');
-      }
-    };
-
-    // Push one entry as guard for the home double-back
-    window.history.pushState({ view: 'home-guard' }, '', '');
-
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, []);
-  const [debugMode, setDebugMode] = useState(false);
-
-  // Drawing tool state
-  const [drawingMode, setDrawingMode] = useState(null);
-  const [drawingsMap, setDrawingsMap] = useState({});
-
-  // History with localStorage persistence
-  const [history, setHistory] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('candlescan_history') || '[]');
-      return Array.isArray(saved) ? saved.slice(0, 10) : [];
-    } catch {
-      return [];
-    }
+  // Stock scan pipeline (runScan, candles, patterns, box, risk,
+  // quote, news, history, lazy-prefetch, source fallback chain)
+  const {
+    sym, companyName, activeSymRef,
+    candles, patterns, box, risk,
+    loading, simulated, scanError, lastScan,
+    yahooSym, lastUsedSource, sourceDebugReason,
+    zerodhaExpiredMsg, setZerodhaExpiredMsg,
+    quote, stockNews, stockNewsLoading,
+    lookbackLevel, loadingMoreHistory,
+    runScan, handleLoadMoreHistory,
+    history, setHistory,
+  } = useStockScan({
+    dataSource, setDataSourceState,
+    engineVersion, scalpVariant, timeframe, nseIndex,
+    onDiscoverSymbol: handleDiscoverSymbol,
   });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('candlescan_history', JSON.stringify(history));
-    } catch { /* quota exceeded */ }
-  }, [history]);
-
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('candlescan_nse_index', nseIndex);
-    } catch {
-      /* quota */
-    }
-  }, [nseIndex]);
-
-  // Pre-fetch NIFTY TOTAL MARKET (~750 stocks) for broad search universe
-  const SEARCH_UNIVERSE_KEY = '__SEARCH_UNIVERSE__';
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const cached = readNseSymsCache(SEARCH_UNIVERSE_KEY);
-      if (cached?.syms?.length) {
-        setBroadSearchSymbols(cached.syms);
-        setBroadCompanyMap(cached.companyMap || {});
-        return;
-      }
-      try {
-        const result = await fetchNseIndexWithNames('NIFTY TOTAL MARKET');
-        if (!cancelled && result.symbols.length) {
-          setBroadSearchSymbols(result.symbols);
-          setBroadCompanyMap(result.companyMap || {});
-          writeNseSymsCache(SEARCH_UNIVERSE_KEY, result.symbols, result.companyMap);
-        }
-      } catch { /* silent — fallback to current index */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      // Skip sessionStorage cache for dynamic indices (auto-refreshing)
-      if (!isDynamicIndex(nseIndex)) {
-        const cached = readNseSymsCache(nseIndex);
-        if (cached?.syms?.length) {
-          setConstituents(cached.syms);
-          setCompanyMap(cached.companyMap || {});
-          setConstituentsError('');
-          setConstituentsLoading(false);
-          return;
-        }
-      }
-      // Don't show loading/clear for auto-refresh of dynamic indices
-      const isAutoRefresh = isDynamicIndex(nseIndex) && constituents.length > 0;
-      if (!isAutoRefresh) {
-        setConstituentsLoading(true);
-        setConstituentsError('');
-        setConstituents([]);
-      }
-      try {
-        const result = await fetchNseIndexWithNames(nseIndex);
-        if (!cancelled) {
-          setConstituents(result.symbols);
-          setCompanyMap(result.companyMap || {});
-          writeNseSymsCache(nseIndex, result.symbols, result.companyMap);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setConstituentsError(e?.message || 'Could not load NSE index.');
-          setConstituents([]);
-        }
-      } finally {
-        if (!cancelled) setConstituentsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [nseIndex, refreshKey]);
-
-  // Auto-refresh dynamic indices (Top Gainers/Losers) every 30 seconds
-  useEffect(() => {
-    if (!isDynamicIndex(nseIndex)) return;
-    const interval = setInterval(() => setRefreshKey(k => k + 1), 30000);
-    return () => clearInterval(interval);
-  }, [nseIndex]);
-
-  const runScan = useCallback(async (symbol) => {
-    const s = String(symbol).trim();
-    if (!s) return;
-    setLoading(true);
-    setScanError('');
-    setQuote(null);
-    setZerodhaExpiredMsg('');
-    // Fresh scan → reset lazy prefetch state so the next left-edge
-    // scroll starts from level 0 again.
-    setLookbackLevel(0);
-    // Fresh scan → clear any stale news from the previous symbol and
-    // reset the in-flight ID so late responses from an old scan can't
-    // land on the new view.
-    setStockNews(null);
-    setStockNewsLoading(false);
-    const newsReqId = ++stockNewsReqIdRef.current;
-    try {
-      let result;
-      let usedSource = dataSource;
-      let debugReason = '';
-
-      // Try Zerodha first if configured
-      if (dataSource === 'zerodha') {
-        if (!hasVault()) {
-          usedSource = 'yahoo';
-          debugReason = `Setting=zerodha but no vault in localStorage`;
-        } else {
-          const vault = getVaultBlob();
-          const gateToken = getGateToken();
-          if (!vault || !gateToken) {
-            usedSource = 'yahoo';
-            debugReason = `Setting=zerodha, vault=${!!vault}, gateToken=${!!gateToken} — missing credentials`;
-          } else {
-            debugReason = `Setting=zerodha, vault=yes, gateToken=yes — calling Zerodha API`;
-            result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
-            if (result.error) {
-              const err = result.error;
-              // Token actually expired/invalid — clear vault and switch source
-              const isTokenExpiry = /TokenException|Incorrect.*api_key|token.*invalid|token.*expired/i.test(err);
-              // Permission error (e.g. no Historical Data add-on) — DON'T clear vault
-              const isPermission = /Insufficient permission|permission denied/i.test(err);
-
-              if (isTokenExpiry) {
-                clearVault();
-                try { localStorage.setItem('candlescan_data_source', 'yahoo'); } catch { /* ok */ }
-                setDataSourceState('yahoo');
-                setZerodhaExpiredMsg('Zerodha token expired — switched to Yahoo Finance. Reconnect in Settings.');
-                debugReason += ` → token expired: ${err} → cleared vault, fallback Yahoo`;
-              } else if (isPermission) {
-                setZerodhaExpiredMsg('Zerodha: Historical data permission missing. Using Yahoo Finance. Enable the Historical Data add-on in your Kite Connect app.');
-                debugReason += ` → permission error: ${err} → fallback Yahoo (vault kept)`;
-              } else {
-                debugReason += ` → error: ${err} → fallback Yahoo`;
-              }
-              result = null;
-              usedSource = 'yahoo';
-            } else {
-              debugReason += ` → success (${result.candles?.length || 0} candles)`;
-            }
-          }
-        }
-      } else if (dataSource === 'dhan') {
-        if (!hasVault()) {
-          usedSource = 'yahoo';
-          debugReason = `Setting=dhan but no vault in localStorage`;
-        } else {
-          const vault = getVaultBlob();
-          const gateToken = getGateToken();
-          if (!vault || !gateToken) {
-            usedSource = 'yahoo';
-            debugReason = `Setting=dhan, vault=${!!vault}, gateToken=${!!gateToken} — missing credentials`;
-          } else {
-            debugReason = `Setting=dhan, vault=yes, gateToken=yes — calling Dhan API`;
-            result = await fetchDhanOHLCV(s, timeframe, { vault, gateToken });
-            if (result.error) {
-              debugReason += ` → error: ${result.error} → fallback Yahoo`;
-              result = null;
-              usedSource = 'yahoo';
-            } else {
-              debugReason += ` → success (${result.candles?.length || 0} candles)`;
-            }
-          }
-        }
-      } else {
-        debugReason = `Setting=yahoo`;
-      }
-
-      // Fallback to Yahoo Finance
-      if (!result || (!result.candles?.length && !result.error)) {
-        if (usedSource !== 'yahoo' || !debugReason.includes('fallback')) {
-          debugReason += debugReason ? ' → ' : '';
-          debugReason += 'Using Yahoo Finance';
-        }
-        result = await fetchOHLCV(s, timeframe);
-        usedSource = 'yahoo';
-      }
-
-      const { candles: cd, live: lv, simulated: sim, error: err, companyName: cn, displaySymbol, yahooSymbol } = result;
-
-      activeSymRef.current = displaySymbol;
-      setSym(displaySymbol);
-      setCompanyName(cn || displaySymbol);
-      setYahooSym(yahooSymbol || '');
-      setSimulated(!!sim);
-      setLastUsedSource(usedSource);
-      setSourceDebugReason(debugReason);
-
-      // Grow search universe with newly discovered symbols
-      if (displaySymbol && cn && !broadCompanyMap[displaySymbol]) {
-        setBroadSearchSymbols(prev => prev.includes(displaySymbol) ? prev : [...prev, displaySymbol]);
-        setBroadCompanyMap(prev => ({ ...prev, [displaySymbol]: cn }));
-      }
-
-      if (err || !cd?.length) {
-        setCandles([]);
-        setPatterns([]);
-        setBox(null);
-        setRisk(null);
-        setYahooSym('');
-        setScanError(err || 'No data returned.');
-        setLastScan(new Date().toLocaleTimeString());
-        return;
-      }
-
-      setCandles(cd);
-      let detectPat, detectBox, scoreRisk;
-      if (engineVersion === 'scalp') {
-        const varFns = getScalpVariantFns(scalpVariant);
-        detectPat = varFns.detectPatterns;
-        detectBox = varFns.detectLiquidityBox;
-        scoreRisk = varFns.computeRiskScore;
-      } else if (engineVersion === 'v1') {
-        detectPat = detectPatternsClassic; detectBox = detectLiquidityBoxClassic; scoreRisk = computeRiskScoreClassic;
-      } else {
-        detectPat = detectPatternsV2; detectBox = detectLiquidityBoxV2; scoreRisk = computeRiskScoreV2;
-      }
-
-      // For scalp mode, fetch index direction
-      let idxDir = null;
-      if (engineVersion === 'scalp') {
-        try { idxDir = await getIndexDirection(nseIndex); } catch { /* ignore */ }
-      }
-
-      // Compute ORB + prev day levels for pattern context (same as batchScan)
-      const IST_OFFSET = 19800;
-      const istDateLocal = (t) => new Date((t + IST_OFFSET) * 1000).toISOString().slice(0, 10);
-      const lastDate = istDateLocal(cd[cd.length - 1].t);
-      const todayCandles = cd.filter(c => istDateLocal(c.t) === lastDate);
-      const prevCandles = cd.filter(c => istDateLocal(c.t) < lastDate);
-      const orbBars = todayCandles.slice(0, 15);
-      const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
-      const orbLow = orbBars.length >= 5 ? Math.min(...orbBars.map(c => c.l)) : null;
-      const prevDayHigh = prevCandles.length ? Math.max(...prevCandles.map(c => c.h)) : null;
-      const prevDayLow = prevCandles.length ? Math.min(...prevCandles.map(c => c.l)) : null;
-
-      const pat = detectPat(cd, { barIndex: cd.length, orbHigh, orbLow, prevDayHigh, prevDayLow });
-      const bx = detectBox(cd);
-      const rk = scoreRisk({ candles: cd, patterns: pat, box: bx, opts: { barIndex: cd.length, indexDirection: idxDir } });
-      setPatterns(pat);
-      setBox(bx);
-      setRisk(rk);
-      setLastScan(new Date().toLocaleTimeString());
-
-      // Fire-and-forget async news fetch for this symbol — doesn't block
-      // the scan. When it lands we check newsReqId vs the latest to guard
-      // against late responses overwriting a newer scan's news.
-      setStockNewsLoading(true);
-      fetchLiveGoogleNewsDetailForSymbol(displaySymbol)
-        .then((res) => {
-          if (newsReqId !== stockNewsReqIdRef.current) return;
-          setStockNews({
-            score: res.score,
-            sentiment: classifyNewsSentiment(res.score),
-            headlines: res.headlines || [],
-          });
-        })
-        .catch(() => { /* silent — news is best-effort */ })
-        .finally(() => {
-          if (newsReqId === stockNewsReqIdRef.current) {
-            setStockNewsLoading(false);
-          }
-        });
-      setHistory((h) => {
-        const next = [
-          { symbol: displaySymbol, riskScore: rk.confidence },
-          ...h.filter((x) => x.symbol !== displaySymbol),
-        ];
-        return next.slice(0, 10);
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [timeframe, engineVersion, scalpVariant, nseIndex, dataSource]);
-
-  useEffect(() => {
-    if (simulated || !yahooSym || !risk) {
-      setQuote(null);
-      return undefined;
-    }
-    let cancelled = false;
-    fetchYahooQuote(yahooSym).then((q) => {
-      if (!cancelled) setQuote(q);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [simulated, yahooSym, risk, lastScan]);
-
-  useEffect(() => {
-    if (!activeSymRef.current) return;
-    runScan(activeSymRef.current);
-  }, [timeframe, runScan]);
-
-  /**
-   * Lazy-prefetch more history for the current chart when the user
-   * scrolls near the left edge. Yahoo-only for now: premium sources
-   * (Zerodha / Dhan) use date-range APIs that don't compose cleanly
-   * with a "lookback level" abstraction, and their users rarely hit
-   * the multi-day history limit anyway.
-   *
-   * Merge strategy: fetch a wider range, dedupe the combined set by
-   * timestamp (newer fetch wins), sort ascending. Chart.jsx detects
-   * the prepend (same last-candle ts, grown length) and preserves
-   * the user's scroll position automatically.
-   */
-  const handleLoadMoreHistory = useCallback(async () => {
-    // Only Yahoo supports the `lookbackLevel` option — silently no-op
-    // for premium sources so the user's scroll gesture doesn't hang.
-    if (lastUsedSource !== 'yahoo') return;
-    if (loadingMoreHistory) return;
-    if (!activeSymRef.current) return;
-    const nextLevel = lookbackLevel + 1;
-    // Max level is determined by EXTENDED_LOOKBACKS in fetcher.js.
-    // We let fetcher clamp internally; if the returned candle count
-    // doesn't grow, we treat it as "no more data" and stop.
-    setLoadingMoreHistory(true);
-    try {
-      const res = await fetchOHLCV(activeSymRef.current, timeframe, { lookbackLevel: nextLevel });
-      if (!res?.candles?.length) return;
-      // Merge: dedupe by `t`, keep the newer candle on collisions
-      // (later fetches may revise the most recent bar).
-      const byTs = new Map();
-      for (const c of candles) byTs.set(c.t, c);
-      for (const c of res.candles) byTs.set(c.t, c);
-      const merged = Array.from(byTs.values()).sort((a, b) => a.t - b.t);
-      // Only commit if we actually got more history — otherwise we've
-      // hit Yahoo's range ceiling and should stop trying.
-      if (merged.length > candles.length) {
-        setCandles(merged);
-        setLookbackLevel(nextLevel);
-      }
-    } catch {
-      // Silent: lazy-prefetch failure shouldn't interrupt the scan session
-    } finally {
-      setLoadingMoreHistory(false);
-    }
-  }, [lastUsedSource, loadingMoreHistory, lookbackLevel, timeframe, candles]);
 
   // Merge broad NIFTY 500 universe + current index for homepage search
   const searchSymbols = useMemo(() => {
@@ -1037,7 +563,7 @@ export default function App() {
           onQuick(s);
         }}
         isDynamic={isDynamicIndex(nseIndex)}
-        onRefresh={() => setRefreshKey(k => k + 1)}
+        onRefresh={refreshIndex}
       />
 
       <footer
