@@ -30,6 +30,7 @@ import { readCachedChartJson, writeCachedChartJson, listCachedDates, listCachedS
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
 import { fetchMarginMapNode, MARGIN_MULTIPLIER } from '../src/data/marginData.js';
 import { SECTOR_INDEX_SYMBOLS, getSector } from '../src/engine/sectorMap.js';
+import { vixRegime, classifyGap, liquidityTier, classifyInstitutionalFlow, classifyNewsSentiment, composeContextScore } from '../src/engine/marketContext.js';
 
 const TIMEFRAME_MAP = {
   '1m': { interval: '1m' },
@@ -198,7 +199,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap }) {
   const trades = [];
   const openPositions = [];
   const tradedSymbols = new Set();
@@ -298,6 +299,28 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       // Today's session open = the first candle of the day, 9:15 IST.
       const stockDayOpen = sd.dayCandles[0]?.o || null;
 
+      // ── Per-stock market context (layers 2, 3, 5) ──
+      // Gap: prev day close vs today's open. Both are in the past by
+      // the time we hit 9:30 so this is no-lookahead.
+      const prevClose = sd.priorCandles?.length ? sd.priorCandles[sd.priorCandles.length - 1].c : null;
+      const gapClass = classifyGap(prevClose, stockDayOpen);
+      // Liquidity tier from the stock's avg daily volume (computed during load).
+      const liqTier = liquidityTier(sd.avgVol);
+      // News sentiment (if any cached for this stock on this date).
+      const newsSentScore = newsMap && newsMap[sym] != null ? newsMap[sym] : null;
+      const newsSentClass = classifyNewsSentiment(newsSentScore);
+
+      // Compose the multi-factor context that the engine can consult.
+      // Direction isn't known yet (pattern hasn't fired) so we defer the
+      // direction-specific composition to the risk engine after the pattern fires.
+      const marketContext = {
+        vixRegime: vixReg || null,
+        gap: gapClass,
+        liquidity: liqTier,
+        flow: flowClass || null,
+        sentiment: newsSentClass,
+      };
+
       // ── Sector strength at this bar (no lookahead) ──
       // Look up the stock's sector, find the sector index bar at or
       // before the current stock bar's timestamp, compute the sector's
@@ -328,9 +351,10 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         indexDirection: indexAtBar,
         stockDayOpen,
         sector: sectorAtBar,
+        marketContext,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen, sector: sectorAtBar } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen, sector: sectorAtBar, marketContext } });
 
       if (risk.confidence < MIN_CONFIDENCE) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
@@ -625,6 +649,43 @@ async function main() {
     }
   }
 
+  // ── Market context: VIX + FII/DII + News ────────────────────
+  // Load day-level context signals. Missing data → that layer is
+  // neutral (no boost, no penalty) per marketContext.js contract.
+  let vixClose = null;
+  try {
+    const vixJson = readCachedChartJson('^INDIAVIX', '1d', resolvedDate);
+    if (vixJson) {
+      const p = parseChartJson(vixJson);
+      if (p?.candles?.length) vixClose = p.candles[p.candles.length - 1]?.c;
+    }
+  } catch { /* ignore */ }
+  const vixReg = vixRegime(vixClose);
+
+  // FII/DII net values (if cached)
+  let fiiNet = null, diiNet = null;
+  try {
+    const fs = await import('fs');
+    const flowPath = `cache/flow/${resolvedDate}.json`;
+    if (fs.existsSync(flowPath)) {
+      const flow = JSON.parse(fs.readFileSync(flowPath, 'utf8'));
+      fiiNet = flow.fii; diiNet = flow.dii;
+    }
+  } catch { /* ignore */ }
+  const flowClass = classifyInstitutionalFlow(fiiNet, diiNet);
+
+  // News sentiment map: symbol → score in [-1, +1] (if cached)
+  let newsMap = {};
+  try {
+    const fs = await import('fs');
+    const newsPath = `cache/news/${resolvedDate}.json`;
+    if (fs.existsSync(newsPath)) newsMap = JSON.parse(fs.readFileSync(newsPath, 'utf8'));
+  } catch { /* ignore */ }
+
+  if (vixReg) console.log(`VIX: ${vixClose?.toFixed(2)} (${vixReg} regime)`);
+  if (flowClass) console.log(`FII/DII flow: FII ${fiiNet}cr, DII ${diiNet}cr → ${flowClass}`);
+  if (Object.keys(newsMap).length) console.log(`News sentiment: ${Object.keys(newsMap).length} symbols scored`);
+
   // ── Sector index loading ──────────────────────────────────────
   // Load 1m candles for every NIFTY sector index we know about.
   // Each entry: { candles: [...], dayOpen: number } keyed by sector code.
@@ -658,7 +719,7 @@ async function main() {
     } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData };
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap };
 
   if (multiWindow) {
     // Multi-window mode: run 3 windows sequentially
