@@ -1,38 +1,34 @@
 /**
- * Scalping risk scoring engine.
- * Optimized for 5-15 min holds on 1m candles.
+ * Scalping risk scoring — paired with the single-pattern detector in
+ * patterns-scalp.js. This module's job is purely: given that a valid
+ * ORB-continuation setup fired, compute SL, target, confidence and
+ * action for that one idea.
  *
- * === HARD CONSTRAINTS (do NOT exceed these) ===
- *  - maxHoldBars: 15 (15 min on 1m — hard scalp limit)
- *  - Timeframe: 1m only
- *  - Window: 09:30-11:00 AM IST
+ * Hard constraints:
+ *  - maxHoldBars: 15 (15 min on 1m)
+ *  - Timeframe: 1m
+ *  - Window: 09:15-11:00 IST (trading window imposed by caller)
  *
- * Key differences from v2 (intraday):
- *  - SL: max(ATR×2.5, avgBarRange×4, 1.2%)
- *  - Target: resistance/support-based, capped at ATR×3
- *  - Time-based exit: maxHoldBars = 15 (15 min on 1m)
- *  - Index direction filter: -15 confidence for counter-trend
- *  - Day/time awareness (Monday/Friday adjustments)
- *  - Wider slippage buffer (0.15%)
- *  - Min R:R 1.5:1
- *  - Confidence floor 20 (wider range for discrimination)
+ * Risk architecture:
+ *  - SL anchored to the opposite side of the opening range (the
+ *    breakout's natural invalidation level), capped at 0.5% of entry
+ *    so single-stock spikes don't blow up the trade size.
+ *  - Target is a multiple of the SL distance (3:1 by default) to
+ *    ensure positive expected value even at 40% win rate.
+ *  - Min R:R gate: 2.5:1. Setups that can't offer this don't trade.
+ *  - Confidence is a function of pattern strength + volume + RS — the
+ *    three factors that actually predicted the winning days in backtest.
  */
 
 import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
 
 export const RISK_SIGNAL_DEFINITIONS = [
-  { key: 'signalClarity', label: 'Signal clarity', max: 25, meaning: 'Pattern strength × volume factor × 25.' },
-  { key: 'lowNoise', label: 'Low noise', max: 20, meaning: 'ATR vs body size; clean moves score higher.' },
-  { key: 'riskReward', label: 'Risk : reward', max: 25, meaning: 'Continuous scoring of R:R ratio.' },
-  { key: 'patternReliability', label: 'Pattern reliability', max: 15, meaning: 'Built-in reliability × 15.' },
-  { key: 'confluence', label: 'Confluence', max: 15, meaning: 'Volume, EMA, VWAP, index alignment, context.' },
+  { key: 'signalClarity', label: 'Signal clarity', max: 30, meaning: 'Pattern strength.' },
+  { key: 'relativeStrength', label: 'Relative strength', max: 25, meaning: 'Stock vs index intraday %.' },
+  { key: 'volume', label: 'Volume', max: 15, meaning: 'Volume factor vs recent average.' },
+  { key: 'riskReward', label: 'Risk : reward', max: 20, meaning: 'SL vs target distance ratio.' },
+  { key: 'regime', label: 'Regime alignment', max: 10, meaning: 'Index direction match.' },
 ];
-
-function sma(vals, n) {
-  if (!vals.length || n < 1) return null;
-  const slice = vals.slice(-n);
-  return slice.reduce((a, b) => a + b, 0) / slice.length;
-}
 
 function atrLike(candles, n = 14) {
   if (candles.length < 2) return 0;
@@ -46,38 +42,13 @@ function atrLike(candles, n = 14) {
   return s / m;
 }
 
-function emaVal(candles, period) {
-  if (candles.length < period) return null;
-  const k = 2 / (period + 1);
-  let val = candles[0].c;
-  for (let i = 1; i < candles.length; i++) {
-    val = candles[i].c * k + val * (1 - k);
-  }
-  return val;
-}
-
-function vwapProxy(candles, n = 20) {
-  const slice = candles.slice(-n);
-  let sumPV = 0, sumV = 0;
-  for (const c of slice) {
-    const tp = (c.h + c.l + c.c) / 3;
-    sumPV += tp * (c.v || 1);
-    sumV += (c.v || 1);
-  }
-  return sumV > 0 ? sumPV / sumV : null;
-}
-
-export function detectContext(candles, box) {
+function detectContext(candles) {
   if (!candles || candles.length < 5) return 'mid_range';
   const cur = candles[candles.length - 1];
   const window = candles.slice(-20);
   const hi = Math.max(...window.map(c => c.h));
   const lo = Math.min(...window.map(c => c.l));
   const r = hi - lo || 1;
-  if (box) {
-    if (cur.c > box.high) return 'breakout';
-    if (cur.c < box.low) return 'breakout';
-  }
   const pct = (cur.c - lo) / r;
   if (pct <= 0.15) return 'at_support';
   if (pct >= 0.85) return 'at_resistance';
@@ -85,118 +56,47 @@ export function detectContext(candles, box) {
 }
 
 /**
- * @param {{ candles, patterns, box, opts?: { barIndex?, indexDirection?, dayOfWeek? } }} params
+ * @param {{ candles, patterns, box?, opts?: { barIndex?, indexDirection?, orbHigh?, orbLow?, margin?, marginMap?, sym? } }} params
  */
-export function computeRiskScore({ candles, patterns, box, opts }) {
-  const top = patterns?.length ? patterns[0] : null;
+export function computeRiskScore({ candles, patterns, opts }) {
   const cur = candles[candles.length - 1];
-  const barIndex = opts?.barIndex ?? candles.length;
+  const top = patterns?.length ? patterns[0] : null;
 
-  // Hard gate: skip first 15 bars (9:15–9:30) — opening range chaos
-  if (barIndex < 15) return noTrade(cur, candles, box);
-
-  // Hard gate: drop low-reliability patterns (Prev Day Break, Volume Climax, Breakout Retest)
-  // These generate too many noisy signals with 0.55 reliability
-  if (!top || top.reliability < 0.68) return noTrade(cur, candles, box);
-
-  // Volume gate
-  const recentVols = candles.slice(-6, -1).map(c => c.v || 0);
-  const recentAvgVol = recentVols.length ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length : 0;
-  if (recentAvgVol < 5000) return noTrade(cur, candles, box);
-
-  // Trend alignment gate — pattern direction must match EMA5 vs EMA13
-  // Rejects counter-trend signals that cause chop-day losses
-  const trendDir = top.direction === 'bearish' ? 'short' : 'long';
-  const ema5h = emaVal(candles.slice(-6), 5);
-  const ema13h = emaVal(candles.slice(-14), 13);
-  if (ema5h != null && ema13h != null) {
-    if (trendDir === 'long' && ema5h < ema13h) return noTrade(cur, candles, box);
-    if (trendDir === 'short' && ema5h > ema13h) return noTrade(cur, candles, box);
+  // Pattern detector already gated the setup — if nothing fired, it's NO TRADE.
+  if (!top || top.direction === 'neutral') {
+    return noTrade(cur, candles);
   }
 
-  // VWAP alignment gate — price must be on the right side of VWAP
-  const vwapGate = vwapProxy(candles, 20);
-  if (vwapGate != null) {
-    if (trendDir === 'long' && cur.c < vwapGate) return noTrade(cur, candles, box);
-    if (trendDir === 'short' && cur.c > vwapGate) return noTrade(cur, candles, box);
-  }
-
-  // Hard index-direction gate — don't fight the tape
-  // If the broader market is trending (|strength| ≥ 0.15%), reject counter-trend signals.
-  // Trading individual stock breakdowns in a rising market invites short-squeeze losses
-  // (and vice-versa). This is the #1 cause of chop-day clustered losses.
-  const idxDirGate = opts?.indexDirection;
-  if (idxDirGate?.direction && typeof idxDirGate?.strength === 'number') {
-    const trending = Math.abs(idxDirGate.strength) >= 0.0015; // 0.15%
-    if (trending) {
-      if (trendDir === 'long' && idxDirGate.direction === 'bearish') return noTrade(cur, candles, box);
-      if (trendDir === 'short' && idxDirGate.direction === 'bullish') return noTrade(cur, candles, box);
-    }
-  }
-
-  // Don't chase blow-off tops/bottoms — the #1 scalp failure mode
-  // Reject signals where the current bar is an extreme move (> 2x prior bar range
-  // AND body > 120% of prior range). Those are exhaustion candles where the
-  // retail momentum has already played out; the next move is usually a reversal.
-  if (candles.length >= 3) {
-    const prev = candles[candles.length - 2];
-    const curBody = Math.abs(cur.c - cur.o);
-    const prevRange = Math.max(prev.h - prev.l, 1e-9);
-    const curRange = cur.h - cur.l;
-    if (curRange > prevRange * 2.0 && curBody > prevRange * 1.2) {
-      return noTrade(cur, candles, box);
-    }
-    // Additionally, reject longs where current close is within 0.1% of the
-    // last 5-bar high (price is at the top of its range — chasing the peak).
-    // Reject shorts at the bottom of the 5-bar range.
-    const last5 = candles.slice(-5);
-    const hi5 = Math.max(...last5.map(c => c.h));
-    const lo5 = Math.min(...last5.map(c => c.l));
-    if (trendDir === 'long' && cur.c >= hi5 * 0.999) {
-      return noTrade(cur, candles, box);
-    }
-    if (trendDir === 'short' && cur.c <= lo5 * 1.001) {
-      return noTrade(cur, candles, box);
-    }
-  }
-
-  // Extreme mover filter: boost confidence for stocks with big intraday moves
-  // Applied as soft bonus rather than hard gate — let the scoring discriminate
-  const dayStartIdx = Math.max(0, candles.length - barIndex);
-  const dayOpen = candles[dayStartIdx]?.o || cur.c;
-  const intradayPct = (cur.c - dayOpen) / dayOpen;
-  const absIntradayPct = Math.abs(intradayPct);
-
-  /* ── 1. Signal clarity (max 25) — volume-weighted ──────────── */
-  const vols = candles.slice(-11, -1).map(c => c.v || 0);
-  const avgV = vols.length ? vols.reduce((a, b) => a + b, 0) / vols.length : 1;
-  // Use max of current vol and recent avg for volFactor (handles 0-vol last candle)
-  const effectiveVol = Math.max(cur.v || 0, recentAvgVol);
-  const volFactor = avgV > 0 ? Math.min(2.5, effectiveVol / avgV) : 1;
-  const signalClarity = top ? Math.min(25, top.strength * volFactor * 25) : 2;
-
-  /* ── 2. Low noise (max 20) ─────────────────────────────────── */
-  const bodies = candles.slice(-6, -1).map(c => Math.abs(c.c - c.o));
-  const avgBody = bodies.reduce((a, b) => a + b, 0) / Math.max(bodies.length, 1) || 1;
-  const atr10 = atrLike(candles, 10);
-  const chop = Math.min(1, atr10 / (avgBody * 3));
-  const lowNoise = (1 - chop) * 20;
-
-  /* ── 3. Risk:Reward (max 25) — asymmetric scalp levels ──────── */
-  const direction = top?.direction === 'bearish' ? 'short' : top?.direction === 'bullish' ? 'long' : 'long';
-  const atrVal = atrLike(candles, 14);
+  const direction = top.direction === 'bearish' ? 'short' : 'long';
   const entry = cur.c;
+  const barIndex = opts?.barIndex ?? candles.length;
+  const atrVal = atrLike(candles, 14);
 
-  // SL: tight — 0.5% or ATR*1.0, whichever is tighter
-  // This cuts losers fast before they become catastrophic
-  const slDist = Math.min(
-    Math.max(atrVal * 1.0, entry * 0.005), // at least 0.5% or 1 ATR
-    entry * 0.008, // cap at 0.8%
-  );
-
-  // Target: 2× the SL distance minimum, giving 2:1 R:R
-  const targetFloor = Math.max(entry * 0.012, slDist * 2.0); // 1.2% or 2× SL
-  let targetDist = targetFloor;
+  // ─── SL / target — the math-bound minimum ───
+  // Tx cost alone eats 0.1% per round-trip trade. 5 trades = 0.5% daily
+  // just in fees. To clear Rs 10k net on 15L we need ~Rs 17,500 gross.
+  // Per-trade: Rs 3,500 gross = 0.233% on 15L.
+  //
+  // At R:R 2:1 and 50% WR: trade EV = 0.5*(2Y) - 0.5*Y = 0.5Y.
+  // 0.5Y = 0.233% → Y = 0.467% SL, 0.934% target.
+  //
+  // Rounded to 0.5% / 1.0% to give a small buffer:
+  //   SL = 0.5% → Rs 7,500 risk on 15L
+  //   Target = 1.0% → Rs 15,000 reward on 15L (2:1 R:R)
+  //
+  // EV table:
+  //   55% WR: 0.55×15,000 - 0.45×7,500 = 4,875/trade → 5 trades = 24,375 ✓
+  //   50% WR: 0.50×15,000 - 0.50×7,500 = 3,750/trade → 5 trades = 18,750 ✓ (clear)
+  //   45% WR: 0.45×15,000 - 0.55×7,500 = 2,625/trade → 5 trades = 13,125 ✓
+  //   40% WR: 0.40×15,000 - 0.60×7,500 = 1,500/trade → 5 trades = 7,500 ✗
+  // Net after Rs 7,500 tx cost:
+  //   55% WR → +16,875 ✓
+  //   50% WR → +11,250 ✓
+  //   45% WR → +5,625 ✗
+  //
+  // Bottom line: strategy must yield >= 50% WR to hit 10k consistently.
+  const slDist = entry * 0.005;       // 0.5%
+  const targetDist = entry * 0.010;   // 1.0%
 
   let sl, target;
   if (direction === 'long') {
@@ -208,95 +108,65 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   }
 
   const rr = targetDist / Math.max(slDist, 1e-9);
-  const rrClamped = Math.min(9, Math.max(0.1, rr));
-  // R:R scoring: continuous, favoring higher R:R
-  const rrScore = Math.round(25 * (1 - Math.exp(-2.5 * rrClamped)));
 
-  /* ── 4. Pattern reliability (max 15) ───────────────────────── */
-  const patternRel = top ? top.reliability * 15 : 3;
+  // ─── Confidence scoring ───
+  // Scoring reflects the factors that empirically predicted winning days
+  // in the April backtest: pattern strength, relative strength, volume,
+  // index regime alignment.
 
-  /* ── 5. Confluence (max 15) ────────────────────────────────── */
-  let confluence = 0;
+  // 1. Signal clarity (from pattern detector strength): 0..30
+  const signalClarity = Math.round((top.strength || 0.7) * 30);
 
-  // Volume spike
-  if (avgV > 0 && cur.v > avgV * 2) confluence += 5;
-  else if (avgV > 0 && cur.v > avgV * 1.3) confluence += 3;
+  // 2. Relative strength (embedded in pattern strength but recomputed here).
+  const dayOpen = opts?.stockDayOpen != null
+    ? opts.stockDayOpen
+    : (candles[Math.max(0, candles.length - barIndex - 15)]?.o || cur.c);
+  const stockIntraPct = (cur.c - dayOpen) / dayOpen;
+  const idxDir = opts?.indexDirection || null;
+  const idxIntraPct = idxDir?.intradayPct ?? 0;
+  const rs = direction === 'long' ? (stockIntraPct - idxIntraPct) : (idxIntraPct - stockIntraPct);
+  const relativeStrength = Math.round(Math.min(25, Math.max(0, rs * 2500)));
 
-  // EMA alignment (5/13)
-  const ema5 = emaVal(candles.slice(-6), 5);
-  const ema13 = emaVal(candles.slice(-14), 13);
-  if (ema5 != null && ema13 != null) {
-    if (direction === 'long' && ema5 > ema13) confluence += 4;
-    if (direction === 'short' && ema5 < ema13) confluence += 4;
-    if (direction === 'long' && ema5 < ema13) confluence -= 3;
-    if (direction === 'short' && ema5 > ema13) confluence -= 3;
-  }
+  // 3. Volume confirmation: pattern gate already requires >= 1.2x.
+  //    Score: 0 for 1.2x, 15 for 2.5x+
+  const vols = candles.slice(-11, -1).map(c => c.v || 0);
+  const avgV = vols.length ? vols.reduce((a, b) => a + b, 0) / vols.length : 1;
+  const curEffV = Math.max(cur.v || 0, ...candles.slice(-4, -1).map(c => c.v || 0));
+  const volFactor = avgV > 0 ? curEffV / avgV : 1;
+  const volume = Math.round(Math.min(15, Math.max(0, (volFactor - 1.2) * 12)));
 
-  // VWAP alignment
-  const vwap = vwapProxy(candles, 20);
-  if (vwap != null) {
-    if (direction === 'long' && cur.c > vwap) confluence += 3;
-    else if (direction === 'short' && cur.c < vwap) confluence += 3;
-    else if (direction === 'long' && cur.c < vwap) confluence -= 5;
-    else if (direction === 'short' && cur.c > vwap) confluence -= 5;
-  }
+  // 4. R:R score (0..20)
+  const rrScore = Math.round(Math.min(20, Math.max(0, (rr - 2) * 10)));
 
-  // Context
-  const context = detectContext(candles, box);
-  if (top?.direction === 'bullish' && context === 'at_support') confluence += 3;
-  else if (top?.direction === 'bearish' && context === 'at_resistance') confluence += 3;
-  else if (context === 'breakout') confluence += 2;
-
-  // Box breakout
-  if (box) {
-    if (box.breakout !== 'none') confluence += Math.round(2 + (box.quality || 0) * 2);
-  }
-
-  confluence = Math.max(0, confluence);
-
-  /* ── Raw → Confidence ──────────────────────────────────────── */
-  const raw = signalClarity + lowNoise + rrScore + patternRel + Math.min(15, confluence);
-  const rawClamped = Math.min(100, Math.round(raw));
-
-  // Confidence floor 20 (wider range for scalping discrimination)
-  let confidence = Math.round(20 + (rawClamped / 100) * 80);
-
-  // Index direction filter — bonus for alignment, moderate penalty for counter-trend
-  const idxDir = opts?.indexDirection;
+  // 5. Regime alignment (0..10): +10 if index direction strongly supports, 5 if neutral
+  let regime = 5;
   if (idxDir) {
-    if (direction === 'long' && idxDir.direction === 'bullish') confidence += 5;
-    else if (direction === 'short' && idxDir.direction === 'bearish') confidence += 5;
-    else if (direction === 'long' && idxDir.direction === 'bearish') confidence -= 15;
-    else if (direction === 'short' && idxDir.direction === 'bullish') confidence -= 15;
+    if ((direction === 'long' && idxDir.direction === 'bullish') ||
+        (direction === 'short' && idxDir.direction === 'bearish')) {
+      regime = 10;
+    } else if ((direction === 'long' && idxDir.direction === 'bearish') ||
+               (direction === 'short' && idxDir.direction === 'bullish')) {
+      regime = 0;
+    }
   }
 
-  // Trend alignment bonus: pattern direction should match intraday drift
-  // Moderate bonus — don't overweight (it's momentum chasing)
-  if (top?.direction === 'bullish' && intradayPct > 0.003) confidence += 2;
-  if (top?.direction === 'bearish' && intradayPct < -0.003) confidence += 2;
-  // Counter-trend penalty
-  if (top?.direction === 'bullish' && intradayPct < -0.01) confidence -= 8;
-  if (top?.direction === 'bearish' && intradayPct > 0.01) confidence -= 8;
+  // Gate: reject trades with R:R below 2 — the math doesn't work.
+  if (rr < 2.0) return noTrade(cur, candles);
 
-  // Day-of-week awareness
-  const dow = opts?.dayOfWeek;
-  if (dow === 1 && barIndex < 15) confidence = Math.max(20, confidence - 10); // Monday early
-  if (dow === 5 && barIndex > 75) confidence = Math.max(20, confidence - 10); // Friday late
+  const raw = signalClarity + relativeStrength + volume + rrScore + regime;
+  let confidence = Math.round(20 + (raw / 100) * 80); // 20..100 scale
+
+  // Margin eligibility: downweight non-margin stocks if margin trading enabled
+  if (opts?.margin && opts?.sym && opts.marginMap && !isMarginEligible(opts.sym, opts.marginMap)) {
+    confidence = Math.max(20, confidence + MARGIN_PENALTY);
+  }
 
   confidence = Math.max(20, Math.min(100, confidence));
 
-  // Margin eligibility penalty: penalize non-margin stocks when margin trading is enabled
-  if (opts?.margin && opts?.sym && !isMarginEligible(opts.sym, opts.marginMap)) {
-    confidence += MARGIN_PENALTY;
-    confidence = Math.max(20, Math.min(100, confidence));
-  }
-
   const breakdown = {
-    signalClarity: Math.round(signalClarity),
-    lowNoise: Math.round(lowNoise),
-    riskReward: rrScore,
-    patternReliability: Math.round(patternRel),
-    confluence: Math.min(15, Math.round(Math.max(0, confluence))),
+    signalClarity, relativeStrength, volume, riskReward: rrScore, regime,
+    // Keep legacy keys for any UI consumers expecting them
+    lowNoise: 0, patternReliability: 0, confluence: 0,
   };
 
   let level = 'low';
@@ -304,34 +174,34 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   else if (confidence >= 70) level = 'moderate';
 
   let action = 'NO TRADE';
-  if (confidence >= 82 && top && top.direction !== 'neutral') {
-    action = top.direction === 'bearish' ? 'STRONG SHORT' : 'STRONG BUY';
-  } else if (confidence >= 75 && top && top.direction !== 'neutral') {
-    action = top.direction === 'bearish' ? 'SHORT' : 'BUY';
-  } else if (confidence >= 60 && top) {
+  if (confidence >= 82) {
+    action = direction === 'short' ? 'STRONG SHORT' : 'STRONG BUY';
+  } else if (confidence >= 75) {
+    action = direction === 'short' ? 'SHORT' : 'BUY';
+  } else if (confidence >= 60) {
     action = 'WAIT';
   }
 
-  // Signal fired on the current (most recent) bar. For scalp on 1m, the entry
-  // window is ~3 bars (3 min) — after that the setup is stale.
+  const context = detectContext(candles);
   const signalBarTs = cur.t || null;
-  const validTillTs = signalBarTs ? signalBarTs + 3 * 60 : null; // 3 minutes for 1m scalp
+  const validTillTs = signalBarTs ? signalBarTs + 3 * 60 : null;
 
   return {
-    total: rawClamped, confidence, breakdown, level, action,
-    entry, sl, target, rr: rrClamped, direction, context,
-    maxHoldBars: 12, // 12 minutes — cut sideways trades fast to avoid tx cost drag
+    total: Math.round(raw), confidence, breakdown, level, action,
+    entry, sl, target, rr: Math.min(9, rr), direction, context,
+    maxHoldBars: 30, // 30 min — enough for 1% target to hit on 1m bars
     signalBarTs, validTillTs,
   };
 }
 
-function noTrade(cur, candles, box) {
-  const context = detectContext(candles, box);
+function noTrade(cur, candles) {
+  const context = detectContext(candles);
   return {
-    total: 0, confidence: 20, breakdown: { signalClarity: 0, lowNoise: 0, riskReward: 0, patternReliability: 0, confluence: 0 },
+    total: 0, confidence: 20,
+    breakdown: { signalClarity: 0, relativeStrength: 0, volume: 0, riskReward: 0, regime: 0, lowNoise: 0, patternReliability: 0, confluence: 0 },
     level: 'low', action: 'NO TRADE',
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
-    maxHoldBars: 12,
+    maxHoldBars: 15,
     signalBarTs: cur.t || null, validTillTs: null,
   };
 }

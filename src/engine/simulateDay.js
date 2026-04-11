@@ -6,6 +6,7 @@
 
 import { fetchOHLCV } from './fetcher.js';
 import { fetchNseIndexSymbolList } from './nseIndexFetch.js';
+import { MARGIN_MULTIPLIER } from '../data/marginData.js';
 
 const IST_OFFSET = 19800; // +5:30 in seconds
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
@@ -279,20 +280,40 @@ export async function runSimulation({
       const candlesSoFar = [...sd.priorCandles, ...preWindow, ...sd.dayCandles.slice(0, dayBarIdx + 1)];
       if (candlesSoFar.length < 10) continue;
 
+      // Compute index intraday % at the current bar (no lookahead)
+      const curTs = candlesSoFar[candlesSoFar.length - 1].t;
+      let indexAtBar = indexDirection;
+      if (indexDirection?.candles?.length && indexDirection.dayOpen != null) {
+        let niftyCur = null;
+        for (let k = indexDirection.candles.length - 1; k >= 0; k--) {
+          if (indexDirection.candles[k].t <= curTs) { niftyCur = indexDirection.candles[k]; break; }
+        }
+        const niftyIntraPct = niftyCur ? (niftyCur.c - indexDirection.dayOpen) / indexDirection.dayOpen : 0;
+        indexAtBar = { ...indexDirection, intradayPct: niftyIntraPct };
+      }
+
+      // Explicit stock day open for pattern/risk engines (no lookahead — it's
+      // the 9:15 candle that's strictly in the past by the time we're here)
+      const stockDayOpen = sd.dayCandles?.[0]?.o || null;
+
       const patterns = detectPatterns(candlesSoFar, {
         barIndex: barIdx,
         orbHigh: sd.orbHigh,
         orbLow: sd.orbLow,
         prevDayHigh: sd.prevDayHigh,
         prevDayLow: sd.prevDayLow,
+        indexDirection: indexAtBar,
+        stockDayOpen,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexDirection || null, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin, marginMap, sym } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin, marginMap, sym, stockDayOpen } });
 
       if (risk.confidence < minConfidence) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
 
-      const shares = Math.floor(positionSize / risk.entry);
+      // Apply 5x margin leverage when margin enabled (matches CLI sim + MIS reality)
+      const effectivePositionSize = margin ? positionSize * MARGIN_MULTIPLIER : positionSize;
+      const shares = Math.floor(effectivePositionSize / risk.entry);
       if (shares < 1) continue;
 
       candidates.push({ sym, risk, patterns, shares });

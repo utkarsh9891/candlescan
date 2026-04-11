@@ -58,9 +58,20 @@ export default function SimpleView({
       }}>
         {/* Top row: price + change + action */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 12, color: '#8892a8', marginBottom: 2 }}>{companyName || sym}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: '#1a1d26', fontFamily: mono, lineHeight: 1 }}>
+          <div style={{ flex: 1, minWidth: 0, marginRight: 8 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#1a1d26', fontFamily: mono, lineHeight: 1.1 }}>
+              {sym}
+            </div>
+            {companyName && companyName !== sym && (
+              <div style={{
+                fontSize: 12, color: '#4a5068', fontWeight: 500,
+                marginTop: 2, marginBottom: 4,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }} title={companyName}>
+                {companyName}
+              </div>
+            )}
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#1a1d26', fontFamily: mono, lineHeight: 1, marginTop: 4 }}>
               {last?.c?.toFixed(2)}
             </div>
             <div style={{ fontSize: 13, fontWeight: 600, color: changePct >= 0 ? '#16a34a' : '#dc2626', fontFamily: mono }}>
