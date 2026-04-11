@@ -21,7 +21,13 @@
  */
 
 import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
-import { composeContextScore } from './marketContext.js';
+
+// Note: market context (VIX, gap, liquidity, FII/DII, news) is no longer
+// composed into the confidence score here. It moved to the four-phase
+// trade decision flow in src/engine/tradeDecision.js — see that file
+// for rationale. This module is now purely the per-stock technical
+// scorer: pattern strength + relative strength + volume + R:R + regime
+// alignment. No day-level signals leak into the rank score.
 
 export const RISK_SIGNAL_DEFINITIONS = [
   { key: 'signalClarity', label: 'Signal clarity', max: 30, meaning: 'Pattern strength.' },
@@ -155,23 +161,6 @@ export function computeRiskScore({ candles, patterns, opts }) {
     confidence = Math.max(20, confidence + MARGIN_PENALTY);
   }
 
-  // ─── Multi-factor market context layer ───
-  // Adds signals from VIX regime, overnight gap alignment, liquidity
-  // tier, FII/DII institutional flow, and news sentiment. Any single
-  // layer can veto the trade (e.g. BEARISH_STRONG news on a long).
-  // See src/engine/marketContext.js for the composition rules.
-  let contextReasons = [];
-  let contextVetoed = false;
-  if (opts?.marketContext) {
-    const ctxResult = composeContextScore(opts.marketContext, direction);
-    if (ctxResult.veto) {
-      contextVetoed = true;
-    } else {
-      confidence += ctxResult.delta;
-    }
-    contextReasons = ctxResult.reasons;
-  }
-
   confidence = Math.max(20, Math.min(100, confidence));
 
   const breakdown = {
@@ -185,11 +174,7 @@ export function computeRiskScore({ candles, patterns, opts }) {
   else if (confidence >= 70) level = 'moderate';
 
   let action = 'NO TRADE';
-  if (contextVetoed) {
-    // Hard veto from marketContext (e.g. strong bearish news on a long).
-    action = 'NO TRADE';
-    level = 'low';
-  } else if (confidence >= 82) {
+  if (confidence >= 82) {
     action = direction === 'short' ? 'STRONG SHORT' : 'STRONG BUY';
   } else if (confidence >= 75) {
     action = direction === 'short' ? 'SHORT' : 'BUY';
