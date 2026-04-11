@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan, resetBatchScanRateLimitState } from '../engine/batchScan.js';
-import { fetchLiveMarketContext } from '../engine/marketContextLive.js';
+import { fetchLiveMarketContext, enrichWithGoogleNews } from '../engine/marketContextLive.js';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
 // Engine-specific imports for engine-aware batch scanning
@@ -183,6 +183,54 @@ function ResultCard({ r, onTap }) {
           </span>
         </div>
       )}
+      {/* Row 4: Context tags — sector, VIX, news sentiment badge */}
+      {(r.sector || r.vixRegime || r.newsSentiment) && (
+        <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, flexWrap: 'wrap' }}>
+          {r.sector && (
+            <span style={{ padding: '1px 6px', borderRadius: 3, background: '#eef2ff', color: '#4338ca', fontWeight: 600 }}>
+              {r.sector}
+            </span>
+          )}
+          {r.vixRegime && (
+            <span style={{ padding: '1px 6px', borderRadius: 3, background: '#f0f4ff', color: '#4a5068', fontWeight: 600 }}>
+              VIX:{r.vixRegime}
+            </span>
+          )}
+          {r.newsSentiment && r.newsSentiment !== 'NEUTRAL' && (
+            <span style={{
+              padding: '1px 6px', borderRadius: 3, fontWeight: 700,
+              background: r.newsSentiment.includes('BULLISH') ? '#dcfce7' : '#fee2e2',
+              color: r.newsSentiment.includes('BULLISH') ? '#166534' : '#991b1b',
+            }}>
+              NEWS: {r.newsSentiment}
+              {typeof r.newsScore === 'number' && ` (${r.newsScore.toFixed(2)})`}
+            </span>
+          )}
+        </div>
+      )}
+      {/* Row 5: News headlines — the actual text that drove the sentiment */}
+      {r.newsHeadlines && r.newsHeadlines.length > 0 && (
+        <div style={{ marginTop: 6, padding: '6px 8px', borderLeft: '3px solid #cbd5e1', background: '#f8fafc', borderRadius: '0 4px 4px 0' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 2, letterSpacing: 0.3 }}>
+            RECENT NEWS ({r.newsHeadlines.length})
+          </div>
+          {r.newsHeadlines.slice(0, 3).map((h, i) => (
+            <div key={i} style={{
+              fontSize: 10, color: '#334155', lineHeight: 1.3, marginTop: i > 0 ? 3 : 0,
+              display: 'flex', alignItems: 'flex-start', gap: 4,
+            }}>
+              <span style={{
+                flexShrink: 0, fontFamily: mono, fontSize: 9, fontWeight: 700,
+                color: h.score > 0.2 ? '#16a34a' : h.score < -0.2 ? '#dc2626' : '#94a3b8',
+                minWidth: 32,
+              }}>
+                {h.score > 0 ? '+' : ''}{h.score.toFixed(2)}
+              </span>
+              <span>{h.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </button>
   );
 }
@@ -299,6 +347,32 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       // Capture telemetry attached as a non-enumerable property on the result array
       if (scanResults && scanResults.telemetry) {
         setTelemetry({ ...scanResults.telemetry, dataSource: dataSource || 'yahoo', index: nseIndex, timeframe, engine: engineVersion, scalpVariant });
+      }
+
+      // ── Phase 5: Google News deep enrichment for top candidates ──
+      // After the scan completes, pick the top-N actionable results and
+      // fetch per-symbol Google News to deepen their sentiment signal.
+      // This is phase 3's deep pass — Moneycontrol gave broad coverage;
+      // Google gives per-stock depth for the ones we might actually trade.
+      if (engineVersion === 'scalp' && liveMarketContext && scanResults.length > 0) {
+        try {
+          const topActionable = scanResults
+            .filter((r) => r.action !== 'NO TRADE' && r.action !== 'WAIT')
+            .slice(0, 10)
+            .map((r) => r.symbol);
+          if (topActionable.length > 0) {
+            const enriched = await enrichWithGoogleNews(liveMarketContext.newsMap, topActionable);
+            // eslint-disable-next-line no-console
+            console.log(`[LiveContext] Google News enriched ${Object.keys(enriched).length - Object.keys(liveMarketContext.newsMap).length} new symbols`);
+            // Note: the rankScore was already computed during the scan, so
+            // the enriched scores affect only subsequent scans (which will
+            // hit the cached map). For a live trader re-scanning every
+            // few minutes, this means the second scan has the benefit.
+            liveMarketContext.newsMap = enriched;
+          }
+        } catch {
+          // Enrichment is optional — scan results are already shown
+        }
       }
     } catch (e) {
       const msg = e?.message || String(e);

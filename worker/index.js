@@ -552,6 +552,72 @@ async function handleMoneycontrolNews(request, origin) {
 }
 
 /**
+ * Handle /news/google — per-symbol Google News RSS proxy.
+ * Browser calls this for top-N ranked candidates after phase 3 to
+ * get per-stock news context. One HTTP call per symbol — the browser
+ * is expected to batch this (parallel Promise.all) rather than loop.
+ *
+ * Response: { items: [{title, description}, ...], symbol, count }
+ * Client parses + scores via newsSentiment.scoreText.
+ */
+async function handleGoogleNewsForSymbol(request, origin) {
+  try {
+    const url = new URL(request.url);
+    const rawSym = url.searchParams.get('symbol') || '';
+    // Sanitize: only letters, digits, hyphens, ampersand
+    const symbol = rawSym.replace(/[^A-Za-z0-9&-]/g, '').slice(0, 24);
+    if (!symbol) {
+      return new Response(JSON.stringify({ error: 'Missing or invalid symbol parameter' }), {
+        status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+    const q = encodeURIComponent(`${symbol} stock NSE`);
+    const feedUrl = `https://news.google.com/rss/search?q=${q}&hl=en-IN&gl=IN&ceid=IN:en`;
+    const resp = await fetch(feedUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
+    });
+    if (!resp.ok) {
+      return new Response(JSON.stringify({ error: `Google RSS HTTP ${resp.status}` }), {
+        status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+      });
+    }
+    const xml = await resp.text();
+    // Parse inline (same as Moneycontrol handler)
+    const items = [];
+    const rawItems = xml.split(/<item[\s>]/i).slice(1);
+    for (const raw of rawItems) {
+      let title = '';
+      const t = raw.match(/<title>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i);
+      if (t) title = (t[1] || t[2] || '').trim();
+      let description = '';
+      const d = raw.match(/<description>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/description>/i);
+      if (d) description = (d[1] || d[2] || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      let pubDate = '';
+      const pd = raw.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
+      if (pd) pubDate = pd[1].trim();
+      if (title) items.push({ title, description, pubDate });
+    }
+    return new Response(JSON.stringify({
+      symbol,
+      items,
+      count: items.length,
+      fetchedAt: new Date().toISOString(),
+    }), {
+      status: 200,
+      headers: {
+        ...corsHeaders(origin),
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=600', // 10 min — per-symbol news doesn't change fast
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Google News fetch failed: ${err.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+/**
  * Handle /market/vix — return current India VIX close + regime.
  * Called once at scan start so the browser has the latest VIX value
  * for regime-gating / sizing in the trade decision flow.
@@ -972,6 +1038,14 @@ export default {
     // raw XML; the browser parses and scores via newsSentiment.js.
     if (path === '/news/moneycontrol') {
       return handleMoneycontrolNews(request, origin);
+    }
+
+    // Google News per-symbol proxy — called for deep lookup on the top
+    // ranked candidates after phase 3 so the news layer gets per-stock
+    // depth beyond what Moneycontrol's market-wide feeds provide.
+    // Takes ?symbol=RELIANCE (sanitized to alphanumeric + -).
+    if (path === '/news/google') {
+      return handleGoogleNewsForSymbol(request, origin);
     }
 
     // India VIX live fetch — browser calls this at scan start to get

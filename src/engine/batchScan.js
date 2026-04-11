@@ -159,6 +159,9 @@ export async function batchScan({
           const cleanSym = String(displaySymbol).toUpperCase().replace(/\.NS$/, '');
           const newsScore = marketContext?.newsMap?.[cleanSym] ?? null;
           const sentiment = classifyNewsSentiment(newsScore);
+          // Headlines that drove this symbol's sentiment — surfaced in UI
+          // so the trader can see WHY the news layer said bullish/bearish.
+          const headlines = marketContext?.headlinesMap?.[cleanSym] || [];
           // Liquidity tier from the average bar volume over recent trading
           const recentVols = candles.slice(-60).map((c) => c.v || 0);
           const avgPerBarVol = recentVols.length
@@ -220,6 +223,8 @@ export async function batchScan({
             validTillTs: risk.validTillTs || null,
             // Expose per-stock context for UI / debug
             newsSentiment: sentiment,
+            newsScore: newsScore,
+            newsHeadlines: headlines,
             vixRegime: stockContext.vixRegime,
             flow: stockContext.flow,
             liquidity,
