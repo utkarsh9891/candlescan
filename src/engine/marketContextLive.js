@@ -170,6 +170,64 @@ export function clearMarketContextCache() {
 }
 
 /**
+ * Deep news lookup (headlines + score) for a single symbol via
+ * Google News RSS. Used by the single-stock scanner screen so the
+ * stock detail view can show the same news card that the batch
+ * scanner shows on its result cards.
+ *
+ * Returns a shape identical to the batch path — caller can drop
+ * `headlines` straight into the existing "RECENT NEWS" UI block.
+ *
+ * @param {string} symbol  e.g. "RELIANCE"
+ * @returns {Promise<{
+ *   score: number|null,
+ *   headlines: Array<{title, description, score, source}>
+ * }>}
+ */
+export async function fetchLiveGoogleNewsDetailForSymbol(symbol) {
+  if (!symbol) return { score: null, headlines: [] };
+  const clean = String(symbol).toUpperCase().replace(/\.NS$/, '');
+  try {
+    const res = await fetch(`${CF_WORKER_URL}/news/google?symbol=${encodeURIComponent(clean)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return { score: null, headlines: [] };
+    const data = await res.json();
+    const items = data.items || [];
+    if (!items.length) return { score: null, headlines: [] };
+    // Cutoff recent items only (5 days) — identical to the score-only path
+    const cutoff = Date.now() - 5 * 24 * 3600 * 1000;
+    const scored = [];
+    for (const item of items) {
+      if (item.pubDate) {
+        const t = Date.parse(item.pubDate);
+        if (!isNaN(t) && t < cutoff) continue;
+      }
+      const text = `${item.title || ''} ${item.description || ''}`;
+      const s = scoreText(text);
+      scored.push({
+        title: item.title || '',
+        description: (item.description || '').slice(0, 200),
+        score: Math.round(s * 100) / 100,
+        source: 'google',
+      });
+    }
+    if (!scored.length) return { score: null, headlines: [] };
+    const avg = scored.reduce((a, b) => a + b.score, 0) / scored.length;
+    // Sort by most impactful first, cap to top 5 (matches batch UI behaviour)
+    const headlines = scored
+      .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+      .slice(0, 5);
+    return {
+      score: Math.max(-1, Math.min(1, avg)),
+      headlines,
+    };
+  } catch {
+    return { score: null, headlines: [] };
+  }
+}
+
+/**
  * Deep news lookup for a single symbol via Google News RSS.
  * Moneycontrol's feeds are broad — they mention roughly the top
  * 50 most-discussed stocks each day. For symbols that passed

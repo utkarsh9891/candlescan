@@ -64,6 +64,15 @@ export default forwardRef(function Chart({
   onDrawingUpdate,
   patterns = [],
   highlightSignals = false,
+  // Lazy prefetch: fires when the user has scrolled within ~20% of the
+  // left edge of the loaded candle history. Parent is expected to
+  // refetch with a wider lookback and pass a longer `candles` array.
+  // The Chart auto-preserves scroll position when new older candles
+  // arrive (same last-candle timestamp + grown length).
+  onNearLeftEdge,
+  // True while the parent is fetching more history. Suppresses
+  // re-firing the callback and lets the parent render a hint.
+  loadingMore = false,
 }, ref) {
   const [visibleCount, setVisibleCount] = useState(() => {
     const isMobile = window.innerWidth < 500;
@@ -109,14 +118,37 @@ export default forwardRef(function Chart({
   // Track previous sym+length to detect when we need to recalculate zoom
   const prevKeyRef = useRef('');
 
-  // Reset zoom to the default visible cap when symbol or data changes.
-  // Use the full DEFAULT_VISIBLE cap regardless of time of day — this keeps
-  // the chart view consistent whether market is open, mid-session, or closed.
+  // Reset zoom to the default visible cap when symbol/timeframe changes or
+  // when a fresh data load arrives. We DON'T reset when the candles array
+  // was extended by a lazy-prefetch prepend — in that case the user's
+  // current view is preserved (same bars, just more history available
+  // to scroll back into).
+  //
+  // Detection: a prepend looks like (same sym + same timeframe) + (length
+  // increased) + (last candle's timestamp unchanged). Under those
+  // conditions we keep panOffset/visibleCount as-is since the existing
+  // math naturally preserves the visible window: panOffset is measured
+  // from the RIGHT edge, so prepending older bars leaves the same bars
+  // on screen.
   useEffect(() => {
     if (!candles?.length) return;
-    const key = `${sym}:${candles.length}:${timeframe}`;
+    const lastTs = candles[candles.length - 1]?.t || 0;
+    const key = `${sym}:${timeframe}:${lastTs}:${candles.length}`;
     if (key === prevKeyRef.current) return;
+    const prev = prevKeyRef.current.split(':');
+    const prevSym = prev[0];
+    const prevTf = prev[1];
+    const prevLastTs = Number(prev[2]) || 0;
+    const prevLen = Number(prev[3]) || 0;
+    const isSameSeries = prevSym === sym && prevTf === timeframe && prevLastTs === lastTs;
+    const isPrepend = isSameSeries && candles.length > prevLen;
     prevKeyRef.current = key;
+
+    if (isPrepend) {
+      // Don't touch visibleCount or panOffset — the view stays put.
+      return;
+    }
+
     const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
     const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
     const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
@@ -149,6 +181,27 @@ export default forwardRef(function Chart({
   const startIdx = Math.max(0, (candles?.length || 0) - count - clampedPan);
   const slice = count > 0 && candles?.length ? candles.slice(startIdx, startIdx + count) : [];
   const sliceStartIdx = startIdx;
+
+  /* ── Lazy prefetch: fire onNearLeftEdge when user has scrolled close
+        to the earliest loaded bar. Debounced per-series by the
+        `loadingMore` prop — parent clears it after the fetch resolves.
+        Series key is (sym + timeframe + last candle ts) so the next
+        series load re-arms automatically. ─────────────────────────── */
+  const nearEdgeFiredRef = useRef('');
+  useEffect(() => {
+    if (!onNearLeftEdge) return;
+    if (!candles?.length) return;
+    if (loadingMore) return;
+    const total = candles.length;
+    // "Within 20% of left edge": startIdx < 20% of total
+    if (startIdx > total * 0.2) return;
+    // Fire once per series. The series key resets after the candles
+    // array extends (new length → new key).
+    const seriesKey = `${sym}:${timeframe}:${candles[candles.length - 1]?.t}:${total}`;
+    if (nearEdgeFiredRef.current === seriesKey) return;
+    nearEdgeFiredRef.current = seriesKey;
+    onNearLeftEdge();
+  }, [startIdx, candles, sym, timeframe, loadingMore, onNearLeftEdge]);
 
   const zoomIn = useCallback(() => {
     setVisibleCount((v) => Math.max(floorBars, Math.floor(v * 0.72)));

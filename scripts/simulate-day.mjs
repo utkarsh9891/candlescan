@@ -208,6 +208,12 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
   let peakCapital = CAPITAL;
   let maxDrawdown = 0;
   let totalTradesOpened = 0;
+  // Running streak counter — reset on a win, incremented on loss/breakeven.
+  // Feeds sizeMultiplier so the next entry sizes down after a bad run.
+  // With 5 max trades per day, a 2-loss streak triggers ×0.75 and a
+  // 3-loss streak triggers ×0.5 — protects the remaining slots when
+  // the session is clearly going wrong.
+  let consecutiveLosses = 0;
 
   const maxBars = Math.max(...Object.values(stockDataForWindow).map(d => d.windowCandles.length));
 
@@ -259,6 +265,12 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
           exitTime: formatTime(bar.t),
           confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
         });
+
+        // Update loss streak: strict loss (netPnl<0) increments, a win resets.
+        // Breakeven (netPnl===0) is treated as "not a win" — keeps the streak
+        // alive because the session hasn't actually turned yet.
+        if (netPnl > 0) consecutiveLosses = 0;
+        else consecutiveLosses++;
 
         openPositions.splice(p, 1);
         tradedSymbols.add(pos.sym);
@@ -394,7 +406,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       const sizeRes = sizeMultiplier({
         vixRegime: vixReg,
         flow: flowClass,
-        consecutiveLosses: 0, // TODO: track streaks across trades
+        consecutiveLosses,
       }, { direction: c.risk.direction });
       const basePosition = POSITION_SIZE * sizeRes.mult;
       const effectivePositionSize = marginEnabled ? basePosition * MARGIN_MULTIPLIER : basePosition;
