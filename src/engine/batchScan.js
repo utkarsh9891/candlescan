@@ -10,6 +10,9 @@ import { fetchOHLCV } from './fetcher.js';
 import { detectPatterns as detectPatternsDefault } from './patterns.js';
 import { detectLiquidityBox as detectLiquidityBoxDefault } from './liquidityBox.js';
 import { computeRiskScore as computeRiskScoreDefault } from './risk.js';
+import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
+import { classifyNewsSentiment, liquidityTier } from './marketContext.js';
+import { getSector } from './sectorMap.js';
 
 const ACTION_RANK = {
   'STRONG BUY': 5,
@@ -55,6 +58,7 @@ export async function batchScan({
   batchToken, // backward compat
   engineFns,
   indexDirection,
+  marketContext, // { vixRegime, flow, newsMap, vix, fii, dii, ... } from marketContextLive
   concurrency = 5,
   delayMs = 200,
   onProgress,
@@ -149,33 +153,78 @@ export async function batchScan({
           const prevDayHigh = prevCandles.length ? Math.max(...prevCandles.map(c => c.h)) : null;
           const prevDayLow = prevCandles.length ? Math.min(...prevCandles.map(c => c.l)) : null;
 
+          // ── Build per-stock market context ──
+          // Mixes live market context (VIX, flow, news map) with
+          // per-stock derived values (sector, news sentiment, liquidity).
+          const cleanSym = String(displaySymbol).toUpperCase().replace(/\.NS$/, '');
+          const newsScore = marketContext?.newsMap?.[cleanSym] ?? null;
+          const sentiment = classifyNewsSentiment(newsScore);
+          // Liquidity tier from the average bar volume over recent trading
+          const recentVols = candles.slice(-60).map((c) => c.v || 0);
+          const avgPerBarVol = recentVols.length
+            ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length
+            : 0;
+          const liquidity = liquidityTier(avgPerBarVol);
+          const stockContext = {
+            vixRegime: marketContext?.vixRegime || null,
+            flow: marketContext?.flow || null,
+            liquidity,
+            sentiment,
+            // sector is informational only — tradeDecision.js doesn't gate on it
+          };
+
+          // ── PHASE 1: pre-pattern filter ──
+          const filterRes = filterStock({ symbol: cleanSym }, stockContext);
+          if (!filterRes.ok) return { filterRejected: filterRes.reason, symbol: displaySymbol };
+
+          // ── PHASE 2a: pattern detection + risk ──
           const patterns = detectPatterns(candles, {
             barIndex: candles.length,
             orbHigh, orbLow, prevDayHigh, prevDayLow,
+            indexDirection: indexDirection || null,
           });
           const box = detectLiquidityBox(candles);
           const risk = computeRiskScore({
             candles, patterns, box,
-            opts: { barIndex: candles.length, indexDirection: indexDirection || null },
+            opts: { barIndex: candles.length, indexDirection: indexDirection || null, sym: cleanSym },
           });
+
+          // ── PHASE 2b: regime gate (post-pattern) ──
+          const gateRes = regimeGate(risk.direction, stockContext);
+          const gated = !gateRes.ok;
+
+          // ── PHASE 3a: rank score (per-stock signals only) ──
+          const score = rankScore(risk, stockContext);
+
+          // ── PHASE 4: size multiplier (day-level → exposure) ──
+          const sizeRes = sizeMultiplier(stockContext, { direction: risk.direction });
 
           return {
             symbol: displaySymbol,
             companyName: companyName || displaySymbol,
-            action: risk.action,
+            // If the regime gate rejects (e.g. counter-strong news), override
+            // the action to NO TRADE so the UI doesn't offer it.
+            action: gated ? 'NO TRADE' : risk.action,
             confidence: risk.confidence,
+            rankScore: score,
+            sizeMult: sizeRes.mult,
             direction: risk.direction,
-            level: risk.level,
+            level: gated ? 'low' : risk.level,
             entry: risk.entry,
             sl: risk.sl,
             target: risk.target,
             rr: risk.rr,
             topPattern: patterns[0]?.name || 'None',
             context: risk.context,
-            // Signal freshness — when the pattern fired (unix seconds) and
-            // how long it remains actionable. Used to hide stale cards.
             signalBarTs: risk.signalBarTs || null,
             validTillTs: risk.validTillTs || null,
+            // Expose per-stock context for UI / debug
+            newsSentiment: sentiment,
+            vixRegime: stockContext.vixRegime,
+            flow: stockContext.flow,
+            liquidity,
+            gatedReason: gated ? gateRes.reason : null,
+            sector: getSector(cleanSym),
           };
         } catch {
           return null;
@@ -187,6 +236,8 @@ export async function batchScan({
       completed++;
       telemetry.symbolsScanned++;
       if (r.status === 'fulfilled' && r.value) {
+        // Skip results that were rejected at phase 1 (filter)
+        if (r.value.filterRejected) continue;
         results.push(r.value);
         if (r.value.action && r.value.action !== 'NO TRADE' && r.value.action !== 'WAIT') {
           telemetry.symbolsActionable++;
@@ -205,12 +256,16 @@ export async function batchScan({
     }
   }
 
-  // Sort: actionable first (by rank desc), then by confidence desc
+  // Sort: actionable first (by action rank desc), then by rank score desc.
+  // rankScore includes per-stock signals (news bonus) beyond raw confidence,
+  // so sorting by it reflects the true trade-decision ordering.
   results.sort((a, b) => {
     const ra = ACTION_RANK[a.action] || 0;
     const rb = ACTION_RANK[b.action] || 0;
     if (ra !== rb) return rb - ra;
-    return b.confidence - a.confidence;
+    const sa = a.rankScore != null ? a.rankScore : a.confidence;
+    const sb = b.rankScore != null ? b.rankScore : b.confidence;
+    return sb - sa;
   });
 
   // Finalize telemetry

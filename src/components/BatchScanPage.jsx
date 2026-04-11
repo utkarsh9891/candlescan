@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan, resetBatchScanRateLimitState } from '../engine/batchScan.js';
+import { fetchLiveMarketContext } from '../engine/marketContextLive.js';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
 // Engine-specific imports for engine-aware batch scanning
@@ -227,10 +228,34 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
 
       setProgress({ completed: 0, total: symbols.length, current: symbols[0] });
 
-      // 2. Compute index direction for scalp engine
+      // 2a. Compute index direction for scalp engine
       let indexDirection = null;
       if (engineVersion === 'scalp') {
         try { indexDirection = await getIndexDirection(nseIndex); } catch { /* ignore */ }
+      }
+
+      // 2b. Fetch live market context (VIX, FII/DII, Moneycontrol news).
+      // All three layers run in parallel via CF Worker endpoints. Each
+      // layer fails independently; missing data → null, which the
+      // trade decision flow treats as "neutral / no veto / no bonus".
+      // Scoped to this scan only — cached per-day in marketContextLive.
+      let liveMarketContext = null;
+      if (engineVersion === 'scalp') {
+        try {
+          const universe = new Set(symbols.map((s) => String(s).toUpperCase().replace(/\.NS$/, '')));
+          liveMarketContext = await fetchLiveMarketContext(universe);
+          // eslint-disable-next-line no-console
+          console.log('[LiveContext]', {
+            vix: liveMarketContext.vix,
+            regime: liveMarketContext.vixRegime,
+            fii: liveMarketContext.fii,
+            dii: liveMarketContext.dii,
+            flow: liveMarketContext.flow,
+            newsCount: liveMarketContext.newsCount,
+          });
+        } catch {
+          // Live context is optional — the scan runs fine without it.
+        }
       }
 
       // 3. Run batch scan with engine-aware functions
@@ -248,6 +273,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
         gateToken: token,
         engineFns: getEngineFns(engineVersion, scalpVariant),
         indexDirection,
+        marketContext: liveMarketContext,
         concurrency: 8,
         delayMs: 0, // no fixed throttle — failed requests retry locally, others keep moving
         onProgress: (completed, total, current) => {

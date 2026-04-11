@@ -506,6 +506,155 @@ async function handleDhanInstruments(request, env, origin) {
 }
 
 /**
+ * Handle /news/moneycontrol — proxy the Moneycontrol RSS feeds.
+ * Browser can't hit moneycontrol.com directly (CORS blocked). We
+ * merge all 4 feeds into a single JSON array of items so the browser
+ * only makes one request. Client-side scoring via newsSentiment.js.
+ */
+async function handleMoneycontrolNews(request, origin) {
+  const feeds = [
+    'https://www.moneycontrol.com/rss/buzzingstocks.xml',
+    'https://www.moneycontrol.com/rss/MCtopnews.xml',
+    'https://www.moneycontrol.com/rss/marketreports.xml',
+    'https://www.moneycontrol.com/rss/business.xml',
+  ];
+  const items = [];
+  for (const url of feeds) {
+    try {
+      const resp = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
+      });
+      if (!resp.ok) continue;
+      const xml = await resp.text();
+      // Parse minimal RSS items inline — same logic as newsSentiment.parseRssItems
+      const rawItems = xml.split(/<item[\s>]/i).slice(1);
+      for (const raw of rawItems) {
+        let title = '';
+        const t = raw.match(/<title>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i);
+        if (t) title = (t[1] || t[2] || '').trim();
+        let description = '';
+        const d = raw.match(/<description>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/description>/i);
+        if (d) description = (d[1] || d[2] || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (title) items.push({ title, description });
+      }
+    } catch {
+      // Skip failed feeds
+    }
+  }
+  return new Response(JSON.stringify({ items, count: items.length, fetchedAt: new Date().toISOString() }), {
+    status: 200,
+    headers: {
+      ...corsHeaders(origin),
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=300', // 5 min cache at edge
+    },
+  });
+}
+
+/**
+ * Handle /market/vix — return current India VIX close + regime.
+ * Called once at scan start so the browser has the latest VIX value
+ * for regime-gating / sizing in the trade decision flow.
+ */
+async function handleVixFetch(request, origin) {
+  try {
+    const resp = await fetch(
+      'https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=5d',
+      { headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' } }
+    );
+    if (!resp.ok) throw new Error(`Yahoo HTTP ${resp.status}`);
+    const data = await resp.json();
+    const result = data?.chart?.result?.[0];
+    if (!result?.indicators?.quote?.[0]?.close) throw new Error('No VIX data in response');
+    const closes = result.indicators.quote[0].close;
+    // Last non-null close
+    let vixClose = null;
+    for (let i = closes.length - 1; i >= 0; i--) {
+      if (closes[i] != null && Number.isFinite(closes[i])) { vixClose = closes[i]; break; }
+    }
+    if (vixClose == null) throw new Error('No finite VIX close found');
+    return new Response(JSON.stringify({
+      vix: vixClose,
+      fetchedAt: new Date().toISOString(),
+    }), {
+      status: 200,
+      headers: {
+        ...corsHeaders(origin),
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=300',
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `VIX fetch failed: ${err.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+/**
+ * Handle /market/fiidii — return latest FII/DII net values.
+ * NSE's /api/fiidiiTradeReact requires a session cookie fetched from
+ * the home page first, and a Referer header. This handler manages
+ * both. Returns { fii: number, dii: number, date: string }.
+ */
+async function handleFiiDiiFetch(request, origin) {
+  try {
+    // Step 1: get session cookies from NSE home page
+    const homeResp = await fetch('https://www.nseindia.com/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html',
+      },
+    });
+    const setCookies = homeResp.headers.get('set-cookie') || '';
+    // CF Workers flatten set-cookie; extract everything before '; '
+    const cookieHeader = setCookies
+      .split(/,(?=\s*\w+=)/)
+      .map((c) => c.split(';')[0].trim())
+      .filter(Boolean)
+      .join('; ');
+
+    // Step 2: call the API with cookies + referer
+    const apiResp = await fetch('https://www.nseindia.com/api/fiidiiTradeReact', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.nseindia.com/reports/fii-dii',
+        'Cookie': cookieHeader,
+      },
+    });
+    if (!apiResp.ok) throw new Error(`NSE HTTP ${apiResp.status}`);
+    const rows = await apiResp.json();
+    if (!Array.isArray(rows)) throw new Error('Unexpected response shape');
+
+    // Find DII and FII/FPI rows
+    let fii = null, dii = null, date = null;
+    for (const r of rows) {
+      const cat = String(r.category || '').toUpperCase();
+      const net = parseFloat(r.netValue);
+      if (!Number.isFinite(net)) continue;
+      if (cat.includes('FII') || cat.includes('FPI')) fii = net;
+      if (cat.includes('DII')) dii = net;
+      if (r.date) date = r.date;
+    }
+    if (fii == null && dii == null) throw new Error('No FII/DII rows found');
+
+    return new Response(JSON.stringify({ fii, dii, date, fetchedAt: new Date().toISOString() }), {
+      status: 200,
+      headers: {
+        ...corsHeaders(origin),
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=600', // 10 min cache — values update once/day
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `FII/DII fetch failed: ${err.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+/**
  * Handle /dhan/historical — decrypt vault and proxy to Dhan API.
  */
 async function handleDhanHistorical(request, env, origin) {
@@ -816,6 +965,26 @@ export default {
     // Dhan instrument master — called once by client on token connect
     if (path === '/dhan/instruments') {
       return handleDhanInstruments(request, env, origin);
+    }
+
+    // Moneycontrol news RSS proxy — browser calls this during live scan
+    // to build a symbol-sentiment map. We proxy RSS feeds and return the
+    // raw XML; the browser parses and scores via newsSentiment.js.
+    if (path === '/news/moneycontrol') {
+      return handleMoneycontrolNews(request, origin);
+    }
+
+    // India VIX live fetch — browser calls this at scan start to get
+    // the current VIX close (and thus the current regime).
+    if (path === '/market/vix') {
+      return handleVixFetch(request, origin);
+    }
+
+    // NSE FII/DII flow — browser calls this at scan start to get today's
+    // institutional flow value. NSE requires a session cookie fetched
+    // from the home page first.
+    if (path === '/market/fiidii') {
+      return handleFiiDiiFetch(request, origin);
     }
 
     // GitHub releases proxy — used as fallback when direct GitHub API is blocked (VPN/CORS)
