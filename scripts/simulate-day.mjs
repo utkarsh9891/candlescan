@@ -29,6 +29,7 @@ import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
 import { readCachedChartJson, writeCachedChartJson, listCachedDates, listCachedSymbols } from './lib/chart-cache-fs.mjs';
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
 import { fetchMarginMapNode, MARGIN_MULTIPLIER } from '../src/data/marginData.js';
+import { SECTOR_INDEX_SYMBOLS, getSector } from '../src/engine/sectorMap.js';
 
 const TIMEFRAME_MAP = {
   '1m': { interval: '1m' },
@@ -197,7 +198,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData }) {
   const trades = [];
   const openPositions = [];
   const tradedSymbols = new Set();
@@ -295,9 +296,28 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       }
 
       // Today's session open = the first candle of the day, 9:15 IST.
-      // Passing explicitly avoids the pattern having to figure it out from
-      // a concatenated array (prior day + pre-window + today so far).
       const stockDayOpen = sd.dayCandles[0]?.o || null;
+
+      // ── Sector strength at this bar (no lookahead) ──
+      // Look up the stock's sector, find the sector index bar at or
+      // before the current stock bar's timestamp, compute the sector's
+      // intraday % move from its session open. Passed to the pattern
+      // engine which uses it to filter sector-aligned trades only.
+      const sectorKey = getSector(sym);
+      let sectorAtBar = null;
+      if (sectorKey && sectorData && sectorData[sectorKey]) {
+        const sd2 = sectorData[sectorKey];
+        let cur2 = null;
+        for (let k = sd2.candles.length - 1; k >= 0; k--) {
+          if (sd2.candles[k].t <= curTs) { cur2 = sd2.candles[k]; break; }
+        }
+        if (cur2 && sd2.dayOpen) {
+          sectorAtBar = {
+            key: sectorKey,
+            intradayPct: (cur2.c - sd2.dayOpen) / sd2.dayOpen,
+          };
+        }
+      }
 
       const patterns = detectPatterns(candlesSoFar, {
         barIndex: barIdx,
@@ -307,9 +327,10 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         prevDayLow: sd.prevDayLow,
         indexDirection: indexAtBar,
         stockDayOpen,
+        sector: sectorAtBar,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen, sector: sectorAtBar } });
 
       if (risk.confidence < MIN_CONFIDENCE) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
@@ -604,6 +625,30 @@ async function main() {
     }
   }
 
+  // ── Sector index loading ──────────────────────────────────────
+  // Load 1m candles for every NIFTY sector index we know about.
+  // Each entry: { candles: [...], dayOpen: number } keyed by sector code.
+  // Used by pattern/risk engines to score a stock's sector strength
+  // vs the broader market at the time of the signal (no lookahead —
+  // we look up the latest sector bar at or before the stock bar's ts).
+  const sectorData = {};
+  if (engine === 'scalp') {
+    for (const [sectorKey, yahooSym] of Object.entries(SECTOR_INDEX_SYMBOLS)) {
+      const json = readCachedChartJson(yahooSym, tf.interval, resolvedDate);
+      if (!json) continue;
+      const parsed = parseChartJson(json);
+      if (!parsed?.candles?.length) continue;
+      sectorData[sectorKey] = {
+        candles: parsed.candles,
+        dayOpen: parsed.candles[0]?.o || null,
+      };
+    }
+    const loadedSectors = Object.keys(sectorData).length;
+    if (loadedSectors > 0) {
+      console.log(`Sector indices loaded: ${loadedSectors}/${Object.keys(SECTOR_INDEX_SYMBOLS).length}`);
+    }
+  }
+
   // Fetch margin eligibility map if margin trading is enabled
   let marginMap = null;
   if (margin) {
@@ -613,7 +658,7 @@ async function main() {
     } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap };
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData };
 
   if (multiWindow) {
     // Multi-window mode: run 3 windows sequentially
