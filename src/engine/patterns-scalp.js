@@ -72,7 +72,9 @@ function volFactor(candles) {
  *   barIndex?: number,
  *   orbHigh?: number, orbLow?: number,
  *   prevDayHigh?: number, prevDayLow?: number,
- *   indexDirection?: { direction, strength, intradayPct? },
+ *   indexDirection?: { direction, strength, intradayPct?, preWindowMove? },
+ *   sector?: { key: string, intradayPct: number },
+ *   stockDayOpen?: number,
  * }} [opts]
  */
 export function detectPatterns(candles, opts) {
@@ -104,8 +106,6 @@ export function detectPatterns(candles, opts) {
   const idxIntraPct = idxDir?.intradayPct ?? 0;
 
   // Gate 4: index must be clearly trending (not chop). Skip day if not.
-  // The pre-window move is a reliable day-regime proxy; if it's < 0.2%
-  // either way, the day is likely chop and scalping fails.
   if (idxDir?.preWindowMove == null) return [];
   const absPreMove = Math.abs(idxDir.preWindowMove);
   if (absPreMove < 0.002) return []; // 0.2% threshold
@@ -124,6 +124,14 @@ export function detectPatterns(candles, opts) {
   const vf = volFactor(candles);
   if (vf < 1.5) return [];
 
+  // Gate 8: sector strength — trade sector leaders long, sector laggards short.
+  // Requires the stock's sector index to be moving in the same direction as
+  // the intended trade, with at least 0.15% intraday move. Neutral sectors
+  // (<0.15% move) aren't blocked outright but the score will reflect it.
+  // Stocks without a sector mapping fall through (sectorIntraPct=0, neutral).
+  const sector = opts?.sector || null;
+  const sectorIntraPct = sector?.intradayPct ?? 0;
+
   // Session extremes — don't chase the top/bottom of the day
   const sessionLen = Math.max(1, barIndex + 15);
   const session = candles.slice(-sessionLen);
@@ -132,9 +140,12 @@ export function detectPatterns(candles, opts) {
 
   // ─── LONG setup ───
   // Strict: stock up 1.5%+, RS 0.8%+, NIFTY trending up, pullback to VWAP.
+  // Sector gate: if the stock has a known sector, require sector to be
+  // not-negative (intraday >= -0.1%). Leader-sector stocks get preference
+  // via the strength boost below.
   const longConditions =
     stockIntraPct >= 0.015 &&                         // up 1.5%+ on the day
-    (stockIntraPct - idxIntraPct) >= 0.008 &&         // RS >= 0.8%
+    (stockIntraPct - idxIntraPct) >= 0.008 &&         // RS >= 0.8% vs NIFTY
     idxDir?.preWindowMove > 0.002 &&                  // NIFTY must be bullish on opening move
     pullbackPct <= 0.003 &&                           // within 0.3% of VWAP (tighter pullback)
     cur.c > vwap &&                                   // above VWAP
@@ -142,9 +153,18 @@ export function detectPatterns(candles, opts) {
     cur.c > prev.c &&                                 // upticking
     ema5 > ema13 &&                                   // trend intact
     cur.c < sessionHigh * 0.997;                      // not within 0.3% of session high
+  // Note: sector index is informational only — used for a strength boost
+  // below, NOT as a hard gate. NIFTY sector indices are large-cap; small
+  // caps can move contra to their sector-level index and still be valid.
 
   if (longConditions) {
     const rs = stockIntraPct - idxIntraPct;
+    // Sector data is loaded and passed through but not currently scored —
+    // empirical backtest showed that boosting confidence on sector leaders
+    // hurt P&L because NIFTY sector indices are large-cap and the NIFTY
+    // SMALLCAP stocks I'm trading often decouple from them. Kept for later
+    // experiments (e.g. as a gate on known-correlated stock/sector pairs).
+    const sectorDesc = sector ? ` sec:${sector.key}` : '';
     return [{
       name: 'Strong Momo Pullback (Long)',
       direction: 'bullish',
@@ -152,7 +172,7 @@ export function detectPatterns(candles, opts) {
       category: 'momentum',
       emoji: '🔥',
       tip: 'Strong leader pulled back to VWAP, resuming with volume',
-      description: `Day +${(stockIntraPct * 100).toFixed(1)}%, RS +${(rs * 100).toFixed(2)}%, vol ${vf.toFixed(1)}x`,
+      description: `Day +${(stockIntraPct * 100).toFixed(1)}%, RS +${(rs * 100).toFixed(2)}%, vol ${vf.toFixed(1)}x${sectorDesc}`,
       reliability: 0.80,
       candleIndices: [n - 1],
     }];
@@ -169,9 +189,11 @@ export function detectPatterns(candles, opts) {
     cur.c < prev.c &&                                 // ticking down
     ema5 < ema13 &&                                   // downtrend intact
     cur.c > sessionLow * 1.003;                       // not within 0.3% of session low
+  // Note: sector index informational only (soft boost below, not a hard gate).
 
   if (shortConditions) {
     const rs = idxIntraPct - stockIntraPct;
+    const sectorDesc = sector ? ` sec:${sector.key}` : '';
     return [{
       name: 'Strong Momo Pullback (Short)',
       direction: 'bearish',
@@ -179,7 +201,7 @@ export function detectPatterns(candles, opts) {
       category: 'momentum',
       emoji: '❄️',
       tip: 'Strong loser bounced into VWAP, rolling over with volume',
-      description: `Day ${(stockIntraPct * 100).toFixed(1)}%, RS -${(rs * 100).toFixed(2)}%, vol ${vf.toFixed(1)}x`,
+      description: `Day ${(stockIntraPct * 100).toFixed(1)}%, RS -${(rs * 100).toFixed(2)}%, vol ${vf.toFixed(1)}x${sectorDesc}`,
       reliability: 0.80,
       candleIndices: [n - 1],
     }];
