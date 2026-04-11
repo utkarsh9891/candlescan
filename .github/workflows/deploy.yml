@@ -106,12 +106,50 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
-      # Build categorized release notes from commit messages since last tag
+      # Build categorized release notes from commit messages since last tag.
+      #
+      # Reference-tag selection is release-type aware:
+      #   - PATCH release (e.g. v0.14.3)   → previous tag by semver (v0.14.2)
+      #   - MINOR release (e.g. v0.14.0)   → previous MINOR tag (v0.13.0)
+      #                                       so notes aggregate all patches
+      #   - MAJOR release (e.g. v1.0.0)    → previous MAJOR tag (v0.0.0 or
+      #                                       earliest minor if no prior major)
+      #
+      # Without this, a manual minor tag push would inherit the previous
+      # patch as its reference and the release notes would only cover
+      # 1 commit instead of the full feature set accumulated since the
+      # last minor.
       - name: Generate release notes
         id: notes
         run: |
-          # Find the previous tag (skip current)
-          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${{ steps.version.outputs.version }}$" | head -1)
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Parse major/minor/patch from the tag (strip the leading v)
+          VNUM="${VERSION#v}"
+          MAJOR=$(echo "$VNUM" | cut -d. -f1)
+          MINOR=$(echo "$VNUM" | cut -d. -f2)
+          PATCH=$(echo "$VNUM" | cut -d. -f3 | sed 's/[^0-9].*//')
+
+          echo "Parsed: major=$MAJOR minor=$MINOR patch=$PATCH"
+
+          # Classify the release type to pick the right reference point
+          if [ "$PATCH" = "0" ] && [ "$MINOR" = "0" ]; then
+            RELEASE_TYPE="major"
+            # Previous major = latest tag with MAJOR < current major, patch=0, minor=0
+            PREV_TAG=$(git tag -l 'v*.0.0' --sort=-v:refname | grep -v "^${VERSION}$" | head -1)
+          elif [ "$PATCH" = "0" ]; then
+            RELEASE_TYPE="minor"
+            # Previous minor = latest vX.Y.0 tag that isn't current
+            PREV_TAG=$(git tag -l 'v*.*.0' --sort=-v:refname | grep -E "^v[0-9]+\.[0-9]+\.0$" | grep -v "^${VERSION}$" | head -1)
+          else
+            RELEASE_TYPE="patch"
+            # Previous any = latest tag that isn't current (existing behavior)
+            PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${VERSION}$" | head -1)
+          fi
+
+          echo "Release type: $RELEASE_TYPE"
+          echo "Previous reference tag: ${PREV_TAG:-none}"
+
           if [ -z "$PREV_TAG" ]; then
             RANGE="HEAD"
           else
@@ -143,7 +181,15 @@ jobs:
           # Count stats
           COMMIT_COUNT=$(git rev-list --count "$RANGE" --no-merges 2>/dev/null || echo 0)
           FILES_CHANGED=$(git diff --stat "$RANGE" 2>/dev/null | tail -1 || echo "")
-          NOTES="${NOTES}---\n**${COMMIT_COUNT} commits** since ${PREV_TAG:-initial}\n${FILES_CHANGED}"
+
+          # Release type banner — helps users understand the scope
+          RELEASE_BANNER=""
+          if [ "$RELEASE_TYPE" = "minor" ] && [ -n "$PREV_TAG" ]; then
+            RELEASE_BANNER="_Minor release — aggregates all patch releases since ${PREV_TAG}._\n\n"
+          elif [ "$RELEASE_TYPE" = "major" ] && [ -n "$PREV_TAG" ]; then
+            RELEASE_BANNER="_Major release — aggregates all changes since ${PREV_TAG}._\n\n"
+          fi
+          NOTES="${RELEASE_BANNER}${NOTES}---\n**${COMMIT_COUNT} commits** since ${PREV_TAG:-initial}\n${FILES_CHANGED}"
 
           # Write to file (avoids shell quoting issues)
           echo -e "$NOTES" > /tmp/release-notes.md
