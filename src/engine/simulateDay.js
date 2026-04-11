@@ -63,7 +63,7 @@ function timeToSecs(hhmm) {
  * @param {number} [params.positionSize=100000]
  * @param {number} [params.maxConcurrent=3]
  * @param {number} [params.maxTotalTrades=6]
- * @param {number} [params.txCostPct=0.0005]
+ * @param {number} [params.txCostPct=0.0002] — 0.02% per side, 0.04% round-trip (premium broker default)
  * @param {number} [params.minConfidence=75]
  * @param {number} [params.skipFirstBars=3]
  * @param {number} [params.minAvgVolume=50000]
@@ -82,7 +82,7 @@ export async function runSimulation({
   positionSize = 300000,
   maxConcurrent = 1,
   maxTotalTrades = 5,
-  txCostPct = 0.0005,
+  txCostPct = 0.0002,
   minConfidence = 80,
   skipFirstBars = 0,
   minAvgVolume = 0,

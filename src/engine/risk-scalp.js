@@ -72,31 +72,24 @@ export function computeRiskScore({ candles, patterns, opts }) {
   const barIndex = opts?.barIndex ?? candles.length;
   const atrVal = atrLike(candles, 14);
 
-  // ─── SL / target — the math-bound minimum ───
-  // Tx cost alone eats 0.1% per round-trip trade. 5 trades = 0.5% daily
-  // just in fees. To clear Rs 10k net on 15L we need ~Rs 17,500 gross.
-  // Per-trade: Rs 3,500 gross = 0.233% on 15L.
+  // ─── SL / target — target-bound sizing ───
+  // Premium broker tx cost: Rs 600 per trade round-trip on 15L = 0.04%.
+  // 5 trades = Rs 3,000 in fees daily.
+  // To clear Rs 10k net on 15L we need ~Rs 13,000 gross = Rs 2,600/trade
+  // = 0.173% of 15L per trade.
   //
-  // At R:R 2:1 and 50% WR: trade EV = 0.5*(2Y) - 0.5*Y = 0.5Y.
-  // 0.5Y = 0.233% → Y = 0.467% SL, 0.934% target.
+  // At R:R 2:1 and 0.5% SL / 1.0% target:
+  //   EV per trade = 0.5Y where Y = SL distance = 0.5% = Rs 7,500
+  //   50% WR → 0.5 × 0.5% = +0.25% per trade = +Rs 3,750/trade
+  //   5 trades × Rs 3,750 − Rs 3,000 tx = Rs 15,750 ✓
+  //   45% WR → Rs 2,625/trade × 5 − Rs 3,000 = Rs 10,125 ✓
+  //   40% WR → Rs 1,500/trade × 5 − Rs 3,000 = Rs 4,500 ✗
   //
-  // Rounded to 0.5% / 1.0% to give a small buffer:
-  //   SL = 0.5% → Rs 7,500 risk on 15L
-  //   Target = 1.0% → Rs 15,000 reward on 15L (2:1 R:R)
-  //
-  // EV table:
-  //   55% WR: 0.55×15,000 - 0.45×7,500 = 4,875/trade → 5 trades = 24,375 ✓
-  //   50% WR: 0.50×15,000 - 0.50×7,500 = 3,750/trade → 5 trades = 18,750 ✓ (clear)
-  //   45% WR: 0.45×15,000 - 0.55×7,500 = 2,625/trade → 5 trades = 13,125 ✓
-  //   40% WR: 0.40×15,000 - 0.60×7,500 = 1,500/trade → 5 trades = 7,500 ✗
-  // Net after Rs 7,500 tx cost:
-  //   55% WR → +16,875 ✓
-  //   50% WR → +11,250 ✓
-  //   45% WR → +5,625 ✗
-  //
-  // Bottom line: strategy must yield >= 50% WR to hit 10k consistently.
-  const slDist = entry * 0.005;       // 0.5%
-  const targetDist = entry * 0.010;   // 1.0%
+  // Bottom line with premium broker: strategy needs >=45% WR to clear
+  // the Rs 10k daily target. Standard retail (Rs 1,500/trade) would
+  // need >=50% WR — noticeably harder.
+  const slDist = entry * 0.005;       // 0.5% = Rs 7,500 risk on 15L
+  const targetDist = entry * 0.010;   // 1.0% = Rs 15,000 reward on 15L
 
   let sl, target;
   if (direction === 'long') {

@@ -36,7 +36,12 @@ const TIMEFRAME_MAP = {
   '15m': { interval: '15m' },
 };
 
-const TX_COST_PCT = 0.0005; // 0.05% per side
+// Premium-broker round-trip cost: ~0.04% (Rs 600 per trade on 15L leveraged).
+// 0.02% per side × 2 sides ≈ Rs 600 all-in on a Rs 15L position (matches
+// Zerodha Pro / Dhan Premium MIS on large/mid caps: flat ~Rs 20 +
+// STT + exchange + GST). Standard retail plans are ~0.05% per side;
+// configure differently if needed.
+const TX_COST_PCT = 0.0002;
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
 function parseArgs() {
