@@ -1,6 +1,8 @@
 # AGENTS.md — Coding Agent Guide for CandleScan
 
-> This file helps AI coding agents (Claude, Cursor, Copilot, Aider, etc.) understand the project quickly and make correct changes.
+> This file helps AI coding agents (Cursor, Copilot, Aider, and Claude Code when explicitly referenced) understand the project architecture in depth and make correct changes.
+>
+> **Note for Claude Code specifically**: the auto-loaded spec is [`/CLAUDE.md`](../CLAUDE.md) at the repo root — that file contains the non-negotiable rules and a short file index. This `AGENTS.md` is the long-form companion with full architecture, data flow, and history. Both files must be kept consistent.
 
 ## Table of Contents
 - [What is this project?](#what-is-this-project)
@@ -149,7 +151,7 @@ Three engines represent fundamentally different trading models — NOT tunable v
 | `vite-plugin-chart-cache.mjs` | Vite middleware: intercepts chart requests, serves from/writes to `cache/charts/` |
 | `worker/index.js` | Cloudflare Worker: CORS proxy (Yahoo + NSE), `X-Gate-Token` SHA-256 validation, IP rate limiting via KV |
 | `worker/wrangler.toml` | Worker config + `RATE_LIMIT` KV namespace binding |
-| `worker/OPS.md` | Operations guide: passphrase reset, deploy, troubleshooting |
+| `docs/WORKER_OPS.md` | Operations guide: passphrase reset, deploy, troubleshooting |
 
 ---
 
@@ -371,7 +373,7 @@ Each engine represents a fundamentally different trading style. **Never tune par
 
 ## Deployment & Versioning
 
-> **Full guide: [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md)** — read this before making any commits.
+> **Full guide: [`GIT_WORKFLOW.md`](./GIT_WORKFLOW.md)** — read this before making any commits.
 
 **Key rules for coding agents:**
 - Direct push to `main` is **blocked**. Always use a PR (`gh pr create` → `gh pr merge <n> --merge`).
@@ -386,7 +388,7 @@ cd worker
 npx wrangler deploy                       # Deploy code
 npx wrangler secret put GATE_PASSPHRASE_HASH  # Set/rotate passphrase hash
 ```
-Full guide: `worker/OPS.md`
+Full guide: [`docs/WORKER_OPS.md`](./WORKER_OPS.md)
 
 ---
 
