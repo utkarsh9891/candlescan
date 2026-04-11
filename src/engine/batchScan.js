@@ -70,6 +70,10 @@ export async function batchScan({
   const detectPatterns = engineFns?.detectPatterns || detectPatternsDefault;
   const detectLiquidityBox = engineFns?.detectLiquidityBox || detectLiquidityBoxDefault;
   const computeRiskScore = engineFns?.computeRiskScore || computeRiskScoreDefault;
+  // Optional: proximity detector for Novice Mode watch list. When supplied,
+  // each result gets a `proximityInfo` field attached. Silently skipped
+  // when omitted so regular batch/simulation callers are unaffected.
+  const detectProximity = engineFns?.detectProximity || null;
 
   const results = [];
   let completed = 0;
@@ -202,6 +206,22 @@ export async function batchScan({
           // ── PHASE 4: size multiplier (day-level → exposure) ──
           const sizeRes = sizeMultiplier(stockContext, { direction: risk.direction });
 
+          // ── OPTIONAL: proximity detection for Novice Mode ──
+          // Computed on the same candles we already fetched — no extra
+          // network calls. Skipped entirely when the caller didn't ask
+          // for it (detectProximity is null), which is the common case.
+          let proximityInfo = null;
+          if (detectProximity) {
+            try {
+              proximityInfo = detectProximity(candles, {
+                barIndex: candles.length,
+                indexDirection: indexDirection || null,
+              });
+            } catch {
+              /* proximity is best-effort — never break the scan */
+            }
+          }
+
           return {
             symbol: displaySymbol,
             companyName: companyName || displaySymbol,
@@ -230,6 +250,10 @@ export async function batchScan({
             liquidity,
             gatedReason: gated ? gateRes.reason : null,
             sector: getSector(cleanSym),
+            // Optional — only populated when the caller provided a
+            // detectProximity fn (Novice Mode). Shape is the return
+            // object of detectProximity or null.
+            proximityInfo,
           };
         } catch {
           return null;

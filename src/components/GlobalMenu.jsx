@@ -40,7 +40,7 @@ const CLASSIC_CATEGORIES_UI = [
  * @param {(filters: Set) => void} props.onFiltersChange
  * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
  */
-export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, simulationAction, paperTradingAction, settingsAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, scalpVariant, onScalpVariantChange }) {
+export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, noviceAction, simulationAction, paperTradingAction, settingsAction, customIndices, onAddCustomIndex, onRemoveCustomIndex, engineVersion, onEngineVersionChange, scalpVariant, onScalpVariantChange }) {
   const [open, setOpen] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const ref = useRef(null);
@@ -118,6 +118,18 @@ export default function GlobalMenu({ activeFilters, onFiltersChange, navAction, 
                   <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
                 </svg>
                 {navAction.label}
+              </button>
+              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
+            </>
+          )}
+          {noviceAction && (
+            <>
+              <button type="button" onClick={() => { setOpen(false); noviceAction.onClick(); }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 700, color: '#16a34a', background: '#f0fdf4', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                </svg>
+                {noviceAction.label}
               </button>
               <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
             </>

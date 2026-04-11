@@ -26,6 +26,7 @@ import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx'
 import BatchScanPage from './components/BatchScanPage.jsx';
 import SimulationPage from './components/SimulationPage.jsx';
 import PaperTradingPage from './components/PaperTradingPage.jsx';
+import NoviceModePage from './components/NoviceModePage.jsx';
 import SettingsPage from './components/SettingsPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
@@ -201,7 +202,7 @@ export default function App() {
   // Signal highlight toggle
   const [highlightSignals, setHighlightSignals] = useState(true);
 
-  // View state: 'main' | 'batch' | 'simulate' | 'settings'
+  // View state: 'main' | 'batch' | 'simulate' | 'paper' | 'novice' | 'settings'
   // Auto-navigate to settings if returning from Zerodha OAuth callback
   const [view, setViewRaw] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -729,6 +730,10 @@ export default function App() {
             ? { label: 'Index Scanner', onClick: () => setView('batch') }
             : { label: 'Stock Scanner', onClick: () => setView('main') }
           }
+          noviceAction={{
+            label: view === 'novice' ? 'Back to Stock Scanner' : 'Novice Mode',
+            onClick: () => setView(view === 'novice' ? 'main' : 'novice'),
+          }}
           simulationAction={{
             label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
             onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
@@ -800,6 +805,22 @@ export default function App() {
           engineVersion={engineVersion}
           scalpVariant={scalpVariant}
           dataSource={dataSource}
+        />
+      </div>
+
+      {/* Novice mode page — always mounted, hidden when not active.
+          One-button UX for non-technical users. Leaf view: taps flow
+          back into the main stock scanner via onSelectSymbol. */}
+      <div style={{ display: view === 'novice' ? 'block' : 'none' }}>
+        <NoviceModePage
+          savedIndex={nseIndex}
+          indexOptions={allIndexOptions}
+          dataSource={dataSource}
+          onSelectSymbol={(s) => {
+            setInputVal(s);
+            onQuick(s);
+            setView('main');
+          }}
         />
       </div>
 
