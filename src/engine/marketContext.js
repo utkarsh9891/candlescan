@@ -317,12 +317,30 @@ export function composeContextScore(ctx, direction) {
   // Layer 4: FII/DII flow (informational only in backtest)
   if (ctx.flow) reasons.push(`flow:${ctx.flow}`);
 
-  // Layer 5: News sentiment — hard veto on counter-strong news only
+  // Layer 5: News sentiment — asymmetric treatment:
+  //   BEARISH_STRONG on a LONG  → hard VETO (stop listening to pattern)
+  //   BULLISH_STRONG on a SHORT → hard VETO (ditto)
+  //   BEARISH_STRONG on a SHORT → +5 bonus (news FAVORS this trade)
+  //   BULLISH_STRONG on a LONG  → +5 bonus (news FAVORS this trade)
+  //   Mild sentiment (+/- 0.2..0.5) → +2 if aligned, no penalty if counter
+  //
+  // News is the only layer that gets positive bonuses right now. It's
+  // the strongest signal of the five — when there IS meaningful news on
+  // a stock, technical momentum is usually already reacting to it, so
+  // aligning with the news direction is high-quality signal worth a
+  // ranking shift. The other layers (VIX, gap, liq, flow) are day-level
+  // context and bonuses on them shifted rankings in ways that hurt P&L.
   if (ctx.sentiment) {
     const align = newsAlignment(ctx.sentiment, direction);
     if (align === 'VETO') {
       veto = true;
       reasons.push(`news:${ctx.sentiment}=VETO`);
+    } else if (align > 0) {
+      // Aligned news: STRONG variants get +5, mild get +2
+      const isStrong = ctx.sentiment === 'BULLISH_STRONG' || ctx.sentiment === 'BEARISH_STRONG';
+      const bonus = isStrong ? 5 : 2;
+      delta += bonus;
+      reasons.push(`news:${ctx.sentiment}+${bonus}`);
     } else {
       reasons.push(`news:${ctx.sentiment}`);
     }

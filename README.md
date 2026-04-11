@@ -55,7 +55,7 @@ Mobile-first NSE candlestick pattern scanner with liquidity box analysis, risk s
 - Search within results
 - Tap any result to drill into single-stock analysis
 - Background persistence — scan continues while you browse individual stocks
-- Auth-gated: passphrase required (see [Worker OPS](worker/OPS.md))
+- Auth-gated: passphrase required (see [Worker OPS](docs/WORKER_OPS.md))
 
 ### PWA (Progressive Web App)
 - Install on Android via Chrome "Add to Home Screen"
@@ -278,7 +278,7 @@ Push to `main` triggers GitHub Actions:
 **Setup (one-time):** Repo Settings → Pages → Source: "GitHub Actions"
 
 ### Cloudflare Worker
-See [worker/OPS.md](worker/OPS.md) for full deployment and passphrase management guide.
+See [docs/WORKER_OPS.md](docs/WORKER_OPS.md) for full deployment and passphrase management guide.
 
 ```bash
 cd worker
@@ -351,7 +351,7 @@ git push origin v0.6.0
 - **Source**: `git describe --tags --always` (run at build time in `vite.config.js`)
 - **Display**: hamburger menu bottom — e.g. `v0.5.3-2-gabcdef 31 Mar`
 - **CI**: GitHub Actions fetches full git history (`fetch-depth: 0`) so tags are available
-- **Full guide**: See [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md)
+- **Full guide**: See [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md)
 
 ## Debug Mode
 
@@ -377,7 +377,7 @@ Use to verify: gate token is being sent, requests aren't 429/403, response times
 4. API requests send `X-Gate-Token` header + encrypted vault blob
 5. CF Worker decrypts vault with RSA private key → proxies to Kite API
 
-Environment variable on the CF Worker: `GATE_PASSPHRASE_HASH` (see [worker/OPS.md](worker/OPS.md)).
+Environment variable on the CF Worker: `GATE_PASSPHRASE_HASH` (see [docs/WORKER_OPS.md](docs/WORKER_OPS.md)).
 
 ---
 
@@ -386,7 +386,7 @@ Environment variable on the CF Worker: `GATE_PASSPHRASE_HASH` (see [worker/OPS.m
 - **Free tier**: 20 req/day per IP, batch scan disabled
 - **Premium** (valid gate token): unlimited, batch scan + Zerodha enabled
 
-Rate limits are enforced via Cloudflare KV. See [worker/OPS.md](worker/OPS.md) for configuration.
+Rate limits are enforced via Cloudflare KV. See [docs/WORKER_OPS.md](docs/WORKER_OPS.md) for configuration.
 
 ---
 
@@ -397,7 +397,7 @@ Rate limits are enforced via Cloudflare KV. See [worker/OPS.md](worker/OPS.md) f
 | Blank page on Pages | Check `base: '/candlescan/'` in vite.config.js |
 | No chart data on Pages | Try different network; CORS proxies may be blocked |
 | `npm start` fails | Run `npm install` first |
-| Gate auth 403 | Wrong passphrase — see [worker/OPS.md](worker/OPS.md) |
+| Gate auth 403 | Wrong passphrase — see [docs/WORKER_OPS.md](docs/WORKER_OPS.md) |
 | Rate limited | 20/day per IP; unlock premium for unlimited |
 | Zerodha 401 | Access token expired — re-enter in Settings |
 | Dhan 429 | Rate limit — Dhan allows limited requests per minute; batch scan auto-throttles |
