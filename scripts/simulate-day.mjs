@@ -23,7 +23,6 @@ import { computeRiskScore as computeRiskScoreV2 } from '../src/engine/risk-v2.js
 import { detectPatterns as detectPatternsScalp } from '../src/engine/patterns-scalp.js';
 import { detectLiquidityBox as detectLiquidityBoxScalp } from '../src/engine/liquidityBox-scalp.js';
 import { computeRiskScore as computeRiskScoreScalp } from '../src/engine/risk-scalp.js';
-import { getScalpVariantFns } from '../src/engine/scalp-variants/registry.js';
 import { trimTrailingFlatCandles } from '../src/engine/fetcher.js';
 import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
 import { readCachedChartJson, writeCachedChartJson, listCachedDates, listCachedSymbols } from './lib/chart-cache-fs.mjs';
@@ -53,7 +52,6 @@ function parseArgs() {
   let indexName = 'NIFTY 200';
   let date = null;
   let engine = 'scalp';
-  let variant = 'momentum';
   let minConfidence = 80;
   let maxPositions = 1;
   let maxTotalTrades = 10;
@@ -67,7 +65,8 @@ function parseArgs() {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
     if (args[i] === '--engine' && args[i + 1]) { engine = args[++i]; continue; }
-    if (args[i] === '--variant' && args[i + 1]) { variant = args[++i]; continue; }
+    // --variant is accepted but ignored (single scalp engine, no variants)
+    if (args[i] === '--variant' && args[i + 1]) { i++; continue; }
     if (args[i] === '--confidence' && args[i + 1]) { minConfidence = +args[++i]; continue; }
     if (args[i] === '--max-positions' && args[i + 1]) { maxPositions = +args[++i]; continue; }
     if (args[i] === '--max-trades' && args[i + 1]) { maxTotalTrades = +args[++i]; continue; }
@@ -81,7 +80,7 @@ function parseArgs() {
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, variant, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin };
 }
 
 function parseChartJson(data) {
@@ -513,14 +512,13 @@ function buildWindowStockData(allStockBase, wFrom, wTo) {
 }
 
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, variant, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
-    const fns = getScalpVariantFns(variant);
-    detectPatterns = fns.detectPatterns;
-    detectLiquidityBox = fns.detectLiquidityBox;
-    computeRiskScore = fns.computeRiskScore;
+    detectPatterns = detectPatternsScalp;
+    detectLiquidityBox = detectLiquidityBoxScalp;
+    computeRiskScore = computeRiskScoreScalp;
   } else {
     detectPatterns = detectPatternsV2;
     detectLiquidityBox = detectLiquidityBoxV2;
@@ -530,8 +528,7 @@ async function main() {
   const tf = TIMEFRAME_MAP[timeframe];
   if (!tf) { console.error(`Unknown timeframe: ${timeframe}`); process.exit(1); }
 
-  const variantLabel = engine === 'scalp' && variant !== 'momentum' ? ` [${variant}]` : '';
-  console.log(`\n=== CandleScan ${engine}${variantLabel} Simulation${multiWindow ? ' (Multi-Window)' : ''} ===`);
+  console.log(`\n=== CandleScan ${engine} Simulation${multiWindow ? ' (Multi-Window)' : ''} ===`);
   console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
   console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${maxPositions} | Per trade: Rs.${positionSize.toLocaleString()} | Max trades: ${maxTotalTrades}`);
   console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Volume: auto (25th pctile) | Margin: ${margin ? MARGIN_MULTIPLIER + 'x' : 'Off'}`);

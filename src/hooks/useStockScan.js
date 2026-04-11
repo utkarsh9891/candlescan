@@ -23,9 +23,9 @@
  *   - Appends to the session history list
  *   - Grows the broad search universe with newly-discovered symbols
  *
- * Caller supplies the engine config (engineVersion, scalpVariant,
- * timeframe, nseIndex) and the dataSource state + setter (so this hook
- * can switch to Yahoo when a Zerodha token expires mid-scan).
+ * Caller supplies the engine config (engineVersion, timeframe,
+ * nseIndex) and the dataSource state + setter (so this hook can
+ * switch to Yahoo when a Zerodha token expires mid-scan).
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -38,7 +38,9 @@ import { computeRiskScore as computeRiskScoreClassic } from '../engine/risk-clas
 import { detectPatterns as detectPatternsV2 } from '../engine/patterns-v2.js';
 import { detectLiquidityBox as detectLiquidityBoxV2 } from '../engine/liquidityBox-v2.js';
 import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
-import { getScalpVariantFns } from '../engine/scalp-variants/registry.js';
+import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
+import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
+import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { hasVault, getVaultBlob, clearVault } from '../utils/credentialVault.js';
 import { getGateToken } from '../utils/batchAuth.js';
@@ -50,7 +52,6 @@ export function useStockScan({
   dataSource,
   setDataSourceState,
   engineVersion,
-  scalpVariant,
   timeframe,
   nseIndex,
   // Passed in from useIndexUniverse so newly-discovered symbols can
@@ -215,10 +216,9 @@ export function useStockScan({
       setCandles(cd);
       let detectPat, detectBox, scoreRisk;
       if (engineVersion === 'scalp') {
-        const varFns = getScalpVariantFns(scalpVariant);
-        detectPat = varFns.detectPatterns;
-        detectBox = varFns.detectLiquidityBox;
-        scoreRisk = varFns.computeRiskScore;
+        detectPat = detectPatternsScalp;
+        detectBox = detectLiquidityBoxScalp;
+        scoreRisk = computeRiskScoreScalp;
       } else if (engineVersion === 'v1') {
         detectPat = detectPatternsClassic; detectBox = detectLiquidityBoxClassic; scoreRisk = computeRiskScoreClassic;
       } else {
@@ -278,7 +278,7 @@ export function useStockScan({
     } finally {
       setLoading(false);
     }
-  }, [timeframe, engineVersion, scalpVariant, nseIndex, dataSource, setDataSourceState]);
+  }, [timeframe, engineVersion, nseIndex, dataSource, setDataSourceState]);
 
   // Yahoo bid/ask quote for the detail view — fires after every scan
   useEffect(() => {

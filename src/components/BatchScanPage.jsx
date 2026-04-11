@@ -15,8 +15,9 @@ import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
 import { detectPatterns as detectPatternsClassic } from '../engine/patterns-classic.js';
 import { detectLiquidityBox as detectLiquidityBoxClassic } from '../engine/liquidityBox-classic.js';
 import { computeRiskScore as computeRiskScoreClassic } from '../engine/risk-classic.js';
+import { detectProximity, classifyForNovice } from '../engine/proximity-scalp.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
-import { getScalpVariantFns } from '../engine/scalp-variants/registry.js';
+import ScheduleCheckButton from './ScheduleCheckButton.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 const ALL_TFS = ['1m', '5m', '15m', '30m', '1h', '1d'];
@@ -111,14 +112,22 @@ function isSignalFresh(r, nowSec = Math.floor(Date.now() / 1000)) {
   return nowSec <= r.validTillTs;
 }
 
-function ResultCard({ r, onTap }) {
+function ResultCard({ r, onTap, scheduledChecks }) {
   const color = actionColor(r.action);
   const bg = actionBg(r.action);
   const fresh = isSignalFresh(r);
+  // Classify for scheduling: show the schedule button on WAIT rows and
+  // on near-threshold NO TRADE rows that have proximity info (scalp-engine
+  // results only, since other engines don't populate proximityInfo).
+  const noviceClass = classifyForNovice(r, r.proximityInfo);
+  const canSchedule = noviceClass === 'imminent' || noviceClass === 'building' || noviceClass === 'early';
+  const scheduleTier = noviceClass === 'building' ? 'building' : noviceClass === 'early' ? 'early' : 'wait';
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onTap(r.symbol)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onTap(r.symbol); }}
       style={{
         width: '100%', textAlign: 'left', cursor: 'pointer',
         padding: 12, borderRadius: 10,
@@ -126,6 +135,7 @@ function ResultCard({ r, onTap }) {
         background: fresh ? '#fff' : '#fafbfc',
         display: 'block', marginBottom: 8,
         opacity: fresh ? 1 : 0.78,
+        boxSizing: 'border-box',
       }}
     >
       {/* Row 1: Symbol + Action badge + Confidence */}
@@ -231,17 +241,37 @@ function ResultCard({ r, onTap }) {
           ))}
         </div>
       )}
-    </button>
+      {/* Row 6: Schedule Check — only for near-threshold rows so we don't
+          pollute trade-now cards (which don't need a reminder). */}
+      {canSchedule && scheduledChecks && (
+        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+          <ScheduleCheckButton
+            scheduledChecks={scheduledChecks}
+            symbol={r.symbol}
+            company={r.companyName}
+            direction={r.proximityInfo?.direction || r.direction}
+            beforeClass={noviceClass}
+            beforeHint={r.proximityInfo?.hint || (noviceClass === 'imminent' ? 'Close to firing' : 'Still forming')}
+            tier={scheduleTier}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
-function getEngineFns(engineVersion, scalpVariant) {
-  if (engineVersion === 'scalp') return getScalpVariantFns(scalpVariant || 'momentum');
+function getEngineFns(engineVersion) {
+  if (engineVersion === 'scalp') return {
+    detectPatterns: detectPatternsScalp,
+    detectLiquidityBox: detectLiquidityBoxScalp,
+    computeRiskScore: computeRiskScoreScalp,
+    detectProximity, // so near-threshold rows get proximityInfo for the schedule button
+  };
   if (engineVersion === 'v1') return { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, scalpVariant, dataSource, debugMode }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [nseIndex, setNseIndex] = useState(savedIndex || DEFAULT_NSE_INDEX_ID);
   const [timeframe, setTimeframe] = useState('5m');
@@ -319,7 +349,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
         symbols,
         timeframe,
         gateToken: token,
-        engineFns: getEngineFns(engineVersion, scalpVariant),
+        engineFns: getEngineFns(engineVersion),
         indexDirection,
         marketContext: liveMarketContext,
         concurrency: 8,
@@ -346,7 +376,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       });
       // Capture telemetry attached as a non-enumerable property on the result array
       if (scanResults && scanResults.telemetry) {
-        setTelemetry({ ...scanResults.telemetry, dataSource: dataSource || 'yahoo', index: nseIndex, timeframe, engine: engineVersion, scalpVariant });
+        setTelemetry({ ...scanResults.telemetry, dataSource: dataSource || 'yahoo', index: nseIndex, timeframe, engine: engineVersion });
       }
 
       // ── Phase 5: Google News deep enrichment for top candidates ──
@@ -684,9 +714,14 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
           {/* Result cards */}
           <div>
             {displayed.map((r) => (
-              <ResultCard key={r.symbol} r={r} onTap={(sym) => {
-                onSelectSymbol(sym);
-              }} />
+              <ResultCard
+                key={r.symbol}
+                r={r}
+                scheduledChecks={scheduledChecks}
+                onTap={(sym) => {
+                  onSelectSymbol(sym);
+                }}
+              />
             ))}
           </div>
 

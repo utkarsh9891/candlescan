@@ -13,7 +13,9 @@ import { fetchYahooQuote } from '../engine/yahooQuote.js';
 import ToggleSwitch from './ToggleSwitch.jsx';
 import { getGateToken } from '../utils/batchAuth.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
-import { getScalpVariantFns, DEFAULT_SCALP_VARIANT } from '../engine/scalp-variants/registry.js';
+import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
+import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
+import { computeRiskScore as computeRiskScoreScalp } from '../engine/risk-scalp.js';
 import { detectPatterns as detectPatternsV2 } from '../engine/patterns-v2.js';
 import { detectLiquidityBox as detectLiquidityBoxV2 } from '../engine/liquidityBox-v2.js';
 import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
@@ -55,8 +57,12 @@ const CHARGES_PREMIUM = {
   GST_PCT: 0.18,
 };
 
-function getEngineFns(engine, variant) {
-  if (engine === 'scalp') return getScalpVariantFns(variant || DEFAULT_SCALP_VARIANT);
+function getEngineFns(engine) {
+  if (engine === 'scalp') return {
+    detectPatterns: detectPatternsScalp,
+    detectLiquidityBox: detectLiquidityBoxScalp,
+    computeRiskScore: computeRiskScoreScalp,
+  };
   if (engine === 'v2') return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
   return { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
 }
@@ -149,7 +155,7 @@ const sectionHeader = (onClick, open, label, count, rightEl) => (
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-export default function PaperTradingPage({ savedIndex, indexOptions, engineVersion, scalpVariant, dataSource }) {
+export default function PaperTradingPage({ savedIndex, indexOptions, engineVersion, dataSource }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
 
   // Load saved settings
@@ -218,7 +224,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       const controller = new AbortController(); abortRef.current = controller;
       const results = await batchScan({
         symbols, timeframe: engineVersion === 'scalp' ? '1m' : '5m',
-        gateToken: getGateToken(), engineFns: getEngineFns(engineVersion, scalpVariant),
+        gateToken: getGateToken(), engineFns: getEngineFns(engineVersion),
         indexDirection: idxDir,
         onProgress: (completed, total, current) => setScanProgress({ completed, total, current }),
         signal: controller.signal,
@@ -227,7 +233,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       setScanResults(results);
     } catch (e) { if (e?.name !== 'AbortError') setScanError(e?.message || String(e)); }
     finally { setScanning(false); abortRef.current = null; }
-  }, [scanning, nseIndex, engineVersion, scalpVariant]);
+  }, [scanning, nseIndex, engineVersion]);
 
   // ── Enter trade (capital-capped) ─────────────────────────────────────────
   const enterTrade = useCallback((r) => {

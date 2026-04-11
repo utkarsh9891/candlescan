@@ -39,13 +39,25 @@ import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { DEFAULT_NSE_INDEX_ID, NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
+import ScheduleCheckButton from './ScheduleCheckButton.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 
 // App owner defaults per CLAUDE.md
 const DEFAULT_CAPITAL = 300000;       // Rs 3 lakh
 const MARGIN_MULT = 5;                // 5x → Rs 15 lakh exposure
-const DEFAULT_NOVICE_INDEX = 'NIFTY SMALLCAP 100'; // matches the primary sim params
+
+// Virtual "combined" index — Novice Mode's default. Unions the three
+// liquid NIFTY 100s (top / mid / small) into ~300 tradable stocks.
+// Handled inline by runFullScan: fetches each component index in
+// parallel and unions the symbol lists before passing to batchScan.
+// Not added to nseIndices.js because no other view uses it.
+const COMBINED_INDEX_ID = 'TOP + MID + SMALL 100';
+const COMBINED_INDEX_LABEL = 'Top + Mid + Small 100 (~300 stocks)';
+const COMBINED_INDEX_COMPONENTS = ['NIFTY 100', 'NIFTY MIDCAP 100', 'NIFTY SMALLCAP 100'];
+// Parent index used for getIndexDirection when the combined universe
+// is selected — NIFTY 100's parent is ^NSEI (via indexDirection.js map).
+const COMBINED_INDEX_DIRECTION_PROXY = 'NIFTY 100';
 
 // Novice mode ONLY uses the scalp momentum engine. Variants are an
 // advanced-user concern; exposing them would confuse the target user.
@@ -294,7 +306,7 @@ function Line({ label, value, color, strong, muted }) {
  * Watch list card — much slimmer than trade-now. One line of status,
  * a hint, and a tap target that opens the detail view.
  */
-function WatchCard({ r, onTap, category }) {
+function WatchCard({ r, onTap, category, scheduledChecks }) {
   const prox = r.proximityInfo;
   const long = prox?.direction === 'long' ||
                (r.direction === 'long' && !prox);
@@ -317,15 +329,18 @@ function WatchCard({ r, onTap, category }) {
   const pct = Math.round(pctRaw * 100);
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onTap(r.symbol)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onTap(r.symbol); }}
       style={{
         width: '100%', textAlign: 'left', cursor: 'pointer',
         padding: 10, borderRadius: 10, marginBottom: 6,
         border: `1px solid ${ts.ring}`,
         background: ts.bg,
         display: 'block',
+        boxSizing: 'border-box',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -360,7 +375,22 @@ function WatchCard({ r, onTap, category }) {
       }}>
         <div style={{ height: '100%', width: `${pct}%`, background: color }} />
       </div>
-    </button>
+
+      {/* Schedule button — per-tier duration default */}
+      {scheduledChecks && (
+        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+          <ScheduleCheckButton
+            scheduledChecks={scheduledChecks}
+            symbol={r.symbol}
+            company={r.companyName}
+            direction={long ? 'long' : 'short'}
+            beforeClass={category}
+            beforeHint={hint}
+            tier={category}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -401,6 +431,7 @@ function SectionHeader({ title, count, color = '#1a1d26' }) {
 
 export default function NoviceModePage({
   savedIndex, indexOptions, dataSource, onSelectSymbol,
+  scheduledChecks,
 }) {
   const [scanning, setScanning] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -411,18 +442,18 @@ export default function NoviceModePage({
   const [showPassphrase, setShowPassphrase] = useState(false);
   // NEW-badge tracking: map of symbol → expiresAt timestamp
   const [promotedUntil, setPromotedUntil] = useState({});
-  // Index is fixed to the user's primary sim index unless they've
-  // already saved a different favorite via the main view.
-  const [novIndex, setNovIndex] = useState(() => {
-    if (savedIndex && (indexOptions || NSE_INDEX_OPTIONS).some(o => o.id === savedIndex)) {
-      return savedIndex;
-    }
-    // Prefer SMALLCAP 100 (the daily-driver per CLAUDE.md); otherwise
-    // whatever the saved index is; otherwise the app default.
-    const options = indexOptions || NSE_INDEX_OPTIONS;
-    if (options.some(o => o.id === DEFAULT_NOVICE_INDEX)) return DEFAULT_NOVICE_INDEX;
-    return savedIndex || DEFAULT_NSE_INDEX_ID;
-  });
+  // Default to the combined Top + Mid + Small 100 universe. It's the
+  // virtual index — ~300 liquid large/mid/small caps handled inline
+  // by runFullScan. Users can switch to any single built-in index via
+  // the dropdown below if they want narrower scope.
+  const [novIndex, setNovIndex] = useState(COMBINED_INDEX_ID);
+
+  // Dropdown options: virtual combined at top + everything from the
+  // app's regular index options.
+  const dropdownOptions = [
+    { id: COMBINED_INDEX_ID, label: COMBINED_INDEX_LABEL },
+    ...(indexOptions || NSE_INDEX_OPTIONS),
+  ];
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   // Capital used for trade sizing. Matches CLAUDE.md default, user
@@ -466,15 +497,34 @@ export default function NoviceModePage({
     setProgress({ completed: 0, total: 0, current: 'Loading stocks…' });
 
     try {
-      const symbols = await fetchNseIndexSymbolList(novIndex);
+      // Resolve symbols — either from a single index or from the
+      // virtual combined universe. The combined path fetches all
+      // three components in parallel and unions them, with per-fetch
+      // error tolerance so one failure doesn't kill the scan.
+      let symbols;
+      if (novIndex === COMBINED_INDEX_ID) {
+        const lists = await Promise.all(
+          COMBINED_INDEX_COMPONENTS.map(id =>
+            fetchNseIndexSymbolList(id).catch(() => [])
+          )
+        );
+        const union = new Set();
+        for (const list of lists) for (const s of list) union.add(s);
+        symbols = Array.from(union);
+      } else {
+        symbols = await fetchNseIndexSymbolList(novIndex);
+      }
       if (!symbols?.length) {
         setError('Could not load the stock list. Try again in a minute.');
         return;
       }
       setProgress({ completed: 0, total: symbols.length, current: symbols[0] });
 
+      // For the combined universe, use NIFTY 100 as the proxy for
+      // market-direction detection (indexDirection.js maps it to ^NSEI).
+      const dirIdx = novIndex === COMBINED_INDEX_ID ? COMBINED_INDEX_DIRECTION_PROXY : novIndex;
       let indexDirection = null;
-      try { indexDirection = await getIndexDirection(novIndex); } catch { /* ok */ }
+      try { indexDirection = await getIndexDirection(dirIdx); } catch { /* ok */ }
       indexDirRef.current = indexDirection;
 
       let marketContext = null;
@@ -706,7 +756,7 @@ export default function NoviceModePage({
                 fontWeight: 600,
               }}
             >
-              {(indexOptions || NSE_INDEX_OPTIONS).map(o => (
+              {dropdownOptions.map(o => (
                 <option key={o.id} value={o.id}>{o.label || o.id}</option>
               ))}
             </select>
@@ -845,7 +895,7 @@ export default function NoviceModePage({
             color="#d97706"
           />
           {imminentShown.map((r) => (
-            <WatchCard key={r.symbol} r={r} onTap={onSelectSymbol} category="imminent" />
+            <WatchCard key={r.symbol} r={r} onTap={onSelectSymbol} category="imminent" scheduledChecks={scheduledChecks} />
           ))}
         </>
       )}
@@ -858,7 +908,7 @@ export default function NoviceModePage({
             color="#64748b"
           />
           {buildingShown.map((r) => (
-            <WatchCard key={r.symbol} r={r} onTap={onSelectSymbol} category="building" />
+            <WatchCard key={r.symbol} r={r} onTap={onSelectSymbol} category="building" scheduledChecks={scheduledChecks} />
           ))}
         </>
       )}
@@ -871,7 +921,7 @@ export default function NoviceModePage({
             color="#94a3b8"
           />
           {earlyShown.map((r) => (
-            <WatchCard key={r.symbol} r={r} onTap={onSelectSymbol} category="early" />
+            <WatchCard key={r.symbol} r={r} onTap={onSelectSymbol} category="early" scheduledChecks={scheduledChecks} />
           ))}
         </>
       )}
