@@ -198,6 +198,9 @@ export async function runSimulation({
   let peakCapital = capital;
   let maxDrawdown = 0;
   let totalTradesOpened = 0;
+  // Running loss streak — resets on a win, increments on loss/breakeven.
+  // Feeds sizeMultiplier so entries after 2+ losses size down (0.75/0.5).
+  let consecutiveLosses = 0;
 
   const maxBars = Math.max(...Object.values(stockData).map(d => d.windowCandles.length));
 
@@ -254,6 +257,8 @@ export async function runSimulation({
           exitTime: istTime(bar.t),
           confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
         });
+        if (netPnl > 0) consecutiveLosses = 0;
+        else consecutiveLosses++;
         openPositions.splice(p, 1);
         tradedSymbols.add(pos.sym); // blacklist for rest of day
       }
@@ -331,8 +336,9 @@ export async function runSimulation({
       if (totalTradesOpened >= maxTotalTrades) break;
 
       // PHASE 4: position size multiplier (day-level signals control exposure)
-      const marketCtx = null;
-      const sizeRes = sizeMultiplier(marketCtx, { direction: c.risk.direction });
+      // Browser sim doesn't yet compute day-level VIX/flow, but loss-streak
+      // protection works with zero extra context.
+      const sizeRes = sizeMultiplier({ consecutiveLosses }, { direction: c.risk.direction });
       const basePosition = positionSize * sizeRes.mult;
       const effectivePositionSize = margin ? basePosition * MARGIN_MULTIPLIER : basePosition;
       const shares = Math.floor(effectivePositionSize / c.risk.entry);

@@ -27,6 +27,22 @@ export const TIMEFRAME_MAP = {
 };
 
 /**
+ * Extended lookback ranges used when the chart user scrolls back near the
+ * left edge. Feeds the lazy-prefetch path in Chart.jsx → App.jsx. Level 0
+ * is the default (above); higher levels progressively fetch more history.
+ * Yahoo's `range` param accepts standard codes; we pick the widest each
+ * interval supports without switching granularity.
+ */
+export const EXTENDED_LOOKBACKS = {
+  '1m': ['5d', '7d'],          // 1m data is capped at ~7 days by Yahoo
+  '5m': ['5d', '1mo', '2mo'],
+  '15m': ['5d', '1mo', '2mo'],
+  '30m': ['1mo', '2mo', '3mo'],
+  '1h': ['1mo', '3mo', '6mo'],
+  '1d': ['6mo', '2y', '5y'],
+};
+
+/**
  * Cloudflare Worker URL — deploy worker/ directory, then paste the URL here.
  * Until deployed, leave blank and the app falls through to Jina/public proxies.
  */
@@ -368,13 +384,24 @@ export function generateSimulatedCandles(symbol, count = 80) {
 /**
  * @param {string} inputSymbol
  * @param {string} timeframeKey
- * @param {{ gateToken?: string, batchToken?: string, date?: string }} [options] date is YYYY-MM-DD for date-partitioned cache
+ * @param {{ gateToken?: string, batchToken?: string, date?: string, lookbackLevel?: number }} [options]
+ *   date is YYYY-MM-DD for date-partitioned cache;
+ *   lookbackLevel (0-based) selects a wider history range from EXTENDED_LOOKBACKS
+ *   — used by the chart's lazy-prefetch path when the user scrolls toward
+ *   the left edge. 0 = default (same as timeframe map), 1+ = successively
+ *   older data.
  * @returns {{ candles: Array, live: boolean, simulated: boolean, error?: string, yahooSymbol: string, displaySymbol: string, companyName: string }}
  */
 export async function fetchOHLCV(inputSymbol, timeframeKey, options) {
   const tf = TIMEFRAME_MAP[timeframeKey] || TIMEFRAME_MAP['5m'];
   const yahooSymbol = normalizeSymbol(inputSymbol);
   const displaySymbol = inputSymbol.trim().toUpperCase() || yahooSymbol;
+
+  // Optional extended-lookback override for lazy prefetch.
+  // Falls back to the timeframe's default range if level is 0 or invalid.
+  const extendedSeries = EXTENDED_LOOKBACKS[timeframeKey] || [];
+  const level = Math.max(0, Math.min(extendedSeries.length - 1, Number(options?.lookbackLevel) || 0));
+  const rangeOverride = level > 0 && extendedSeries[level] ? extendedSeries[level] : tf.range;
 
   if (isDevSimulateRequested()) {
     const sim = generateSimulatedCandles(displaySymbol, 90);
@@ -391,7 +418,7 @@ export async function fetchOHLCV(inputSymbol, timeframeKey, options) {
   const { candles, live, companyName: cn } = await fetchWithFallbacks(
     yahooSymbol,
     tf.interval,
-    tf.range,
+    rangeOverride,
     options
   );
 

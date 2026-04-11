@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { fetchOHLCV } from './engine/fetcher.js';
+import { fetchLiveGoogleNewsDetailForSymbol } from './engine/marketContextLive.js';
+import { classifyNewsSentiment } from './engine/marketContext.js';
 import { detectPatterns as detectPatternsClassic } from './engine/patterns-classic.js';
 import { detectLiquidityBox as detectLiquidityBoxClassic } from './engine/liquidityBox-classic.js';
 import { computeRiskScore as computeRiskScoreClassic } from './engine/risk-classic.js';
@@ -138,6 +140,16 @@ export default function App() {
   const [lastScan, setLastScan] = useState('');
   const [yahooSym, setYahooSym] = useState('');
   const [quote, setQuote] = useState(null);
+  // Lazy-prefetch state: increases when the user scrolls near the left edge.
+  // Reset on every fresh scan in runScan() so a new symbol starts at level 0.
+  const [lookbackLevel, setLookbackLevel] = useState(0);
+  const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
+  // Per-stock news for the detail screen — fetched async after a scan,
+  // independent of the technical pipeline. Shape matches batchScan result:
+  // { score, sentiment, headlines: [{title, description, score, source}] }.
+  const [stockNews, setStockNews] = useState(null);
+  const [stockNewsLoading, setStockNewsLoading] = useState(false);
+  const stockNewsReqIdRef = useRef(0);
   const activeSymRef = useRef('');
   const chartRef = useRef(null);
   const [chartInfo, setChartInfo] = useState({ barCount: 0, atMinZoom: false, atMaxZoom: false });
@@ -375,6 +387,15 @@ export default function App() {
     setScanError('');
     setQuote(null);
     setZerodhaExpiredMsg('');
+    // Fresh scan → reset lazy prefetch state so the next left-edge
+    // scroll starts from level 0 again.
+    setLookbackLevel(0);
+    // Fresh scan → clear any stale news from the previous symbol and
+    // reset the in-flight ID so late responses from an old scan can't
+    // land on the new view.
+    setStockNews(null);
+    setStockNewsLoading(false);
+    const newsReqId = ++stockNewsReqIdRef.current;
     try {
       let result;
       let usedSource = dataSource;
@@ -521,6 +542,26 @@ export default function App() {
       setBox(bx);
       setRisk(rk);
       setLastScan(new Date().toLocaleTimeString());
+
+      // Fire-and-forget async news fetch for this symbol — doesn't block
+      // the scan. When it lands we check newsReqId vs the latest to guard
+      // against late responses overwriting a newer scan's news.
+      setStockNewsLoading(true);
+      fetchLiveGoogleNewsDetailForSymbol(displaySymbol)
+        .then((res) => {
+          if (newsReqId !== stockNewsReqIdRef.current) return;
+          setStockNews({
+            score: res.score,
+            sentiment: classifyNewsSentiment(res.score),
+            headlines: res.headlines || [],
+          });
+        })
+        .catch(() => { /* silent — news is best-effort */ })
+        .finally(() => {
+          if (newsReqId === stockNewsReqIdRef.current) {
+            setStockNewsLoading(false);
+          }
+        });
       setHistory((h) => {
         const next = [
           { symbol: displaySymbol, riskScore: rk.confidence },
@@ -551,6 +592,51 @@ export default function App() {
     if (!activeSymRef.current) return;
     runScan(activeSymRef.current);
   }, [timeframe, runScan]);
+
+  /**
+   * Lazy-prefetch more history for the current chart when the user
+   * scrolls near the left edge. Yahoo-only for now: premium sources
+   * (Zerodha / Dhan) use date-range APIs that don't compose cleanly
+   * with a "lookback level" abstraction, and their users rarely hit
+   * the multi-day history limit anyway.
+   *
+   * Merge strategy: fetch a wider range, dedupe the combined set by
+   * timestamp (newer fetch wins), sort ascending. Chart.jsx detects
+   * the prepend (same last-candle ts, grown length) and preserves
+   * the user's scroll position automatically.
+   */
+  const handleLoadMoreHistory = useCallback(async () => {
+    // Only Yahoo supports the `lookbackLevel` option — silently no-op
+    // for premium sources so the user's scroll gesture doesn't hang.
+    if (lastUsedSource !== 'yahoo') return;
+    if (loadingMoreHistory) return;
+    if (!activeSymRef.current) return;
+    const nextLevel = lookbackLevel + 1;
+    // Max level is determined by EXTENDED_LOOKBACKS in fetcher.js.
+    // We let fetcher clamp internally; if the returned candle count
+    // doesn't grow, we treat it as "no more data" and stop.
+    setLoadingMoreHistory(true);
+    try {
+      const res = await fetchOHLCV(activeSymRef.current, timeframe, { lookbackLevel: nextLevel });
+      if (!res?.candles?.length) return;
+      // Merge: dedupe by `t`, keep the newer candle on collisions
+      // (later fetches may revise the most recent bar).
+      const byTs = new Map();
+      for (const c of candles) byTs.set(c.t, c);
+      for (const c of res.candles) byTs.set(c.t, c);
+      const merged = Array.from(byTs.values()).sort((a, b) => a.t - b.t);
+      // Only commit if we actually got more history — otherwise we've
+      // hit Yahoo's range ceiling and should stop trying.
+      if (merged.length > candles.length) {
+        setCandles(merged);
+        setLookbackLevel(nextLevel);
+      }
+    } catch {
+      // Silent: lazy-prefetch failure shouldn't interrupt the scan session
+    } finally {
+      setLoadingMoreHistory(false);
+    }
+  }, [lastUsedSource, loadingMoreHistory, lookbackLevel, timeframe, candles]);
 
   // Merge broad NIFTY 500 universe + current index for homepage search
   const searchSymbols = useMemo(() => {
@@ -602,6 +688,8 @@ export default function App() {
     yahooSymbol: yahooSym,
     quote,
     signalMeta,
+    stockNews,
+    stockNewsLoading,
   };
 
   // Drawings for current symbol
@@ -895,6 +983,8 @@ export default function App() {
             onDrawingUpdate={handleDrawingUpdate}
             patterns={patterns}
             highlightSignals={highlightSignals}
+            onNearLeftEdge={handleLoadMoreHistory}
+            loadingMore={loadingMoreHistory}
           />
           <DataDelayDisclaimer candles={candles} simulated={simulated} dataSource={lastUsedSource} lastScan={lastScan} />
           {debugMode && sourceDebugReason && (

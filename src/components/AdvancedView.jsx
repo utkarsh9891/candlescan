@@ -44,8 +44,79 @@ function QuoteMicroCard({ quote, last, sym }) {
   );
 }
 
+/**
+ * News headlines card — mirrors the "RECENT NEWS" block from the batch
+ * scanner's result card (BatchScanPage.jsx). Shown for every successful
+ * scan regardless of action type (BUY / WAIT / NO TRADE); the news layer
+ * is information, not a gate.
+ */
+function NewsHeadlinesCard({ stockNews, stockNewsLoading, sym }) {
+  if (stockNewsLoading && !stockNews) {
+    return (
+      <div style={{ ...card, fontSize: 12, color: '#8892a8' }}>
+        Loading news for {sym}…
+      </div>
+    );
+  }
+  if (!stockNews) return null;
+  const { sentiment, score, headlines } = stockNews;
+  const hasHeadlines = headlines && headlines.length > 0;
+  if (!hasHeadlines && (!sentiment || sentiment === 'NEUTRAL')) {
+    // No news found at all — don't show an empty card
+    return null;
+  }
+
+  const isBullish = sentiment && sentiment.includes('BULLISH');
+  const isBearish = sentiment && sentiment.includes('BEARISH');
+
+  return (
+    <div style={card}>
+      <div style={{ fontWeight: 700, marginBottom: 8, color: '#1a1d26', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+        News
+        {sentiment && sentiment !== 'NEUTRAL' && (
+          <span style={{
+            fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 700,
+            background: isBullish ? '#dcfce7' : isBearish ? '#fee2e2' : '#f1f5f9',
+            color: isBullish ? '#166534' : isBearish ? '#991b1b' : '#64748b',
+          }}>
+            {sentiment}
+            {typeof score === 'number' && ` (${score.toFixed(2)})`}
+          </span>
+        )}
+      </div>
+      {hasHeadlines ? (
+        headlines.slice(0, 5).map((h, i) => (
+          <div
+            key={i}
+            style={{
+              padding: '6px 0',
+              borderBottom: i < Math.min(headlines.length, 5) - 1 ? '1px solid #eef0f4' : 'none',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ color: '#1a1d26' }}>{h.title}</div>
+            {typeof h.score === 'number' && h.score !== 0 && (
+              <div style={{
+                fontSize: 10,
+                fontFamily: mono,
+                marginTop: 2,
+                color: h.score > 0 ? '#16a34a' : '#dc2626',
+              }}>
+                {h.score > 0 ? '+' : ''}{h.score.toFixed(2)}
+              </div>
+            )}
+          </div>
+        ))
+      ) : (
+        <div style={{ fontSize: 12, color: '#8892a8' }}>No recent headlines found.</div>
+      )}
+    </div>
+  );
+}
+
 export default function AdvancedView(props) {
-  const { patterns, box, candles, sym, companyName, changePct, risk, quote } = props;
+  const { patterns, box, candles, sym, companyName, changePct, risk, quote, stockNews, stockNewsLoading } = props;
   const last = candles.length ? candles[candles.length - 1] : null;
 
   return (
@@ -85,6 +156,13 @@ export default function AdvancedView(props) {
           </div>
         </div>
       )}
+
+      {/* News headlines (same UX as batch scan result cards) */}
+      <NewsHeadlinesCard
+        stockNews={stockNews}
+        stockNewsLoading={stockNewsLoading}
+        sym={sym}
+      />
 
       {/* Patterns detail */}
       <div style={card}>
