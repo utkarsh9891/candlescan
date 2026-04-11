@@ -7,6 +7,7 @@
 import { fetchOHLCV } from './fetcher.js';
 import { fetchNseIndexSymbolList } from './nseIndexFetch.js';
 import { MARGIN_MULTIPLIER } from '../data/marginData.js';
+import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
 
 const IST_OFFSET = 19800; // +5:30 in seconds
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
@@ -311,27 +312,40 @@ export async function runSimulation({
       if (risk.confidence < minConfidence) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
 
-      // Apply 5x margin leverage when margin enabled (matches CLI sim + MIS reality)
-      const effectivePositionSize = margin ? positionSize * MARGIN_MULTIPLIER : positionSize;
-      const shares = Math.floor(effectivePositionSize / risk.entry);
-      if (shares < 1) continue;
+      // PHASE 2b: regime gate (post-pattern, day-level context)
+      // marketContext may be null in older call sites — handled inside gate.
+      const marketCtx = null; // browser sim doesn't build marketContext yet
+      const gateRes = regimeGate(risk.direction, marketCtx);
+      if (!gateRes.ok) continue;
 
-      candidates.push({ sym, risk, patterns, shares });
+      // PHASE 3a: rank score (per-stock signals only)
+      const score = rankScore(risk, marketCtx);
+
+      candidates.push({ sym, risk, patterns, score });
     }
 
-    // Sort by confidence descending, pick top candidates up to available slots
-    candidates.sort((a, b) => b.risk.confidence - a.risk.confidence);
+    // PHASE 3b: sort by rank score, pick top N
+    candidates.sort((a, b) => b.score - a.score);
     for (const c of candidates) {
       if (openPositions.length >= maxConcurrent) break;
       if (totalTradesOpened >= maxTotalTrades) break;
 
+      // PHASE 4: position size multiplier (day-level signals control exposure)
+      const marketCtx = null;
+      const sizeRes = sizeMultiplier(marketCtx, { direction: c.risk.direction });
+      const basePosition = positionSize * sizeRes.mult;
+      const effectivePositionSize = margin ? basePosition * MARGIN_MULTIPLIER : basePosition;
+      const shares = Math.floor(effectivePositionSize / c.risk.entry);
+      if (shares < 1) continue;
+
       openPositions.push({
         sym: c.sym, direction: c.risk.direction,
         entry: c.risk.entry, sl: c.risk.sl, target: c.risk.target,
-        entryBar: barIdx, shares: c.shares,
+        entryBar: barIdx, shares,
         confidence: c.risk.confidence, action: c.risk.action,
         pattern: c.patterns[0]?.name || 'None',
         maxHoldBars: c.risk.maxHoldBars || null,
+        sizeMult: sizeRes.mult,
       });
       totalTradesOpened++;
     }

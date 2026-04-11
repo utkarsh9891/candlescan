@@ -30,7 +30,8 @@ import { readCachedChartJson, writeCachedChartJson, listCachedDates, listCachedS
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
 import { fetchMarginMapNode, MARGIN_MULTIPLIER } from '../src/data/marginData.js';
 import { SECTOR_INDEX_SYMBOLS, getSector } from '../src/engine/sectorMap.js';
-import { vixRegime, classifyGap, liquidityTier, classifyInstitutionalFlow, classifyNewsSentiment, composeContextScore } from '../src/engine/marketContext.js';
+import { vixRegime, classifyGap, liquidityTier, classifyInstitutionalFlow, classifyNewsSentiment } from '../src/engine/marketContext.js';
+import { filterStock, regimeGate, rankScore, sizeMultiplier } from '../src/engine/tradeDecision.js';
 
 const TIMEFRAME_MAP = {
   '1m': { interval: '1m' },
@@ -342,6 +343,16 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         }
       }
 
+      // ── PHASE 1: filter (pre-pattern) ──
+      // "Is this stock tradeable at all right now?" Per-stock signals.
+      const filterRes = filterStock({ symbol: sym }, {
+        liquidityTier: marketContext.liquidity,
+        marginEnabled,
+        marginMap,
+      });
+      if (!filterRes.ok) continue;
+
+      // ── PHASE 2a: pattern detection ──
       const patterns = detectPatterns(candlesSoFar, {
         barIndex: barIdx,
         orbHigh: sd.orbHigh,
@@ -351,37 +362,53 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         indexDirection: indexAtBar,
         stockDayOpen,
         sector: sectorAtBar,
-        marketContext,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen, sector: sectorAtBar, marketContext } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen, sector: sectorAtBar } });
 
       if (risk.confidence < MIN_CONFIDENCE) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
 
-      // Apply 5x margin leverage when margin is enabled — Rs 3L capital
-      // controls Rs 15L of stock. The per-trade P&L is calculated on the
-      // leveraged exposure, matching how Indian intraday margin (MIS) works.
-      const effectivePositionSize = marginEnabled ? POSITION_SIZE * MARGIN_MULTIPLIER : POSITION_SIZE;
-      const shares = Math.floor(effectivePositionSize / risk.entry);
-      if (shares < 1) continue;
+      // ── PHASE 2b: regime gate (post-pattern) ──
+      // "Given today's market context, can I trade in this direction?"
+      // Day-level signals: VIX PANIC, counter-strong news.
+      const gateRes = regimeGate(risk.direction, marketContext);
+      if (!gateRes.ok) continue;
 
-      candidates.push({ sym, risk, patterns, shares });
+      // ── PHASE 3a: rank score ──
+      // Per-stock signals only. Currently: technical confidence + news bonus.
+      const score = rankScore(risk, marketContext);
+
+      candidates.push({ sym, risk, patterns, score });
     }
 
-    // Sort by confidence descending, pick top candidates up to available slots
-    candidates.sort((a, b) => b.risk.confidence - a.risk.confidence);
+    // ── PHASE 3b: sort by rank score, pick top N ──
+    candidates.sort((a, b) => b.score - a.score);
     for (const c of candidates) {
       if (openPositions.length >= MAX_POSITIONS) break;
       if (totalTradesOpened >= MAX_TOTAL_TRADES) break;
 
+      // ── PHASE 4: position size multiplier ──
+      // Day-level signals control exposure here (VIX regime etc).
+      // Size = baseline position × multiplier, then apply 5x margin.
+      const sizeRes = sizeMultiplier({
+        vixRegime: vixReg,
+        flow: flowClass,
+        consecutiveLosses: 0, // TODO: track streaks across trades
+      }, { direction: c.risk.direction });
+      const basePosition = POSITION_SIZE * sizeRes.mult;
+      const effectivePositionSize = marginEnabled ? basePosition * MARGIN_MULTIPLIER : basePosition;
+      const shares = Math.floor(effectivePositionSize / c.risk.entry);
+      if (shares < 1) continue;
+
       openPositions.push({
         sym: c.sym, direction: c.risk.direction,
         entry: c.risk.entry, sl: c.risk.sl, target: c.risk.target,
-        entryBar: barIdx, shares: c.shares,
+        entryBar: barIdx, shares,
         confidence: c.risk.confidence, action: c.risk.action,
         pattern: c.patterns[0]?.name || 'None',
         maxHoldBars: c.risk.maxHoldBars || null,
+        sizeMult: sizeRes.mult,
       });
       totalTradesOpened++;
     }
