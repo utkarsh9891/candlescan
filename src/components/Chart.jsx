@@ -1,1121 +1,538 @@
-import { useState, useEffect, useCallback, useRef, useMemo, forwardRef, useImperativeHandle } from 'react';
+/**
+ * Chart — TradingView Lightweight Charts wrapper.
+ *
+ * Replaces the custom 1100-line SVG candlestick renderer with the
+ * battle-tested TradingView Lightweight Charts library (Apache 2.0,
+ * ~45KB gzipped). All touch/wheel/zoom/pan/crosshair handling is
+ * delegated to the library — zero custom gesture code.
+ *
+ * TV native features used:
+ *   - CandlestickSeries (OHLC rendering)
+ *   - HistogramSeries (volume overlay)
+ *   - Price lines (entry/SL/target, user hlines, liquidity box bounds)
+ *   - Series markers (pattern signal annotations)
+ *   - Crosshair + subscribeCrosshairMove (OHLCV legend overlay)
+ *   - Pinch-to-zoom, scroll-wheel zoom, touch pan (all native)
+ *   - subscribeVisibleLogicalRangeChange (lazy history prefetch)
+ *   - subscribeClick (drawing tool placement)
+ */
+
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import {
+  createChart, CrosshairMode, LineStyle,
+  CandlestickSeries, HistogramSeries, createSeriesMarkers,
+} from 'lightweight-charts';
 
 const mono = "'SF Mono', Menlo, monospace";
+const RISK_ACTIONS = new Set(['BUY', 'STRONG BUY', 'SHORT', 'STRONG SHORT']);
 
-const MIN_VISIBLE = 10;
-const MAX_VISIBLE_CAP = 300;
-const X_AXIS_HEIGHT = 22;
+/** Visible bars target per timeframe — enough context without overcrowding. */
+const VISIBLE_BARS = { '1m': 80, '5m': 60, '15m': 50, '30m': 40, '1h': 40, '1d': 120 };
 
-/** Default visible candle count per timeframe — keeps candle widths consistent. */
-const DEFAULT_VISIBLE = {
-  '1m': { mobile: 40, desktop: 60 },
-  '5m': { mobile: 40, desktop: 60 },
-  '15m': { mobile: 50, desktop: 80 },
-  '25m': { mobile: 50, desktop: 80 },
-  '30m': { mobile: 50, desktop: 80 },
-  '1h': { mobile: 40, desktop: 60 },
-  '1d': { mobile: 60, desktop: 120 },
-};
-
-const btnStyle = {
-  minWidth: 36,
-  minHeight: 34,
-  padding: '0 10px',
-  fontSize: 16,
-  fontWeight: 600,
-  lineHeight: 1,
-  borderRadius: 8,
-  border: '1px solid #e2e5eb',
-  background: '#fff',
-  color: '#1a1d26',
-  cursor: 'pointer',
-};
-
-/* ── Helpers ──────────────────────────────────────────────────────── */
-
-function formatTimestamp(ts, timeframe, prevTs) {
+function formatTimestamp(ts, timeframe) {
   const d = new Date(ts * 1000);
   if (timeframe === '1d') {
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
   }
-  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  // Show date when it changes from previous label
-  if (prevTs != null) {
-    const prev = new Date(prevTs * 1000);
-    if (prev.getDate() !== d.getDate() || prev.getMonth() !== d.getMonth()) {
-      return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
-    }
-  }
-  return time;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/* ── Component ────────────────────────────────────────────────────── */
+/**
+ * Deduplicate, sort, and gap-compress candle data for TV.
+ *
+ * TV lightweight charts renders timestamps with real-time spacing,
+ * so overnight/weekend gaps between trading sessions create huge
+ * empty zones that make intraday charts look ultra-zoomed-in.
+ *
+ * Fix: detect gaps > 2× the median bar interval and compress them
+ * to 1× the interval. This gives evenly-spaced bars while preserving
+ * relative intra-session spacing. A timeMap is returned so the OHLCV
+ * overlay can show the original timestamp.
+ */
+function prepareData(candles) {
+  // Step 1: deduplicate (keep latest for each rounded timestamp)
+  const seen = new Set();
+  const raw = [];
+  for (let i = candles.length - 1; i >= 0; i--) {
+    const t = Math.round(candles[i].t);
+    if (seen.has(t)) continue;
+    seen.add(t);
+    raw.push({ t, o: candles[i].o, h: candles[i].h, l: candles[i].l, c: candles[i].c, v: candles[i].v || 0 });
+  }
+  raw.reverse();
+
+  if (raw.length === 0) return { ohlc: [], vol: [], timeMap: new Map() };
+
+  // Step 2: compute median interval to detect gaps
+  const intervals = [];
+  for (let i = 1; i < raw.length; i++) {
+    intervals.push(raw[i].t - raw[i - 1].t);
+  }
+  intervals.sort((a, b) => a - b);
+  const medianInterval = intervals.length > 0 ? intervals[Math.floor(intervals.length / 2)] : 60;
+  const gapThreshold = medianInterval * 2.5;
+
+  // Step 3: remap timestamps to close gaps
+  const timeMap = new Map(); // remappedTime → originalTime
+  const ohlc = [];
+  const vol = [];
+  let remapped = raw[0].t;
+  for (let i = 0; i < raw.length; i++) {
+    if (i > 0) {
+      const gap = raw[i].t - raw[i - 1].t;
+      remapped += gap > gapThreshold ? medianInterval : gap;
+    }
+    timeMap.set(remapped, raw[i].t);
+    ohlc.push({ time: remapped, open: raw[i].o, high: raw[i].h, low: raw[i].l, close: raw[i].c });
+    vol.push({ time: remapped, value: raw[i].v, color: raw[i].c >= raw[i].o ? 'rgba(22,163,74,0.2)' : 'rgba(220,38,38,0.2)' });
+  }
+
+  return { ohlc, vol, timeMap };
+}
+
+/* ── OHLCV legend overlay (inside chart, top-left) ───────────────── */
+
+function OhlcvOverlay({ data, lastCandle, timeframe }) {
+  const c = data || (lastCandle
+    ? { open: lastCandle.o, high: lastCandle.h, low: lastCandle.l, close: lastCandle.c, volume: lastCandle.v, time: lastCandle.t }
+    : null);
+  if (!c) return null;
+  const bull = c.close >= c.open;
+  return (
+    <div style={{
+      position: 'absolute', top: 6, left: 6, zIndex: 10,
+      display: 'flex', gap: 5, alignItems: 'center',
+      padding: '2px 6px', borderRadius: 4,
+      background: 'rgba(255,255,255,0.85)',
+      fontSize: 10, fontFamily: mono, color: '#4a5068',
+      whiteSpace: 'nowrap', pointerEvents: 'none',
+      backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+    }}>
+      <span>O <b>{c.open?.toFixed(2)}</b></span>
+      <span>H <b>{c.high?.toFixed(2)}</b></span>
+      <span>L <b>{c.low?.toFixed(2)}</b></span>
+      <span>C <b style={{ color: bull ? '#16a34a' : '#dc2626' }}>{c.close?.toFixed(2)}</b></span>
+      {c.volume != null && <span>V <b>{Math.round(c.volume).toLocaleString()}</b></span>}
+      {c.time && <span style={{ color: '#8892a8' }}>{formatTimestamp(c.time, timeframe)}</span>}
+    </div>
+  );
+}
+
+/* ── Main Chart component ────────────────────────────────────────── */
 
 export default forwardRef(function Chart({
   candles,
   box,
   risk,
-  height = 240,
+  height = 260,
   sym = '',
   timeframe = '5m',
   drawingMode = null,
   drawings = [],
   onDrawingComplete,
-  onDrawingUpdate,
   patterns = [],
   highlightSignals = false,
-  // Lazy prefetch: fires when the user has scrolled within ~20% of the
-  // left edge of the loaded candle history. Parent is expected to
-  // refetch with a wider lookback and pass a longer `candles` array.
-  // The Chart auto-preserves scroll position when new older candles
-  // arrive (same last-candle timestamp + grown length).
   onNearLeftEdge,
-  // True while the parent is fetching more history. Suppresses
-  // re-firing the callback and lets the parent render a hint.
   loadingMore = false,
 }, ref) {
-  const [visibleCount, setVisibleCount] = useState(() => {
-    const isMobile = window.innerWidth < 500;
-    const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
-    const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
-    const have = candles?.length || 0;
-    return have > 0 ? Math.min(cap, have, MAX_VISIBLE_CAP) : cap;
-  });
-  const [panOffset, setPanOffset] = useState(0);
-  const panOffsetRef = useRef(0);
-  const countRef = useRef(0);
-  const visibleCountRef = useRef(visibleCount);
-  const maxVisibleRef = useRef(0);
-  const candlesLenRef = useRef(0);
-  const [containerWidth, setContainerWidth] = useState(0);
-  // Long-press crosshair state (mobile)
-  const [crosshair, setCrosshair] = useState(null); // { x, y } or null
-  const crosshairRef = useRef(null); // sync ref for use in touch handlers
-  const longPressTimer = useRef(null);
-  const longPressActive = useRef(false);
-  const wrapRef = useRef(null);
-  const svgRef = useRef(null);
-  const [pendingPoint, setPendingPoint] = useState(null);
-  const [mousePos, setMousePos] = useState(null);
-  const [tappedCandle, setTappedCandle] = useState(null); // { idx, candle } for mobile OHLCV info
-  const [touchDrawPos, setTouchDrawPos] = useState(null); // touch crosshair position in drawing mode
-
-  // Measure container width on mount and resize
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const measure = () => setContainerWidth(el.clientWidth);
-    measure();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
-    if (ro) ro.observe(el);
-    else window.addEventListener('resize', measure);
-    return () => { if (ro) ro.disconnect(); else window.removeEventListener('resize', measure); };
-  }, []);
-  const [draggingHLine, setDraggingHLine] = useState(null);
-
-  // Touch state refs
-  const touchRef = useRef({ startX: 0, startY: 0, lastDist: 0, fingers: 0, panStart: 0, countStart: 0 });
-  // Track previous sym+length to detect when we need to recalculate zoom
-  const prevKeyRef = useRef('');
-
-  // Reset zoom to the default visible cap when symbol/timeframe changes or
-  // when a fresh data load arrives. We DON'T reset when the candles array
-  // was extended by a lazy-prefetch prepend — in that case the user's
-  // current view is preserved (same bars, just more history available
-  // to scroll back into).
-  //
-  // Detection: a prepend looks like (same sym + same timeframe) + (length
-  // increased) + (last candle's timestamp unchanged). Under those
-  // conditions we keep panOffset/visibleCount as-is since the existing
-  // math naturally preserves the visible window: panOffset is measured
-  // from the RIGHT edge, so prepending older bars leaves the same bars
-  // on screen.
-  useEffect(() => {
-    if (!candles?.length) return;
-    const lastTs = candles[candles.length - 1]?.t || 0;
-    const key = `${sym}:${timeframe}:${lastTs}:${candles.length}`;
-    if (key === prevKeyRef.current) return;
-    const prev = prevKeyRef.current.split(':');
-    const prevSym = prev[0];
-    const prevTf = prev[1];
-    const prevLastTs = Number(prev[2]) || 0;
-    const prevLen = Number(prev[3]) || 0;
-    const isSameSeries = prevSym === sym && prevTf === timeframe && prevLastTs === lastTs;
-    const isPrepend = isSameSeries && candles.length > prevLen;
-    prevKeyRef.current = key;
-
-    if (isPrepend) {
-      // Don't touch visibleCount or panOffset — the view stays put.
-      return;
-    }
-
-    const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
-    const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
-    const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
-    const defaultCount = Math.min(cap, candles.length, MAX_VISIBLE_CAP);
-    setVisibleCount(defaultCount);
-    setPanOffset(0);
-  }, [sym, candles, timeframe]);
-
-  const maxVisible = Math.min(candles?.length || 0, MAX_VISIBLE_CAP);
-  const floorBars = maxVisible <= 0 ? 0 : Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
-  const count = maxVisible <= 0 ? 0 : Math.min(maxVisible, Math.max(floorBars, visibleCount));
-
-  // Keep refs in sync for event handlers (avoids stale closures)
-  countRef.current = count;
-  visibleCountRef.current = visibleCount;
-  maxVisibleRef.current = maxVisible;
-  crosshairRef.current = crosshair;
-  candlesLenRef.current = candles?.length || 0;
-
-  useEffect(() => {
-    if (maxVisible <= 0) return;
-    const fl = Math.max(1, Math.min(MIN_VISIBLE, maxVisible));
-    setVisibleCount((v) => Math.min(Math.max(v, fl), maxVisible));
-  }, [maxVisible]);
-
-  // Clamp panOffset
-  const maxPan = Math.max(0, (candles?.length || 0) - count);
-  const clampedPan = Math.min(panOffset, maxPan);
-
-  const startIdx = Math.max(0, (candles?.length || 0) - count - clampedPan);
-  const slice = count > 0 && candles?.length ? candles.slice(startIdx, startIdx + count) : [];
-  const sliceStartIdx = startIdx;
-
-  /* ── Lazy prefetch: fire onNearLeftEdge when user has scrolled close
-        to the earliest loaded bar. Debounced per-series by the
-        `loadingMore` prop — parent clears it after the fetch resolves.
-        Series key is (sym + timeframe + last candle ts) so the next
-        series load re-arms automatically. ─────────────────────────── */
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const candleSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
+  const riskLinesRef = useRef([]);
+  const drawingLinesRef = useRef([]);
+  const boxLinesRef = useRef([]);
+  const markersPluginRef = useRef(null);
+  const prevSymKeyRef = useRef('');
   const nearEdgeFiredRef = useRef('');
-  useEffect(() => {
-    if (!onNearLeftEdge) return;
-    if (!candles?.length) return;
-    if (loadingMore) return;
-    const total = candles.length;
-    // "Within 20% of left edge": startIdx < 20% of total
-    if (startIdx > total * 0.2) return;
-    // Fire once per series. The series key resets after the candles
-    // array extends (new length → new key).
-    const seriesKey = `${sym}:${timeframe}:${candles[candles.length - 1]?.t}:${total}`;
-    if (nearEdgeFiredRef.current === seriesKey) return;
-    nearEdgeFiredRef.current = seriesKey;
-    onNearLeftEdge();
-  }, [startIdx, candles, sym, timeframe, loadingMore, onNearLeftEdge]);
+  const lastOhlcvTimeRef = useRef(null);
+  const drawingModeRef = useRef(null);
+  const onDrawingCompleteRef = useRef(null);
+  const pendingBoxRef = useRef(null);
+  const chartIdRef = useRef(0);
+  const roRef = useRef(null);
+  const timeMapRef = useRef(new Map());
+  const [ohlcvData, setOhlcvData] = useState(null);
+  const [pendingBoxHint, setPendingBoxHint] = useState(false);
 
-  const zoomIn = useCallback(() => {
-    setVisibleCount((v) => Math.max(floorBars, Math.floor(v * 0.72)));
-  }, [floorBars]);
-
-  const zoomOut = useCallback(() => {
-    setVisibleCount((v) => Math.min(maxVisible, Math.ceil(v / 0.72)));
-  }, [maxVisible]);
-
-  const zoomFit = useCallback(() => {
-    const isMobile = (wrapRef.current?.clientWidth || window.innerWidth) < 500;
-    const tfDefaults = DEFAULT_VISIBLE[timeframe] || DEFAULT_VISIBLE['5m'];
-    const cap = isMobile ? tfDefaults.mobile : tfDefaults.desktop;
-    setVisibleCount(Math.min(cap, maxVisible));
-    setPanOffset(0);
-  }, [maxVisible, timeframe]);
-
-  // Expose zoom controls to parent via ref
-  useImperativeHandle(ref, () => ({
-    zoomIn, zoomOut, zoomFit,
-    get atMinZoom() { return count <= floorBars; },
-    get atMaxZoom() { return count >= maxVisible; },
-    get barCount() { return slice.length; },
-  }), [zoomIn, zoomOut, zoomFit, count, floorBars, maxVisible, slice.length]);
-
-  /* ── Wheel: ctrl+wheel = zoom, regular wheel = pan ───────────── */
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const onWheelNative = (e) => {
-      const c = countRef.current;
-      const mv = maxVisibleRef.current;
-      const len = candlesLenRef.current;
-      if (mv <= 0) return;
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const step = Math.max(2, Math.round(c * 0.1));
-        const fl = Math.max(1, Math.min(MIN_VISIBLE, mv));
-        if (e.deltaY > 0) {
-          setVisibleCount((v) => Math.min(mv, v + step));
-        } else {
-          setVisibleCount((v) => Math.max(fl, v - step));
-        }
-      } else if (e.deltaX !== 0) {
-        e.preventDefault();
-        const step = Math.max(1, Math.round(c * 0.05));
-        setPanOffset((p) => Math.max(0, Math.min(len - c, p + (e.deltaX > 0 ? -step : step))));
-      }
-    };
-    el.addEventListener('wheel', onWheelNative, { passive: false });
-    return () => el.removeEventListener('wheel', onWheelNative);
-  }, []);
-
-  /* ── Touch: pinch = zoom, swipe = pan, long-press = crosshair ── */
-  useEffect(() => { panOffsetRef.current = panOffset; }, [panOffset]);
+  drawingModeRef.current = drawingMode;
+  onDrawingCompleteRef.current = onDrawingComplete;
 
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
+    pendingBoxRef.current = null;
+    setPendingBoxHint(false);
+  }, [drawingMode]);
 
-    // Crosshair behavior:
-    // 1. Long-press (300ms hold, no move) → activates crosshair at finger position
-    // 2. Drag while holding → moves crosshair
-    // 3. Lift finger → crosshair STAYS
-    // 4. Subsequent touch + drag → moves crosshair with OFFSET (finger doesn't snap
-    //    to crosshair center — crosshair moves relative to drag distance, so you can
-    //    position it precisely from a distance without your thumb covering it)
-    // 5. Tap "+" → adds hline, dismisses crosshair
-    // 6. Short tap (no drag) on chart → dismisses crosshair
-    // While crosshair is active, chart pan is disabled.
+  /* ── Effect 1: Chart creation (mount only) ────────────────────── */
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const container = containerRef.current;
+    const id = ++chartIdRef.current;
 
-    const onTouchStart = (e) => {
-      const t = touchRef.current;
-      t.fingers = e.touches.length;
-      t.moved = false;
-      t.crosshairDragging = false;
-
-      if (e.touches.length === 1) {
-        t.startX = e.touches[0].clientX;
-        t.startY = e.touches[0].clientY;
-        t.panStart = panOffsetRef.current;
-
-        if (crosshairRef.current) {
-          // Crosshair exists — store offset between finger and crosshair center
-          // so subsequent drag moves crosshair by delta, not snapping to finger
-          t.chOffsetX = crosshairRef.current.x - (e.touches[0].clientX - el.getBoundingClientRect().left);
-          t.chOffsetY = crosshairRef.current.y - (e.touches[0].clientY - el.getBoundingClientRect().top);
-          return; // Don't start long-press timer
-        }
-
-        // No crosshair — start long-press timer
-        longPressActive.current = false;
-        longPressTimer.current = setTimeout(() => {
-          longPressActive.current = true;
-          const rect = el.getBoundingClientRect();
-          setCrosshair({
-            x: e.touches[0].clientX - rect.left,
-            y: e.touches[0].clientY - rect.top,
-          });
-        }, 300);
-      } else if (e.touches.length === 2) {
-        clearTimeout(longPressTimer.current);
-        setCrosshair(null);
-        longPressActive.current = false;
-        e.preventDefault();
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        t.lastDist = Math.sqrt(dx * dx + dy * dy);
-        t.countStart = visibleCountRef.current;
-      }
-    };
-
-    const onTouchMove = (e) => {
-      const t = touchRef.current;
-      t.moved = true;
-
-      if (e.touches.length === 1 && t.fingers === 1) {
-        // If crosshair exists or long-press activated, move crosshair with offset
-        if (longPressActive.current || crosshairRef.current) {
-          e.preventDefault();
-          t.crosshairDragging = true;
-          const rect = el.getBoundingClientRect();
-          const fingerX = e.touches[0].clientX - rect.left;
-          const fingerY = e.touches[0].clientY - rect.top;
-
-          if (longPressActive.current && !crosshairRef.current) {
-            // First activation via long-press — snap to finger
-            setCrosshair({ x: fingerX, y: fingerY });
-          } else {
-            // Subsequent drag — apply offset so crosshair doesn't jump to finger
-            const ox = t.chOffsetX || 0;
-            const oy = t.chOffsetY || 0;
-            setCrosshair({ x: fingerX + ox, y: fingerY + oy });
+    const chart = createChart(container, {
+      width: container.clientWidth || 400,
+      height,
+      layout: {
+        background: { color: '#ffffff' },
+        textColor: '#8892a8',
+        fontFamily: mono,
+        fontSize: 10,
+      },
+      grid: {
+        vertLines: { color: '#eef0f4' },
+        horzLines: { color: '#eef0f4' },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#e2e5eb' },
+      timeScale: {
+        borderColor: '#e2e5eb',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 5,
+        tickMarkFormatter: (remappedTime) => {
+          const origTime = timeMapRef.current.get(remappedTime) || remappedTime;
+          const d = new Date(origTime * 1000);
+          const h = d.getHours();
+          const m = d.getMinutes();
+          // Show date label at session start, time label otherwise
+          if (h === 9 && m <= 20) {
+            return `${d.getDate()}/${d.getMonth() + 1}`;
           }
-          longPressActive.current = true;
-          return;
+          return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        },
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinchZoom: true,
+      },
+    });
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#16a34a',
+      downColor: '#dc2626',
+      borderUpColor: '#16a34a',
+      borderDownColor: '#dc2626',
+      wickUpColor: '#16a34a',
+      wickDownColor: '#dc2626',
+    });
+
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+      scaleMargins: { top: 0.8, bottom: 0 },
+    });
+
+    // Crosshair → OHLCV legend overlay
+    chart.subscribeCrosshairMove((param) => {
+      if (chartIdRef.current !== id) return;
+      if (!param.time) {
+        if (lastOhlcvTimeRef.current !== null) {
+          lastOhlcvTimeRef.current = null;
+          setOhlcvData(null);
         }
-
-        const dx = e.touches[0].clientX - t.startX;
-        const dy = e.touches[0].clientY - t.startY;
-
-        // Cancel long-press if moved
-        if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
-          clearTimeout(longPressTimer.current);
-        }
-
-        if (!drawingMode) {
-          const step = Math.round(dx / 8);
-          const len = candlesLenRef.current;
-          const c = countRef.current;
-          const newPan = Math.max(0, Math.min(len - c, t.panStart + step));
-          setPanOffset(newPan);
-        }
-      } else if (e.touches.length === 2) {
-        e.preventDefault();
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const mv = maxVisibleRef.current;
-        if (t.lastDist > 0) {
-          const ratio = t.lastDist / dist;
-          const newCount = Math.round(t.countStart * ratio);
-          const fl = Math.max(1, Math.min(MIN_VISIBLE, mv));
-          setVisibleCount(Math.min(mv, Math.max(fl, newCount)));
-        }
-      }
-    };
-
-    const onTouchEnd = () => {
-      clearTimeout(longPressTimer.current);
-      const t = touchRef.current;
-      t.fingers = 0;
-
-      // Short tap (no drag) while crosshair is showing → dismiss
-      if (crosshairRef.current && !t.crosshairDragging && !t.moved) {
-        setCrosshair(null);
-        longPressActive.current = false;
         return;
       }
-
-      // After drag, keep crosshair. Reset flags.
-      longPressActive.current = false;
-      t.crosshairDragging = false;
-    };
-
-    el.addEventListener('touchstart', onTouchStart, { passive: false });
-    el.addEventListener('touchmove', onTouchMove, { passive: false });
-    el.addEventListener('touchend', onTouchEnd);
-    return () => {
-      clearTimeout(longPressTimer.current);
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove', onTouchMove);
-      el.removeEventListener('touchend', onTouchEnd);
-    };
-  }, [drawingMode]);
-
-  const canRender = slice.length > 0 && containerWidth > 0;
-
-  let lo = Infinity, hi = -Infinity;
-  for (const c of slice) {
-    lo = Math.min(lo, c.l);
-    hi = Math.max(hi, c.h);
-  }
-  if (box) {
-    lo = Math.min(lo, box.low - box.manipulationZone);
-    hi = Math.max(hi, box.high + box.manipulationZone);
-  }
-  if (risk) {
-    lo = Math.min(lo, risk.sl, risk.target);
-    hi = Math.max(hi, risk.sl, risk.target);
-  }
-  const pad = (hi - lo) * 0.06 || hi * 0.01;
-  lo -= pad;
-  hi += pad;
-  const range = hi - lo || 1;
-
-  // Chart width fills the container; price axis on right
-  const w = containerWidth > 0 ? containerWidth : 400;
-  const h = height;
-  const totalH = h + X_AXIS_HEIGHT;
-  const leftPad = 4;
-  const rightGutter = w < 500 ? 52 : 60; // price labels on right
-  const chartW = w - leftPad - rightGutter;
-  const chartRight = leftPad + chartW;
-
-  // Inset so first/last candle bodies don't clip edges
-  const candleInset = Math.max(4, Math.ceil((chartW / Math.max(slice.length, 1)) / 2));
-  const plotLeft = leftPad + candleInset;
-  const plotW = chartW - candleInset * 2;
-
-  const xFor = (i) => plotLeft + (i / Math.max(slice.length - 1, 1)) * plotW;
-  const yFor = (p) => h - ((p - lo) / range) * (h - 8) - 4;
-  const priceFor = (y) => lo + ((h - 4 - y) / (h - 8)) * range;
-  const idxFor = (x) => Math.round(((x - plotLeft) / plotW) * (slice.length - 1));
-
-  const gridYs = [0, 0.25, 0.5, 0.75, 1].map((t) => lo + range * t);
-
-  const atMinZoom = count <= floorBars;
-  const atMaxZoom = count >= maxVisible;
-
-  /* ── X-axis timestamp labels ──────────────────────────────────── */
-  const xLabels = useMemo(() => {
-    if (!slice.length) return [];
-    const labels = [];
-    const step = Math.max(1, Math.ceil(slice.length / 8));
-    let prevTs = null;
-    for (let i = 0; i < slice.length; i += step) {
-      if (slice[i].t) {
-        const isDateChange = prevTs != null && (() => {
-          const cur = new Date(slice[i].t * 1000);
-          const prev = new Date(prevTs * 1000);
-          return cur.getDate() !== prev.getDate() || cur.getMonth() !== prev.getMonth();
-        })();
-        labels.push({
-          idx: i,
-          text: formatTimestamp(slice[i].t, timeframe, prevTs),
-          isDateChange,
+      if (param.time === lastOhlcvTimeRef.current) return;
+      lastOhlcvTimeRef.current = param.time;
+      const cd = param.seriesData.get(candleSeries);
+      const vd = param.seriesData.get(volumeSeries);
+      if (cd) {
+        // Map remapped time back to original for display
+        const originalTime = timeMapRef.current.get(param.time) || param.time;
+        setOhlcvData({
+          open: cd.open, high: cd.high, low: cd.low, close: cd.close,
+          volume: vd?.value, time: originalTime,
         });
-        prevTs = slice[i].t;
       }
-    }
-    return labels;
-  }, [slice, timeframe]);
+    });
 
-  /* ── Pattern highlight indices + labels ───────────────────────── */
-  const { highlightSet, patternLabels } = useMemo(() => {
-    if (!highlightSignals || !patterns?.length) return { highlightSet: new Set(), patternLabels: new Map() };
-    const set = new Set();
-    const labels = new Map(); // rel candle idx → { name, emoji, direction }
-    for (const p of patterns) {
-      if (p.candleIndices) {
-        // Label goes on the last candle of the pattern
-        const lastCi = p.candleIndices[p.candleIndices.length - 1];
-        for (const ci of p.candleIndices) {
-          const rel = ci - sliceStartIdx;
-          if (rel >= 0 && rel < slice.length) {
-            set.add(rel);
-            // Only label the last candle of each pattern group
-            if (ci === lastCi) {
-              labels.set(rel, { name: p.name, emoji: p.emoji, direction: p.direction });
-            }
-          }
-        }
+    // Click → drawing placement
+    chart.subscribeClick((param) => {
+      if (chartIdRef.current !== id) return;
+      const mode = drawingModeRef.current;
+      const cb = onDrawingCompleteRef.current;
+      if (!mode || !cb || !param.point) return;
+
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price === null || !isFinite(price)) return;
+
+      if (mode === 'hline') {
+        cb({ type: 'hline', price });
+        return;
       }
-    }
-    return { highlightSet: set, patternLabels: labels };
-  }, [highlightSignals, patterns, sliceStartIdx, slice.length]);
-
-  /* ── Drawing interaction ────────────────────────────────────────── */
-  const getSvgCoords = (e) => {
-    const svg = svgRef.current;
-    if (!svg) return null;
-    const rect = svg.getBoundingClientRect();
-    const x = (e.clientX || e.touches?.[0]?.clientX || 0) - rect.left;
-    const y = (e.clientY || e.touches?.[0]?.clientY || 0) - rect.top;
-    return { x, y };
-  };
-
-  const handleSvgClick = (e) => {
-    if (draggingHLine !== null) return;
-    if (!drawingMode || !onDrawingComplete) return;
-    const coords = getSvgCoords(e);
-    if (!coords) return;
-
-    const price = priceFor(coords.y);
-    const idx = Math.max(0, Math.min(slice.length - 1, idxFor(coords.x)));
-
-    if (drawingMode === 'hline') {
-      onDrawingComplete({ type: 'hline', price });
-      return;
-    }
-
-    if (drawingMode === 'box') {
-      if (!pendingPoint) {
-        setPendingPoint({ price, idx, time: slice[idx]?.t });
-      } else {
-        const i1 = Math.min(pendingPoint.idx, idx);
-        const i2 = Math.max(pendingPoint.idx, idx);
-        const pTop = Math.max(pendingPoint.price, price);
-        const pBot = Math.min(pendingPoint.price, price);
-        const t1 = slice[i1]?.t;
-        const t2 = slice[i2]?.t;
-        // Store directional change: from first click to second click
-        const priceChange = price - pendingPoint.price;
-        onDrawingComplete({
-          type: 'box',
-          priceTop: pTop,
-          priceBot: pBot,
-          idx1: i1,
-          idx2: i2,
-          time1: t1,
-          time2: t2,
-          candleCount: i2 - i1 + 1,
-          startPrice: pendingPoint.price,
-          endPrice: price,
-          priceChange,
-        });
-        setPendingPoint(null);
-      }
-      return;
-    }
-  };
-
-  // H-line drag handlers
-  const handleHLineMouseDown = (e, drawIdx) => {
-    e.stopPropagation();
-    setDraggingHLine(drawIdx);
-  };
-
-  const handleSvgMouseMove = (e) => {
-    const coords = getSvgCoords(e);
-    if (!coords) return;
-    setMousePos(coords);
-
-    if (draggingHLine !== null && onDrawingUpdate) {
-      const price = priceFor(coords.y);
-      onDrawingUpdate(draggingHLine, { type: 'hline', price });
-    }
-  };
-
-  const handleSvgMouseUp = () => {
-    if (draggingHLine !== null) {
-      setDraggingHLine(null);
-    }
-  };
-
-  const handleSvgMouseLeave = () => {
-    handleSvgMouseUp();
-    setMousePos(null);
-  };
-
-  // Touch handlers for SVG — drawing mode crosshair + candle tap info
-  const handleSvgTouchStart = (e) => {
-    if (e.touches.length !== 1) return;
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const x = e.touches[0].clientX - rect.left;
-    const y = e.touches[0].clientY - rect.top;
-
-    if (drawingMode) {
-      // In drawing mode: show crosshair at touch position
-      e.preventDefault();
-      e.stopPropagation();
-      setTouchDrawPos({ x, y });
-      setMousePos({ x, y });
-    } else if (!crosshairRef.current) {
-      // Not drawing and no crosshair: show OHLCV info for tapped candle
-      const idx = Math.max(0, Math.min(slice.length - 1, idxFor(x)));
-      if (slice[idx]) {
-        setTappedCandle({ idx, candle: slice[idx] });
-        setMousePos({ x, y });
-      }
-    }
-  };
-
-  const handleSvgTouchMove = (e) => {
-    if (e.touches.length !== 1) return;
-    if (!drawingMode) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const x = e.touches[0].clientX - rect.left;
-    const y = e.touches[0].clientY - rect.top;
-    setTouchDrawPos({ x, y });
-    setMousePos({ x, y });
-  };
-
-  const handleSvgTouchEnd = (e) => {
-    if (drawingMode && touchDrawPos) {
-      // Confirm drawing at current touch position
-      e.preventDefault();
-      const coords = touchDrawPos;
-      const price = priceFor(coords.y);
-      const idx = Math.max(0, Math.min(slice.length - 1, idxFor(coords.x)));
-
-      if (drawingMode === 'hline' && onDrawingComplete) {
-        onDrawingComplete({ type: 'hline', price });
-      } else if (drawingMode === 'box' && onDrawingComplete) {
-        if (!pendingPoint) {
-          setPendingPoint({ price, idx, time: slice[idx]?.t });
+      if (mode === 'box') {
+        const time = param.time;
+        if (!pendingBoxRef.current) {
+          pendingBoxRef.current = { price, time };
+          setPendingBoxHint(true);
         } else {
-          const i1 = Math.min(pendingPoint.idx, idx);
-          const i2 = Math.max(pendingPoint.idx, idx);
-          const pTop = Math.max(pendingPoint.price, price);
-          const pBot = Math.min(pendingPoint.price, price);
-          const t1 = slice[i1]?.t;
-          const t2 = slice[i2]?.t;
-          const priceChange = price - pendingPoint.price;
-          onDrawingComplete({
+          const p1 = pendingBoxRef.current;
+          const pTop = Math.max(p1.price, price);
+          const pBot = Math.min(p1.price, price);
+          cb({
             type: 'box', priceTop: pTop, priceBot: pBot,
-            idx1: i1, idx2: i2, time1: t1, time2: t2,
-            candleCount: i2 - i1 + 1, startPrice: pendingPoint.price,
-            endPrice: price, priceChange,
+            time1: p1.time, time2: time,
+            startPrice: p1.price, endPrice: price,
+            priceChange: price - p1.price,
           });
-          setPendingPoint(null);
+          pendingBoxRef.current = null;
+          setPendingBoxHint(false);
         }
       }
-      setTouchDrawPos(null);
-      setMousePos(null);
-    }
-  };
+    });
 
+    // Resize observer
+    const ro = new ResizeObserver((entries) => {
+      if (chartIdRef.current !== id) return;
+      const { width } = entries[0].contentRect;
+      if (width > 0) chart.applyOptions({ width });
+    });
+    ro.observe(container);
+    roRef.current = ro;
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+    if (typeof window !== 'undefined') window.__tvChart = chart; // dev inspection
+
+    return () => {
+      roRef.current?.disconnect();
+      roRef.current = null;
+      try { chart.remove(); } catch { /* already removed */ }
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      prevSymKeyRef.current = '';
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Effect 2: Set data on existing chart ─────────────────────── */
   useEffect(() => {
-    setPendingPoint(null);
-    setTouchDrawPos(null);
-    setTappedCandle(null);
-  }, [drawingMode]);
+    const series = candleSeriesRef.current;
+    const volSeries = volumeSeriesRef.current;
+    const chart = chartRef.current;
+    if (!series || !volSeries || !chart || !candles?.length) return;
 
-  /* ── Box positioning ────────────────────────────────────────────── */
-  let boxX = null, boxW = null, boxVisible = false;
-  if (box && box.startIdx != null && box.endIdx != null) {
-    const relStart = box.startIdx - sliceStartIdx;
-    const relEnd = box.endIdx - sliceStartIdx;
-    if (relEnd >= 0 && relStart < slice.length) {
-      const clampStart = Math.max(0, relStart);
-      const clampEnd = Math.min(slice.length - 1, relEnd);
-      boxX = xFor(clampStart) - (chartW / slice.length) * 0.4;
-      const boxEndX = xFor(clampEnd) + (chartW / slice.length) * 0.4;
-      boxW = boxEndX - boxX;
-      boxVisible = true;
+    const lastTs = candles[candles.length - 1]?.t || 0;
+    const key = `${sym}:${timeframe}:${Math.round(lastTs)}:${candles.length}`;
+    if (key === prevSymKeyRef.current) return;
+
+    const prev = prevSymKeyRef.current.split(':');
+    const isSameSeries = prev[0] === sym && prev[1] === timeframe && Number(prev[2]) === Math.round(lastTs);
+    const isPrepend = isSameSeries && candles.length > Number(prev[3] || 0);
+    prevSymKeyRef.current = key;
+
+    const savedRange = isPrepend ? chart.timeScale().getVisibleRange() : null;
+    const { ohlc, vol, timeMap } = prepareData(candles);
+    timeMapRef.current = timeMap;
+
+    try {
+      series.setData(ohlc);
+      volSeries.setData(vol);
+    } catch (e) {
+      console.warn('[Chart] setData error:', e.message);
+      return;
     }
-  } else if (box) {
-    boxX = xFor(0);
-    boxW = chartW;
-    boxVisible = true;
-  }
 
-  // Live box preview while drawing
-  const liveBox = pendingPoint && drawingMode === 'box' && mousePos
-    ? {
-        x: xFor(Math.min(pendingPoint.idx, Math.max(0, Math.min(slice.length - 1, idxFor(mousePos.x))))),
-        y: yFor(Math.max(pendingPoint.price, priceFor(mousePos.y))),
-        w: Math.abs(xFor(Math.max(0, Math.min(slice.length - 1, idxFor(mousePos.x)))) - xFor(pendingPoint.idx)),
-        h: Math.abs(yFor(Math.min(pendingPoint.price, priceFor(mousePos.y))) - yFor(Math.max(pendingPoint.price, priceFor(mousePos.y)))),
+    if (isPrepend && savedRange) {
+      chart.timeScale().setVisibleRange(savedRange);
+    } else {
+      // Set bar spacing for a sensible default zoom level, then scroll
+      // to the latest bar. This avoids both fitContent (which crams all
+      // bars into hairlines) and setVisibleLogicalRange (timing-sensitive).
+      const target = VISIBLE_BARS[timeframe] || 60;
+      const chartWidth = containerRef.current?.clientWidth || 594;
+      const spacing = Math.max(4, Math.min(12, chartWidth / target));
+      chart.timeScale().applyOptions({ barSpacing: spacing, rightOffset: 5 });
+      chart.timeScale().scrollToRealTime();
+    }
+
+    // Reset crosshair data for new series
+    setOhlcvData(null);
+    lastOhlcvTimeRef.current = null;
+  }, [candles, sym, timeframe]);
+
+  /* ── Risk overlay: entry / SL / target price lines ─────────────── */
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    for (const line of riskLinesRef.current) {
+      try { series.removePriceLine(line); } catch { /* ok */ }
+    }
+    riskLinesRef.current = [];
+
+    if (!risk || !highlightSignals || !RISK_ACTIONS.has(risk.action)) return;
+
+    const lines = [
+      { price: risk.entry, color: '#2563eb', title: `E ${risk.entry.toFixed(1)}`, width: 1 },
+      { price: risk.sl, color: '#dc2626', title: `SL ${risk.sl.toFixed(1)}`, width: 2 },
+      { price: risk.target, color: '#16a34a', title: `T ${risk.target.toFixed(1)}`, width: 2 },
+    ];
+
+    for (const l of lines) {
+      riskLinesRef.current.push(series.createPriceLine({
+        price: l.price, color: l.color, lineWidth: l.width,
+        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: l.title,
+      }));
+    }
+  }, [risk, highlightSignals]);
+
+  /* ── Pattern signal markers ────────────────────────────────────── */
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series || !candles?.length) return;
+
+    if (markersPluginRef.current) {
+      try { markersPluginRef.current.detach(); } catch { /* ok */ }
+      markersPluginRef.current = null;
+    }
+
+    if (!highlightSignals || !patterns?.length) return;
+
+    const markers = [];
+    for (const p of patterns) {
+      if (!p.candleIndices?.length) continue;
+      const lastIdx = p.candleIndices[p.candleIndices.length - 1];
+      if (lastIdx < 0 || lastIdx >= candles.length) continue;
+      const candle = candles[lastIdx];
+      if (!candle?.t) continue;
+      const isBullish = p.direction === 'bullish';
+      markers.push({
+        time: Math.round(candle.t),
+        position: isBullish ? 'belowBar' : 'aboveBar',
+        color: isBullish ? '#16a34a' : p.direction === 'bearish' ? '#dc2626' : '#2563eb',
+        shape: isBullish ? 'arrowUp' : 'arrowDown',
+        text: `${p.emoji || ''} ${p.name}`.trim(),
+      });
+    }
+
+    if (markers.length > 0) {
+      markers.sort((a, b) => a.time - b.time);
+      markersPluginRef.current = createSeriesMarkers(series, markers);
+    }
+  }, [patterns, highlightSignals, candles]);
+
+  /* ── User drawing price lines ──────────────────────────────────── */
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    for (const line of drawingLinesRef.current) {
+      try { series.removePriceLine(line); } catch { /* ok */ }
+    }
+    drawingLinesRef.current = [];
+
+    for (const d of drawings) {
+      if (d.type === 'hline') {
+        drawingLinesRef.current.push(series.createPriceLine({
+          price: d.price, color: '#8b5cf6', lineWidth: 1,
+          lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: d.price.toFixed(2),
+        }));
+      } else if (d.type === 'box') {
+        const change = d.priceChange != null ? d.priceChange : d.priceTop - d.priceBot;
+        const basePrice = d.startPrice || d.priceBot;
+        const changePct = ((change / basePrice) * 100).toFixed(1);
+        const sign = change >= 0 ? '+' : '';
+        const color = change >= 0 ? '#16a34a' : '#dc2626';
+        drawingLinesRef.current.push(series.createPriceLine({
+          price: d.priceTop, color, lineWidth: 1,
+          lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: `${sign}${changePct}%`,
+        }));
+        drawingLinesRef.current.push(series.createPriceLine({
+          price: d.priceBot, color, lineWidth: 1,
+          lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: d.priceBot.toFixed(1),
+        }));
       }
-    : null;
+    }
+  }, [drawings]);
+
+  /* ── Liquidity box price lines ─────────────────────────────────── */
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    for (const line of boxLinesRef.current) {
+      try { series.removePriceLine(line); } catch { /* ok */ }
+    }
+    boxLinesRef.current = [];
+
+    if (!box || !highlightSignals) return;
+
+    boxLinesRef.current.push(series.createPriceLine({
+      price: box.high, color: '#2563eb', lineWidth: 1,
+      lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Box Hi',
+    }));
+    boxLinesRef.current.push(series.createPriceLine({
+      price: box.low, color: '#2563eb', lineWidth: 1,
+      lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Box Lo',
+    }));
+  }, [box, highlightSignals]);
+
+  /* ── Lazy history prefetch ─────────────────────────────────────── */
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !onNearLeftEdge) return;
+
+    const handler = (range) => {
+      if (loadingMore || !candles?.length) return;
+      if (range !== null && range.from < candles.length * 0.2) {
+        const total = candles.length;
+        const seriesKey = `${sym}:${timeframe}:${Math.round(candles[total - 1]?.t)}:${total}`;
+        if (nearEdgeFiredRef.current === seriesKey) return;
+        nearEdgeFiredRef.current = seriesKey;
+        onNearLeftEdge();
+      }
+    };
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
+    return () => {
+      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler); } catch { /* ok */ }
+    };
+  }, [onNearLeftEdge, loadingMore, candles, sym, timeframe]);
+
+  /* ── Height changes ────────────────────────────────────────────── */
+  useEffect(() => {
+    chartRef.current?.applyOptions({ height });
+  }, [height]);
+
+  /* ── Imperative API ────────────────────────────────────────────── */
+  useImperativeHandle(ref, () => ({
+    fitContent: () => chartRef.current?.timeScale().fitContent(),
+  }), []);
+
+  /* ── Render ────────────────────────────────────────────────────── */
+  const lastCandle = candles?.length ? candles[candles.length - 1] : null;
 
   return (
-    <div style={{ marginBottom: 12, userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}>
-      {/* Drawing mode hint */}
-      {canRender && drawingMode && (
+    <div style={{ marginBottom: 12, userSelect: 'none', WebkitUserSelect: 'none' }}>
+      {drawingMode && (
         <div style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 500, marginBottom: 4 }}>
-          {drawingMode === 'hline' ? 'Tap to place line' : pendingPoint ? 'Tap end point' : 'Tap start point'}
+          {drawingMode === 'hline'
+            ? 'Tap chart to place line'
+            : pendingBoxHint ? 'Tap end point' : 'Tap start point'}
         </div>
-      )}
-
-      {/* OHLCV bar — always visible. Shows tapped candle or last candle by default */}
-      {canRender && (() => {
-        const c = tappedCandle?.candle || slice[slice.length - 1];
-        return c ? (
-          <div style={{
-            display: 'flex', gap: 5, alignItems: 'center',
-            padding: '3px 6px', marginBottom: 4, borderRadius: 6,
-            background: tappedCandle ? '#f0f4ff' : '#f8f9fb',
-            border: `1px solid ${tappedCandle ? '#dbeafe' : '#e2e5eb'}`,
-            fontSize: 10, fontFamily: mono, color: '#4a5068',
-            whiteSpace: 'nowrap', overflow: 'hidden',
-          }}>
-            <span>O <b>{c.o.toFixed(2)}</b></span>
-            <span>H <b>{c.h.toFixed(2)}</b></span>
-            <span>L <b>{c.l.toFixed(2)}</b></span>
-            <span>C <b style={{ color: c.c >= c.o ? '#16a34a' : '#dc2626' }}>{c.c.toFixed(2)}</b></span>
-            {c.v != null && <span>V <b>{c.v.toLocaleString()}</b></span>}
-            {c.t && <span style={{ color: '#8892a8' }}>{formatTimestamp(c.t, timeframe)}</span>}
-            {tappedCandle && (
-              <button type="button" onClick={() => { setTappedCandle(null); setMousePos(null); }}
-                style={{ marginLeft: 'auto', flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', color: '#8892a8', fontSize: 12, padding: '0 2px', lineHeight: 1 }}>✕</button>
-            )}
-          </div>
-        ) : null;
-      })()}
-
-      {canRender && (
-      <>
-
-      {/* Drawing mode touch hint */}
-      {drawingMode && touchDrawPos && (
-        <div style={{
-          padding: '3px 8px', marginBottom: 4, borderRadius: 6,
-          background: '#f5f3ff', border: '1px solid #c4b5fd',
-          fontSize: 11, fontFamily: mono, color: '#8b5cf6', textAlign: 'center',
-        }}>
-          Price: {priceFor(touchDrawPos.y).toFixed(2)} · Lift finger to confirm
-        </div>
-      )}
-      </>
       )}
 
       <div
-        ref={wrapRef}
+        ref={containerRef}
         style={{
           position: 'relative',
-          overflow: 'hidden',
           borderRadius: 10,
+          overflow: 'hidden',
           border: '1px solid #e2e5eb',
-          background: '#fff',
-          cursor: draggingHLine !== null ? 'ns-resize' : drawingMode ? 'crosshair' : 'default',
-          touchAction: 'none',
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          WebkitTouchCallout: 'none',
+          cursor: drawingMode ? 'crosshair' : 'default',
         }}
-        role="img"
-        aria-label={`Candlestick chart, ${slice.length} bars`}
       >
-        {canRender ? <svg
-          ref={svgRef}
-          width={w}
-          height={totalH}
-          style={{ display: 'block' }}
-          onClick={handleSvgClick}
-          onMouseMove={handleSvgMouseMove}
-          onMouseUp={handleSvgMouseUp}
-          onMouseLeave={handleSvgMouseLeave}
-          onTouchStart={handleSvgTouchStart}
-          onTouchMove={handleSvgTouchMove}
-          onTouchEnd={handleSvgTouchEnd}
-        >
-          {/* Grid + price labels on right */}
-          {gridYs.map((gy, i) => (
-            <g key={i}>
-              <line x1={leftPad} y1={yFor(gy)} x2={chartRight} y2={yFor(gy)} stroke="#eef0f4" strokeWidth={1} />
-              <text x={chartRight + 6} y={yFor(gy) + 4} fontSize={10} fill="#8892a8" fontFamily={mono}>{gy.toFixed(2)}</text>
-            </g>
-          ))}
-
-          {/* Pattern highlight backgrounds + labels */}
-          {highlightSignals && Array.from(highlightSet).map((i) => {
-            const x = xFor(i);
-            const hlGap = w < 500 ? 1 : 2;
-            const bw = Math.max(w < 500 ? 3 : 1.5, chartW / slice.length - hlGap);
-            const label = patternLabels.get(i);
-            return (
-              <g key={`hl-${i}`}>
-                <rect
-                  x={x - bw / 2 - 2}
-                  y={4}
-                  width={bw + 4}
-                  height={h - 8}
-                  fill="rgba(37, 99, 235, 0.08)"
-                  rx={2}
-                />
-                {label && (() => {
-                  const candleHigh = slice[i] ? yFor(slice[i].h) : 40;
-                  const labelY = Math.max(12, candleHigh - 18);
-                  const labelW = Math.max(50, label.name.length * 6 + 20);
-                  const labelColor = label.direction === 'bullish' ? '#16a34a' : label.direction === 'bearish' ? '#dc2626' : '#2563eb';
-                  // Clamp label X so it doesn't go off edges
-                  const rawLabelX = x - labelW / 2;
-                  const clampedLabelX = Math.max(leftPad, Math.min(rawLabelX, chartRight - labelW - 2));
-                  return (
-                    <g>
-                      <rect
-                        x={clampedLabelX}
-                        y={labelY}
-                        width={labelW}
-                        height={16}
-                        rx={4}
-                        fill={labelColor}
-                        opacity={0.9}
-                      />
-                      <text x={clampedLabelX + labelW / 2} y={labelY + 12} textAnchor="middle" fontSize={9} fill="#fff" fontFamily={mono} fontWeight={700}>
-                        {label.emoji} {label.name}
-                      </text>
-                      {/* Arrow pointing down to candle */}
-                      <line x1={x} y1={labelY + 16} x2={x} y2={labelY + 22} stroke={labelColor} strokeWidth={1.5} opacity={0.7} />
-                    </g>
-                  );
-                })()}
-              </g>
-            );
-          })}
-
-          {/* Liquidity box — only when highlight is on */}
-          {highlightSignals && box && boxVisible && (
-            <g>
-              <rect x={boxX} y={yFor(box.high)} width={boxW}
-                height={Math.max(2, yFor(box.low) - yFor(box.high))}
-                fill="rgba(37, 99, 235, 0.08)" stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" rx={2} />
-              <rect x={boxX} y={yFor(box.high + box.manipulationZone)} width={boxW}
-                height={Math.max(1, yFor(box.high) - yFor(box.high + box.manipulationZone))}
-                fill="rgba(234, 88, 12, 0.12)" rx={1} />
-              <rect x={boxX} y={yFor(box.low)} width={boxW}
-                height={Math.max(1, yFor(box.low - box.manipulationZone) - yFor(box.low))}
-                fill="rgba(234, 88, 12, 0.12)" rx={1} />
-              {/* Label */}
-              <text x={boxX + 3} y={yFor(box.high) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} fontWeight={600} opacity={0.7}>
-                Liquidity Box
-              </text>
-            </g>
-          )}
-
-          {highlightSignals && box && !boxVisible && (
-            <g>
-              <line x1={leftPad} y1={yFor(box.high)} x2={chartRight} y2={yFor(box.high)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
-              <text x={leftPad + 4} y={yFor(box.high) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Hi</text>
-              <line x1={leftPad} y1={yFor(box.low)} x2={chartRight} y2={yFor(box.low)} stroke="#2563eb" strokeWidth={1} strokeDasharray="6 4" opacity={0.3} />
-              <text x={leftPad + 4} y={yFor(box.low) - 3} fontSize={9} fill="#2563eb" fontFamily={mono} opacity={0.5}>LiqBox Lo</text>
-            </g>
-          )}
-
-          {/* Entry / SL / Target lines */}
-          {risk && (risk.action === 'STRONG BUY' || risk.action === 'BUY' || risk.action === 'STRONG SHORT' || risk.action === 'SHORT') && (
-            <g>
-              {/* Entry — blue dashed */}
-              <line x1={leftPad} y1={yFor(risk.entry)} x2={chartRight} y2={yFor(risk.entry)} stroke="#2563eb" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
-              <rect x={leftPad + 2} y={yFor(risk.entry) - 12} width={62} height={14} rx={3} fill="#2563eb" opacity={0.85} />
-              <text x={leftPad + 5} y={yFor(risk.entry) - 2} fontSize={8} fill="#fff" fontFamily={mono} fontWeight={700}>E {risk.entry.toFixed(1)}</text>
-              {/* SL — red dashed */}
-              <line x1={leftPad} y1={yFor(risk.sl)} x2={chartRight} y2={yFor(risk.sl)} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
-              <rect x={leftPad + 2} y={yFor(risk.sl) - 12} width={62} height={14} rx={3} fill="#dc2626" opacity={0.85} />
-              <text x={leftPad + 5} y={yFor(risk.sl) - 2} fontSize={8} fill="#fff" fontFamily={mono} fontWeight={700}>SL {risk.sl.toFixed(1)}</text>
-              {/* Target — green dashed */}
-              <line x1={leftPad} y1={yFor(risk.target)} x2={chartRight} y2={yFor(risk.target)} stroke="#16a34a" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} />
-              <rect x={leftPad + 2} y={yFor(risk.target) - 12} width={62} height={14} rx={3} fill="#16a34a" opacity={0.85} />
-              <text x={leftPad + 5} y={yFor(risk.target) - 2} fontSize={8} fill="#fff" fontFamily={mono} fontWeight={700}>T {risk.target.toFixed(1)}</text>
-            </g>
-          )}
-
-          {/* Candles */}
-          {slice.map((c, i) => {
-            const x = xFor(i);
-            const gap = w < 500 ? 1 : 2;
-            const bw = Math.max(w < 500 ? 3 : 1.5, chartW / slice.length - gap);
-            const cx = x - bw / 2;
-            const yH = yFor(c.h);
-            const yL = yFor(c.l);
-            const yO = yFor(c.o);
-            const yC = yFor(c.c);
-            const top = Math.min(yO, yC);
-            const bot = Math.max(yO, yC);
-            const bull = c.c >= c.o;
-            const fill = bull ? '#16a34a' : '#dc2626';
-            const last = i === slice.length - 1;
-            const highlighted = highlightSet.has(i);
-            const wickW = Math.max(1, bw * 0.15);
-            return (
-              <g key={i}>
-                <line x1={x} y1={yH} x2={x} y2={yL} stroke={fill} strokeWidth={wickW} />
-                <rect
-                  x={cx} y={top} width={bw} height={Math.max(1, bot - top)}
-                  fill={fill}
-                  stroke={highlighted ? '#2563eb' : fill}
-                  strokeWidth={highlighted ? 1.5 : 0}
-                  rx={1}
-                />
-                {last && (
-                  <circle cx={x} cy={top - 4} r={2} fill={fill} opacity={0.5} />
-                )}
-              </g>
-            );
-          })}
-
-          {/* Current price line — rendered early for line, label rendered later on top */}
-
-          {/* User drawings */}
-          {drawings.map((d, di) => {
-            if (d.type === 'hline') {
-              const y = yFor(d.price);
-              const isDragging = draggingHLine === di;
-              return (
-                <g key={`d-${di}`}>
-                  <line x1={leftPad} y1={y} x2={chartRight} y2={y} stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="6 3" />
-                  {/* Price label on right */}
-                  <rect x={chartRight + 2} y={y - 8} width={rightGutter - 6} height={16} rx={3} fill="#8b5cf6" opacity={0.85} />
-                  <text x={chartRight + rightGutter / 2} y={y + 4} textAnchor="middle" fontSize={9} fill="#fff" fontFamily={mono} fontWeight={600}>{d.price.toFixed(2)}</text>
-                  {/* Drag handle */}
-                  <rect
-                    x={leftPad + 4}
-                    y={y - 8}
-                    width={20}
-                    height={16}
-                    fill={isDragging ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.1)'}
-                    stroke="#8b5cf6"
-                    strokeWidth={1}
-                    rx={3}
-                    style={{ cursor: 'ns-resize' }}
-                    onMouseDown={(e) => handleHLineMouseDown(e, di)}
-                  />
-                  <text x={leftPad + 9} y={y + 4} fontSize={8} fill="#8b5cf6" fontFamily={mono} style={{ pointerEvents: 'none' }}>
-                    ↕
-                  </text>
-                </g>
-              );
-            }
-            if (d.type === 'box') {
-              const bx = xFor(d.idx1);
-              const bw = Math.max(2, xFor(d.idx2) - bx);
-              const by = yFor(d.priceTop);
-              const bh = Math.max(2, yFor(d.priceBot) - by);
-              // Use directional change if available, otherwise absolute
-              const change = d.priceChange != null ? d.priceChange : d.priceTop - d.priceBot;
-              const basePrice = d.startPrice || d.priceBot;
-              const changePct = ((change / basePrice) * 100).toFixed(2);
-              const isPositive = change >= 0;
-              const changeColor = isPositive ? '#16a34a' : '#dc2626';
-              const timeText = d.time1 && d.time2
-                ? `${formatTimestamp(d.time1, timeframe)} → ${formatTimestamp(d.time2, timeframe)}`
-                : '';
-              return (
-                <g key={`d-${di}`}>
-                  <rect x={bx} y={by} width={bw} height={bh}
-                    fill={isPositive ? 'rgba(22, 163, 74, 0.06)' : 'rgba(220, 38, 38, 0.06)'}
-                    stroke={isPositive ? '#16a34a' : '#dc2626'} strokeWidth={1.5} strokeDasharray="4 2" rx={2} />
-                  {/* Box info */}
-                  <text x={bx + 4} y={by + 12} fontSize={9} fill={changeColor} fontFamily={mono} fontWeight={600}>
-                    {isPositive ? '+' : ''}{change.toFixed(2)} ({isPositive ? '+' : ''}{changePct}%)
-                  </text>
-                  {timeText && (
-                    <text x={bx + 4} y={by + 22} fontSize={8} fill="#8892a8" fontFamily={mono}>
-                      {timeText} · {d.candleCount || ''} bars
-                    </text>
-                  )}
-                </g>
-              );
-            }
-            return null;
-          })}
-
-          {/* Live box preview while drawing */}
-          {liveBox && (
-            <rect x={liveBox.x} y={liveBox.y} width={liveBox.w} height={liveBox.h}
-              fill="rgba(139, 92, 246, 0.06)" stroke="#8b5cf6" strokeWidth={1} strokeDasharray="3 2" rx={2} />
-          )}
-
-          {/* Crosshair with price + time labels — always shown on hover */}
-          {mousePos && mousePos.y > 0 && mousePos.y < h && mousePos.x >= leftPad && (
-            <g>
-              {/* Horizontal crosshair */}
-              <line x1={leftPad} y1={mousePos.y} x2={chartRight} y2={mousePos.y}
-                stroke={drawingMode ? '#8b5cf6' : '#8892a8'} strokeWidth={0.5} strokeDasharray="2 2" opacity={0.5} />
-              {/* Vertical crosshair */}
-              {(() => {
-                const ci = Math.max(0, Math.min(slice.length - 1, idxFor(mousePos.x)));
-                return (
-                  <line x1={xFor(ci)} y1={4} x2={xFor(ci)} y2={h}
-                    stroke={drawingMode ? '#8b5cf6' : '#8892a8'} strokeWidth={0.5} strokeDasharray="2 2" opacity={0.4} />
-                );
-              })()}
-              {/* Price label on right axis */}
-              {(() => {
-                const priceText = priceFor(mousePos.y).toFixed(2);
-                const pillW = rightGutter - 6;
-                const pillX = chartRight + 2;
-                const pillColor = drawingMode ? '#8b5cf6' : '#4a5068';
-                return (
-                  <g>
-                    <rect x={pillX} y={mousePos.y - 8} width={pillW} height={16} rx={3}
-                      fill={pillColor} opacity={0.9} />
-                    <text x={pillX + pillW / 2} y={mousePos.y + 4} textAnchor="middle" fontSize={10} fill="#fff" fontFamily={mono} fontWeight={600}>
-                      {priceText}
-                    </text>
-                  </g>
-                );
-              })()}
-              {/* Time label on bottom */}
-              {(() => {
-                const ci = Math.max(0, Math.min(slice.length - 1, idxFor(mousePos.x)));
-                if (slice[ci]?.t) {
-                  const label = formatTimestamp(slice[ci].t, timeframe);
-                  const timePillW = Math.max(44, label.length * 7);
-                  return (
-                    <g>
-                      <rect x={xFor(ci) - timePillW / 2} y={h + 2} width={timePillW} height={16} rx={3}
-                        fill={drawingMode ? '#8b5cf6' : '#4a5068'} opacity={0.9} />
-                      <text x={xFor(ci)} y={h + 14} textAnchor="middle" fontSize={10} fill="#fff" fontFamily={mono} fontWeight={600}>
-                        {label}
-                      </text>
-                    </g>
-                  );
-                }
-                return null;
-              })()}
-            </g>
-          )}
-
-          {/* Pending drawing point */}
-          {pendingPoint && (
-            <g>
-              <circle cx={xFor(pendingPoint.idx)} cy={yFor(pendingPoint.price)} r={4}
-                fill="#8b5cf6" stroke="#fff" strokeWidth={1.5} />
-              <text x={xFor(pendingPoint.idx) + 8} y={yFor(pendingPoint.price) + 3} fontSize={9} fill="#8b5cf6" fontFamily={mono}>
-                {pendingPoint.price.toFixed(2)}
-              </text>
-              {pendingPoint.time && (
-                <text x={xFor(pendingPoint.idx)} y={h + 14} textAnchor="middle" fontSize={9} fill="#8b5cf6" fontFamily={mono}>
-                  {formatTimestamp(pendingPoint.time, timeframe)}
-                </text>
-              )}
-            </g>
-          )}
-
-          {/* Current price line + label on right axis */}
-          {(() => {
-            const last = slice[slice.length - 1];
-            const y = yFor(last.c);
-            return (
-              <g>
-                <line x1={leftPad} y1={y} x2={chartRight} y2={y} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" opacity={0.5} />
-                <rect x={chartRight + 2} y={y - 8} width={rightGutter - 6} height={16} rx={3} fill="#2563eb" />
-                <text x={chartRight + rightGutter / 2} y={y + 4} textAnchor="middle" fontSize={10} fill="#fff" fontFamily={mono} fontWeight={600}>
-                  {last.c.toFixed(2)}
-                </text>
-              </g>
-            );
-          })()}
-
-          {/* X-axis timestamps */}
-          {xLabels.map(({ idx, text, isDateChange }) => (
-            <g key={`xl-${idx}`}>
-              {/* Tick mark */}
-              <line x1={xFor(idx)} y1={h} x2={xFor(idx)} y2={h + 4} stroke={isDateChange ? '#2563eb' : '#c8ccd4'} strokeWidth={1} />
-              <text
-                x={xFor(idx)}
-                y={h + 15}
-                textAnchor="middle"
-                fontSize={9}
-                fontWeight={isDateChange ? 700 : 400}
-                fill={isDateChange ? '#2563eb' : '#8892a8'}
-                fontFamily={mono}
-              >
-                {text}
-              </text>
-            </g>
-          ))}
-          {/* Long-press crosshair overlay */}
-          {crosshair && (
-            <g>
-              <line x1={leftPad} y1={crosshair.y} x2={chartRight} y2={crosshair.y}
-                stroke="#2563eb" strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
-              <line x1={crosshair.x} y1={4} x2={crosshair.x} y2={h - 4}
-                stroke="#2563eb" strokeWidth={1} strokeDasharray="4,3" opacity={0.7} />
-              <rect x={chartRight + 2} y={crosshair.y - 10} width={55} height={20} rx={4}
-                fill="#2563eb" />
-              <text x={chartRight + 6} y={crosshair.y + 4} fontSize={10} fill="#fff" fontFamily={mono}>
-                {priceFor(crosshair.y).toFixed(2)}
-              </text>
-            </g>
-          )}
-        </svg>
-        : <div style={{ minHeight: height + X_AXIS_HEIGHT }} />}
-        {/* Floating "+" button for adding hline at crosshair price */}
-        {canRender && crosshair && onDrawingComplete && (
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              const price = priceFor(crosshair.y);
-              onDrawingComplete({ type: 'hline', price });
-              setCrosshair(null);
-              longPressActive.current = false;
-            }}
-            onTouchStart={(e) => e.stopPropagation()}
-            onTouchEnd={(e) => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              left: Math.min(crosshair.x + 12, containerWidth - 40),
-              top: crosshair.y - 14,
-              width: 36, height: 36, borderRadius: 18,
-              background: '#2563eb', color: '#fff',
-              border: 'none', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 20, fontWeight: 700, lineHeight: 1,
-              boxShadow: '0 2px 8px rgba(37,99,235,0.4)',
-              zIndex: 10,
-            }}
-            aria-label="Add horizontal line at this price"
-          >+</button>
-        )}
+        <OhlcvOverlay data={ohlcvData} lastCandle={lastCandle} timeframe={timeframe} />
       </div>
     </div>
   );
-})
+});
