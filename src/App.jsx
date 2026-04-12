@@ -102,7 +102,6 @@ export default function App() {
   });
   const [inputVal, setInputVal] = useState('');
   const chartRef = useRef(null);
-  const [chartInfo, setChartInfo] = useState({ barCount: 0, atMinZoom: false, atMaxZoom: false });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [drawingMode, setDrawingMode] = useState(null);
@@ -251,13 +250,6 @@ export default function App() {
       [sym]: [...(prev[sym] || []), drawing],
     }));
     setDrawingMode(null); // one-shot: deactivate after placing
-  };
-  const handleDrawingUpdate = (idx, updated) => {
-    setDrawingsMap((prev) => {
-      const arr = [...(prev[sym] || [])];
-      arr[idx] = updated;
-      return { ...prev, [sym]: arr };
-    });
   };
   const clearDrawings = () => {
     setDrawingsMap((prev) => {
@@ -508,29 +500,12 @@ export default function App() {
           <div style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
             <TimeframePills value={timeframe} onChange={setTimeframe} available={SOURCE_TIMEFRAMES[dataSource]} />
           </div>
-          {/* Row 2: bar count, drawing, signals, zoom — single dense row */}
+          {/* Row 2: drawing tools, signals toggle, fit button */}
           <div style={{ display: 'flex', gap: 5, marginBottom: 6, alignItems: 'center', flexWrap: 'nowrap' }}>
-            <span style={{ fontSize: 10, color: '#b0b8c8', whiteSpace: 'nowrap' }}>
-              {chartRef.current?.barCount || candles?.length || 0} bars
-            </span>
             <DrawingToolbar active={drawingMode} onChange={setDrawingMode} onClear={clearDrawings} />
             <ToggleSwitch checked={highlightSignals} onChange={setHighlightSignals} label="Signals" compact />
             <div style={{ flex: 1 }} />
-            <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => chartRef.current?.zoomIn()}
-              disabled={chartRef.current?.atMinZoom}
-              style={{ minWidth: 34, minHeight: 32, padding: '0 8px', borderRadius: 8, border: '1px solid #e2e5eb', background: '#fff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: chartRef.current?.atMinZoom ? 0.35 : 1 }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
-              </svg>
-            </button>
-            <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => chartRef.current?.zoomOut()}
-              disabled={chartRef.current?.atMaxZoom}
-              style={{ minWidth: 34, minHeight: 32, padding: '0 8px', borderRadius: 8, border: '1px solid #e2e5eb', background: '#fff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: chartRef.current?.atMaxZoom ? 0.35 : 1 }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
-              </svg>
-            </button>
-            <button type="button" aria-label="Reset zoom" title="Reset to today" onClick={() => chartRef.current?.zoomFit()}
+            <button type="button" aria-label="Fit chart" title="Fit all bars" onClick={() => chartRef.current?.fitContent()}
               style={{ minWidth: 34, minHeight: 32, padding: '0 8px', borderRadius: 8, border: '1px solid #e2e5eb', background: '#fff', color: '#2563eb', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
@@ -548,7 +523,6 @@ export default function App() {
             drawingMode={drawingMode}
             drawings={currentDrawings}
             onDrawingComplete={handleDrawingComplete}
-            onDrawingUpdate={handleDrawingUpdate}
             patterns={patterns}
             highlightSignals={highlightSignals}
             onNearLeftEdge={handleLoadMoreHistory}
