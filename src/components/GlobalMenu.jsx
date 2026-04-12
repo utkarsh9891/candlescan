@@ -34,16 +34,13 @@ const CLASSIC_CATEGORIES_UI = [
 ];
 
 /**
- * @param {Object} props
- * @param {Set} props.activeFilters
- * @param {(filters: Set) => void} props.onFiltersChange
- * @param {{ label: string, onClick: () => void }} [props.navAction] — top menu action (e.g. "Index Scanner" or "Stock Scanner")
+ * Configuration menu (no longer navigation — bottom tab bar handles nav).
+ * Controls: engine selection, signal category filters, custom indices.
  */
 export default function GlobalMenu({
-  activeFilters, onFiltersChange, navAction, simulationAction, paperTradingAction, settingsAction,
+  activeFilters, onFiltersChange,
   customIndices, onAddCustomIndex, onRemoveCustomIndex,
   engineVersion, onEngineVersionChange,
-  noviceMode, onNoviceModeChange,
 }) {
   const [open, setOpen] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -89,7 +86,7 @@ export default function GlobalMenu({
           flexShrink: 0,
           WebkitTapHighlightColor: 'transparent',
         }}
-        aria-label="Signal filters"
+        aria-label="Configuration"
         aria-expanded={open}
       >
         ☰
@@ -113,93 +110,6 @@ export default function GlobalMenu({
             boxSizing: 'border-box',
           }}
         >
-          {/* Navigation */}
-          {navAction && (
-            <>
-              <button type="button" onClick={() => { setOpen(false); navAction.onClick(); }}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round">
-                  <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
-                </svg>
-                {navAction.label}
-              </button>
-              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
-            </>
-          )}
-          {/* Simple Mode master switch — ON simplifies every surface,
-              OFF restores expert depth. Prominently placed at the top. */}
-          {onNoviceModeChange && (
-            <>
-              <div style={{
-                padding: '10px 12px', background: noviceMode ? '#f0fdf4' : '#f8fafc',
-                border: noviceMode ? '1px solid #bbf7d0' : '1px solid #e2e5eb',
-                borderRadius: 8, marginBottom: 6,
-                display: 'flex', alignItems: 'center', gap: 10,
-              }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                  stroke={noviceMode ? '#16a34a' : '#64748b'}
-                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                </svg>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: '#1a1d26' }}>
-                    Simple Mode
-                  </div>
-                  <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>
-                    {noviceMode
-                      ? 'One button, plain-english trades. No jargon.'
-                      : 'Full expert UI — charts, filters, engine depth.'}
-                  </div>
-                </div>
-                <ToggleSwitch checked={noviceMode} onChange={onNoviceModeChange} label="" compact />
-              </div>
-              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
-            </>
-          )}
-          {simulationAction && (
-            <>
-              <button type="button" onClick={() => { setOpen(false); simulationAction.onClick(); }}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round">
-                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                </svg>
-                {simulationAction.label}
-              </button>
-              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
-            </>
-          )}
-
-          {paperTradingAction && (
-            <>
-              <button type="button" onClick={() => { setOpen(false); paperTradingAction.onClick(); }}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="12" y1="18" x2="12" y2="12" />
-                  <line x1="9" y1="15" x2="15" y2="15" />
-                </svg>
-                {paperTradingAction.label}
-              </button>
-              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
-            </>
-          )}
-
-          {/* Settings */}
-          {settingsAction && (
-            <>
-              <button type="button" onClick={() => { setOpen(false); settingsAction.onClick(); }}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 10px', fontSize: 13, fontWeight: 600, color: '#1a1d26', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8892a8" strokeWidth="2" strokeLinecap="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-                Settings
-              </button>
-              <div style={{ borderBottom: '1px solid #eef0f4', margin: '4px 0' }} />
-            </>
-          )}
-
           {/* 1. Engine */}
           {onEngineVersionChange && (
             <>

@@ -1,16 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { unlockGate, encryptToVault, getVaultBlob, hasVault, clearVault, clearGate, getGatePublicKey } from '../utils/credentialVault.js';
-import { fetchDhanInstruments, clearDhanInstruments, getInstrumentsMeta, hasCachedInstruments } from '../engine/dhanInstruments.js';
 import PasteInput from './PasteInput.jsx';
 import ToggleSwitch from './ToggleSwitch.jsx';
+import CustomIndexInput from './CustomIndexInput.jsx';
+import DhanSettings from './DhanSettings.jsx';
+import { getCategoriesForEngine } from '../data/signalCategories.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
 const LS_ZERODHA_API_KEY = 'candlescan_zerodha_api_key';
 const LS_ZERODHA_API_SECRET = 'candlescan_zerodha_api_secret';
 const LS_DHAN_CLIENT_ID = 'candlescan_dhan_client_id';
-const LS_DHAN_PIN = 'candlescan_dhan_pin';
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 function getDataSource() {
@@ -26,7 +27,12 @@ function getSavedApiSecret() {
   try { return localStorage.getItem(LS_ZERODHA_API_SECRET) || ''; } catch { return ''; }
 }
 
-export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
+export default function SettingsPage({
+  onBack, debugMode, onDebugModeChange, noviceMode, onNoviceModeChange,
+  engineVersion, onEngineVersionChange,
+  activeFilters, onFiltersChange,
+  customIndices, onAddCustomIndex, onRemoveCustomIndex,
+}) {
   const [gateUnlocked, setGateUnlocked] = useState(hasGateToken());
   const [passphrase, setPassphrase] = useState('');
   const [gateError, setGateError] = useState('');
@@ -194,7 +200,6 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
     }
     // Clear Dhan credentials when configuring Zerodha
     try { localStorage.removeItem(LS_DHAN_CLIENT_ID); } catch { /* ok */ }
-    setDhanClientId(''); setDhanStatus('none'); setDhanMsg('');
     clearVault();
     try {
       localStorage.setItem(LS_ZERODHA_API_KEY, apiKey.trim());
@@ -279,233 +284,10 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
     }
   }, []);
 
-  // ─── Dhan ───────────────────────────────────────────────────────────
-  const [dhanClientId, setDhanClientId] = useState(() => {
-    try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; }
-  });
-  const [dhanPin, setDhanPin] = useState(() => {
-    try { return localStorage.getItem(LS_DHAN_PIN) || ''; } catch { return ''; }
-  });
-  const [dhanTotp, setDhanTotp] = useState('');
-  const [dhanPastedToken, setDhanPastedToken] = useState('');
-  const [dhanStatus, setDhanStatus] = useState(() => hasVault() && hasGateToken() ? 'checking' : 'none');
-  const [dhanMsg, setDhanMsg] = useState('');
-  const [dhanMsgColor, setDhanMsgColor] = useState('#8892a8');
-  const [dhanConnecting, setDhanConnecting] = useState(false);
-  const [dhanShowAuth, setDhanShowAuth] = useState(false); // Toggle PIN+TOTP fields
-
-  const handleSaveDhanClientId = useCallback(() => {
-    if (!dhanClientId.trim()) {
-      setDhanMsg('Client ID is required');
-      setDhanMsgColor('#dc2626');
-      return;
-    }
-    // Clear Zerodha credentials when configuring Dhan
+  const handleClearZerodha = useCallback(() => {
     try { localStorage.removeItem(LS_ZERODHA_API_KEY); localStorage.removeItem(LS_ZERODHA_API_SECRET); } catch { /* ok */ }
     setApiKey(''); setApiSecret(''); setTokenStatus('none'); setTokenUserName(''); setVaultMsg('');
-    clearVault();
-    try { localStorage.setItem(LS_DHAN_CLIENT_ID, dhanClientId.trim()); } catch { /* ok */ }
-    setDhanMsg('Client ID saved.');
-    setDhanMsgColor('#16a34a');
-  }, [dhanClientId]);
-
-  const handleConnectDhan = useCallback(async () => {
-    const clientId = dhanClientId.trim() || ((() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })());
-    if (!clientId) { setDhanMsg('Save your Client ID first'); setDhanMsgColor('#dc2626'); return; }
-    if (!dhanPin.trim()) { setDhanMsg('PIN is required'); setDhanMsgColor('#dc2626'); return; }
-    if (!dhanTotp.trim()) { setDhanMsg('TOTP is required'); setDhanMsgColor('#dc2626'); return; }
-
-    setDhanConnecting(true);
-    setDhanMsg('Generating access token...');
-    setDhanMsgColor('#2563eb');
-    try {
-      const gateToken = getGateToken();
-      const res = await fetch(`${CF_WORKER_URL}/dhan/session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
-        body: JSON.stringify({ dhanClientId: clientId, pin: dhanPin.trim(), totp: dhanTotp.trim() }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Session failed (${res.status})`);
-      }
-      const data = await res.json();
-      if (!data.accessToken) throw new Error('No access token in response');
-
-      // Encrypt access token into vault
-      const pubKey = getGatePublicKey();
-      if (!pubKey) throw new Error('RSA public key not found. Re-unlock premium first.');
-      const existing = {};
-      if (apiKey.trim()) existing.zerodhaApiKey = apiKey.trim();
-      if (apiSecret.trim()) existing.zerodhaApiSecret = apiSecret.trim();
-      await encryptToVault(pubKey, { ...existing, dhanAccessToken: data.accessToken });
-
-      setDhanStatus('valid');
-      setDhanMsg(`Connected${data.clientName ? ` — ${data.clientName}` : ''}! Token encrypted. Loading instruments…`);
-      setDhanMsgColor('#16a34a');
-      setDhanPin('');
-      setDhanTotp('');
-      setDhanShowAuth(false);
-      // Fetch instrument master now so all subsequent historical calls can
-      // resolve securityId locally (no Worker KV lookup on the hot path).
-      try {
-        const meta = await fetchDhanInstruments(getGateToken());
-        setDhanMsg(`Connected! ${meta.count} NSE instruments loaded.`);
-      } catch (instrErr) {
-        setDhanMsg(`Connected, but instrument list failed: ${instrErr.message}. Tap Refresh instrument list.`);
-        setDhanMsgColor('#d97706');
-      }
-    } catch (err) {
-      setDhanMsg(err.message || 'Failed to connect');
-      setDhanMsgColor('#dc2626');
-    } finally {
-      setDhanConnecting(false);
-    }
-  }, [dhanClientId, dhanPin, dhanTotp, apiKey, apiSecret]);
-
-  const handlePasteToken = useCallback(async () => {
-    const token = dhanPastedToken.trim();
-    if (!token) { setDhanMsg('Paste an access token first'); setDhanMsgColor('#dc2626'); return; }
-    try {
-      const pubKey = getGatePublicKey();
-      if (!pubKey) throw new Error('RSA public key not found. Re-unlock premium first.');
-      await encryptToVault(pubKey, { dhanAccessToken: token });
-      setDhanStatus('valid');
-      setDhanMsg('Access token encrypted. Loading instruments…');
-      setDhanMsgColor('#16a34a');
-      setDhanPastedToken('');
-      setDhanShowAuth(false);
-      // Fetch instrument master now so historical calls resolve client-side.
-      try {
-        const meta = await fetchDhanInstruments(getGateToken());
-        setDhanMsg(`Token saved. ${meta.count} NSE instruments loaded.`);
-      } catch (instrErr) {
-        setDhanMsg(`Token saved, but instrument list failed: ${instrErr.message}. Tap Refresh instrument list.`);
-        setDhanMsgColor('#d97706');
-      }
-    } catch (err) {
-      setDhanMsg(err.message || 'Failed to save token');
-      setDhanMsgColor('#dc2626');
-    }
-  }, [dhanPastedToken]);
-
-  // Manual refresh — used when a new NSE listing isn't in the cached map yet,
-  // or after an app reinstall that wiped localStorage.
-  const [refreshingInstruments, setRefreshingInstruments] = useState(false);
-  const handleRefreshInstruments = useCallback(async () => {
-    const gateToken = getGateToken();
-    if (!gateToken) {
-      setDhanMsg('Unlock premium first.');
-      setDhanMsgColor('#dc2626');
-      return;
-    }
-    setRefreshingInstruments(true);
-    setDhanMsg('Refreshing instrument list from Dhan…');
-    setDhanMsgColor('#2563eb');
-    try {
-      const meta = await fetchDhanInstruments(gateToken, { forceRefresh: true });
-      setDhanMsg(`Instrument list refreshed: ${meta.count} NSE instruments.`);
-      setDhanMsgColor('#16a34a');
-    } catch (err) {
-      setDhanMsg(`Refresh failed: ${err.message || err}`);
-      setDhanMsgColor('#dc2626');
-    } finally {
-      setRefreshingInstruments(false);
-    }
   }, []);
-
-  const handleValidateDhan = useCallback(async () => {
-    if (!hasVault() || !hasGateToken()) {
-      setDhanMsg('No credentials to validate');
-      setDhanMsgColor('#dc2626');
-      return;
-    }
-    setDhanStatus('checking');
-    setDhanMsg('');
-    try {
-      const vault = getVaultBlob();
-      const gateToken = getGateToken();
-      const res = await fetch(`${CF_WORKER_URL}/dhan/validate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
-        body: JSON.stringify({ vault }),
-      });
-      const data = await res.json();
-      if (data.valid) {
-        setDhanStatus('valid');
-        setDhanMsg('Token is valid');
-        setDhanMsgColor('#16a34a');
-      } else {
-        setDhanStatus('expired');
-        setDhanMsg(`Validation failed: ${data.error || 'token invalid'}`);
-        setDhanMsgColor('#dc2626');
-      }
-    } catch (err) {
-      setDhanMsg(`Network error: ${err.message}`);
-      setDhanMsgColor('#dc2626');
-    }
-  }, []);
-
-  // Auto-validate Dhan token on mount when vault exists and Dhan selected
-  useEffect(() => {
-    if (dataSource !== 'dhan' || !hasVault() || !hasGateToken()) {
-      if (dataSource === 'dhan') setDhanStatus('none');
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      setDhanStatus('checking');
-      try {
-        const vault = getVaultBlob();
-        const gateToken = getGateToken();
-        if (!vault || !gateToken) { if (!cancelled) setDhanStatus('none'); return; }
-        const clientId = (() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })();
-        const res = await fetch(`${CF_WORKER_URL}/dhan/validate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Gate-Token': gateToken },
-          body: JSON.stringify({ vault, dhanClientId: clientId }),
-        });
-        if (cancelled) return;
-        const data = await res.json();
-        if (data.valid) {
-          setDhanStatus('valid');
-        } else {
-          setDhanStatus('expired');
-          setDhanMsg('Token expired — reconnect with PIN + TOTP');
-          setDhanMsgColor('#dc2626');
-        }
-      } catch {
-        if (!cancelled) setDhanStatus('valid'); // Network error — assume valid
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [gateUnlocked, dataSource]);
-
-  const handleReconnectDhan = useCallback(() => {
-    if (dhanStatus === 'valid') {
-      const ok = window.confirm('Your current Dhan session is active. Reconnecting will replace it. Continue?');
-      if (!ok) return;
-    }
-    setDhanShowAuth(true);
-  }, [dhanStatus]);
-
-  const handleClearDhan = useCallback(() => {
-    clearVault();
-    clearDhanInstruments();
-    try { localStorage.removeItem(LS_DHAN_CLIENT_ID); localStorage.removeItem(LS_DHAN_PIN); } catch { /* ok */ }
-    setDhanClientId('');
-    setDhanStatus('none');
-    setDhanMsg('Credentials cleared. Note: Dhan allows token generation once every 2 minutes.');
-    setDhanMsgColor('#d97706');
-    setDhanShowAuth(false);
-  }, []);
-
-  const showDhan = gateUnlocked && dataSource === 'dhan';
-  // Show PIN+TOTP fields when: not connected, expired, or user clicked reconnect
-  const dhanNeedsAuth = dhanStatus === 'none' || dhanStatus === 'expired' || dhanShowAuth;
-
-  // eslint-disable-next-line no-undef
-  // Version now shown only in hamburger menu
 
   const container = { maxWidth: 620, margin: '0 auto', padding: '12px 8px' };
   const card = {
@@ -545,6 +327,96 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#1a1d26' }}>Settings</h1>
       </div>
 
+
+      {/* Simple Mode toggle — mirrors the bottom tab bar's expert/novice split */}
+      {onNoviceModeChange && (
+        <div style={card}>
+          <div style={sectionTitle}>App Mode</div>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0',
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1d26' }}>Simple Mode</div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, lineHeight: 1.4 }}>
+                {noviceMode
+                  ? 'ON — one-button scan, plain-english trade cards, no charts or jargon. Expert tabs (Simulate, Paper) are hidden.'
+                  : 'OFF — full expert UI with charts, filters, all tabs visible.'}
+              </div>
+            </div>
+            <ToggleSwitch checked={noviceMode} onChange={onNoviceModeChange} label="" compact />
+          </div>
+        </div>
+      )}
+
+      {/* Engine selector */}
+      {onEngineVersionChange && (
+        <div style={card}>
+          <div style={sectionTitle}>Engine</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[
+              { key: 'scalp', label: 'Scalp', color: '#d97706' },
+              { key: 'v2', label: 'Intraday', color: '#2563eb' },
+              { key: 'v1', label: 'Classic', color: '#16a34a' },
+            ].map((v) => (
+              <button key={v.key} type="button" onClick={() => onEngineVersionChange(v.key)}
+                style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '10px 0', border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 8, cursor: 'pointer', background: engineVersion === v.key ? v.color : '#fff', color: engineVersion === v.key ? '#fff' : '#4a5068' }}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Signal filters */}
+      {onFiltersChange && activeFilters && (
+        <div style={card}>
+          <div style={sectionTitle}>Signal Filters</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {getCategoriesForEngine(engineVersion).map(({ key, label }) => (
+              <button key={key} type="button"
+                onClick={() => {
+                  const next = new Set(activeFilters);
+                  if (next.has(key)) next.delete(key); else next.add(key);
+                  onFiltersChange(next);
+                }}
+                style={{
+                  padding: '6px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6,
+                  border: activeFilters.has(key) ? 'none' : '1px solid #e2e5eb',
+                  background: activeFilters.has(key) ? '#2563eb' : '#fff',
+                  color: activeFilters.has(key) ? '#fff' : '#4a5068',
+                  cursor: 'pointer',
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <button type="button" onClick={() => onFiltersChange(new Set(getCategoriesForEngine(engineVersion).map(c => c.key)))}
+              style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>
+            <button type="button" onClick={() => onFiltersChange(new Set())}
+              style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#8892a8', cursor: 'pointer' }}>None</button>
+          </div>
+        </div>
+      )}
+
+      {/* Custom indices */}
+      {onAddCustomIndex && (
+        <div style={card}>
+          <div style={sectionTitle}>Custom Indices</div>
+          {customIndices?.length > 0 ? (
+            customIndices.map(ci => (
+              <div key={ci.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#1a1d26' }}>{ci.id}</span>
+                <button type="button" onClick={() => onRemoveCustomIndex(ci.id)} title={`Remove ${ci.id}`}
+                  style={{ width: 24, height: 24, borderRadius: 4, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+              </div>
+            ))
+          ) : (
+            <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 8 }}>None added yet</div>
+          )}
+          <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
+        </div>
+      )}
 
       {/* Premium Gate */}
       <div style={card}>
@@ -689,140 +561,13 @@ export default function SettingsPage({ onBack, debugMode, onDebugModeChange }) {
       )}
 
       {/* Dhan Setup */}
-      {showDhan && (
-        <div style={card}>
-          <div style={sectionTitle}>Dhan Connect</div>
-          <div style={{
-            fontSize: 11, color: '#92400e', background: '#fefce8', border: '1px solid #fde68a',
-            borderRadius: 6, padding: '8px 10px', marginBottom: 12, lineHeight: 1.5,
-          }}>
-            Requires the <strong>DhanHQ Data API subscription</strong> (Rs 499/month) and <strong>TOTP enabled</strong> on your Dhan account.
-            Without the Data API, scans will fall back to Yahoo Finance.
-          </div>
-
-          {/* Step 1: Client ID (saved) */}
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
-            1. Dhan Client ID
-          </div>
-          <PasteInput value={dhanClientId} onChange={setDhanClientId} placeholder="Dhan Client ID" useMono />
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <button type="button" onClick={handleSaveDhanClientId}
-              disabled={dhanClientId === ((() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })())}
-              style={{ ...btnSecondary, opacity: dhanClientId === ((() => { try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; } })()) ? 0.5 : 1 }}>
-              Save
-            </button>
-          </div>
-
-          {/* Status */}
-          <div style={{
-            fontSize: 12, fontWeight: 600, marginBottom: 8,
-            color: dhanStatus === 'valid' ? '#16a34a'
-              : dhanStatus === 'expired' ? '#dc2626'
-              : dhanStatus === 'checking' ? '#d97706'
-              : '#8892a8',
-          }}>
-            {dhanStatus === 'valid' && 'Connected — token verified'}
-            {dhanStatus === 'checking' && 'Checking token...'}
-            {dhanStatus === 'expired' && 'Token expired'}
-            {dhanStatus === 'none' && 'Not connected'}
-          </div>
-
-          {dhanMsg && <div style={{ fontSize: 12, color: dhanMsgColor, marginBottom: 8 }}>{dhanMsg}</div>}
-
-          {/* Instrument list status — shows cached count + last fetch */}
-          {hasCachedInstruments() && (() => {
-            const meta = getInstrumentsMeta();
-            if (!meta) return null;
-            const fetched = meta.fetchedAt ? new Date(meta.fetchedAt).toLocaleDateString() : 'unknown';
-            return (
-              <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 8 }}>
-                Instrument list: {meta.count} NSE symbols (loaded {fetched})
-              </div>
-            );
-          })()}
-
-          {/* Actions based on state */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            {(dhanStatus === 'valid' || dhanStatus === 'checking') && (
-              <>
-                <button type="button" onClick={handleValidateDhan}
-                  disabled={dhanStatus === 'checking'}
-                  style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
-                  {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
-                </button>
-                <button type="button" onClick={handleRefreshInstruments}
-                  disabled={refreshingInstruments}
-                  title="Fetch the latest NSE scrip master from Dhan. Use this if a new listing is missing from the symbol list."
-                  style={{ ...btnSecondary, opacity: refreshingInstruments ? 0.5 : 1 }}>
-                  {refreshingInstruments ? 'Refreshing…' : 'Refresh instrument list'}
-                </button>
-                {!dhanShowAuth && (
-                  <button type="button" onClick={handleReconnectDhan} style={btnSecondary}>
-                    Reconnect
-                  </button>
-                )}
-                <button type="button" onClick={handleClearDhan} style={btnDanger}>
-                  Clear Credentials
-                </button>
-              </>
-            )}
-            {/* When expired, dhanNeedsAuth is already true — PIN+TOTP fields show automatically */}
-          </div>
-
-          {/* Step 2: PIN + TOTP (shown only when needed) */}
-          {dhanNeedsAuth && (
-            <>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
-                2a. Authenticate with PIN + TOTP
-              </div>
-              <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
-                Enter your 6-digit Dhan PIN (saved locally) and TOTP from your authenticator app.
-              </div>
-              <PasteInput value={dhanPin} onChange={(v) => { setDhanPin(v); try { localStorage.setItem(LS_DHAN_PIN, v); } catch { /* ok */ } }} placeholder="Dhan PIN (6 digits)" type="password" useMono />
-              <PasteInput value={dhanTotp} onChange={setDhanTotp} placeholder="TOTP (6 digits)" useMono />
-              <div style={{ fontSize: 11, color: '#d97706', marginBottom: 8 }}>
-                Dhan allows token generation once every 2 minutes.
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <button type="button" onClick={handleConnectDhan}
-                  disabled={dhanConnecting}
-                  style={{ ...btnPrimary, background: '#387ed1', opacity: dhanConnecting ? 0.5 : 1 }}>
-                  {dhanConnecting ? 'Connecting...' : 'Connect'}
-                </button>
-                {dhanShowAuth && (dhanStatus === 'valid' || dhanStatus === 'checking') && (
-                  <button type="button" onClick={() => { setDhanShowAuth(false); setDhanPin(''); setDhanTotp(''); }}
-                    style={btnSecondary}>
-                    Cancel
-                  </button>
-                )}
-              </div>
-
-              {/* Divider */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0' }}>
-                <div style={{ flex: 1, height: 1, background: '#e2e5eb' }} />
-                <span style={{ fontSize: 11, color: '#8892a8', fontWeight: 600 }}>OR</span>
-                <div style={{ flex: 1, height: 1, background: '#e2e5eb' }} />
-              </div>
-
-              {/* Paste access token */}
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#4a5068', marginBottom: 8 }}>
-                2b. Paste access token from web.dhan.co
-              </div>
-              <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
-                Login at web.dhan.co → My Profile → Access DhanHQ APIs → copy the token.
-              </div>
-              <PasteInput value={dhanPastedToken} onChange={setDhanPastedToken} placeholder="Paste access token" useMono />
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <button type="button" onClick={handlePasteToken}
-                  disabled={!dhanPastedToken.trim()}
-                  style={{ ...btnPrimary, background: '#387ed1', opacity: !dhanPastedToken.trim() ? 0.5 : 1 }}>
-                  Save Token
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      <DhanSettings
+        gateUnlocked={gateUnlocked}
+        dataSource={dataSource}
+        apiKey={apiKey}
+        apiSecret={apiSecret}
+        onClearZerodha={handleClearZerodha}
+      />
 
       {/* Debug Mode */}
       {onDebugModeChange && (

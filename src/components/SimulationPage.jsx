@@ -14,7 +14,7 @@ import { createFetchFn } from '../engine/dataSourceFetch.js';
 import ToggleSwitch from './ToggleSwitch.jsx';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import { getGateToken } from '../utils/batchAuth.js';
-import { MARGIN_MULTIPLIER, fetchMarginMap } from '../data/marginData.js';
+import { MARGIN_MULTIPLIER, fetchMarginMap, BROKER_PREMIUM_STORAGE_KEY, computeTxCostPct } from '../data/marginData.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -87,19 +87,22 @@ const ENGINE_PRESETS = {
   v1:     { from: '09:15', to: '15:30', maxOpen: 3, maxTrades: 2 },
 };
 
-export default function SimulationPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, dataSource, debugMode }) {
+export default function SimulationPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const [localEngine, setLocalEngine] = useState(engineVersion || 'scalp');
   const preset = ENGINE_PRESETS[localEngine] || ENGINE_PRESETS.scalp;
   const [date, setDate] = useState(getLastTradingDay);
   const [startTime, setStartTime] = useState(preset.from);
   const [endTime, setEndTime] = useState(preset.to);
-  const [nseIndex, setNseIndex] = useState('NIFTY SMALLCAP 100');
+  const nseIndex = savedIndex || 'NIFTY SMALLCAP 100';
   const [capital, setCapital] = useState(300000);
   const [positionSize, setPositionSize] = useState(300000);
   const [maxConcurrent, setMaxConcurrent] = useState(preset.maxOpen);
   const [maxTotalTrades, setMaxTotalTrades] = useState(preset.maxTrades);
   const [margin, setMargin] = useState(true);
+  const [premiumCharges, setPremiumCharges] = useState(() => {
+    try { return localStorage.getItem(BROKER_PREMIUM_STORAGE_KEY) === 'true'; } catch { return false; }
+  });
 
   // Update presets when engine changes
   const handleEngineChange = (eng) => {
@@ -164,6 +167,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
         indexDirection: idxDir,
         capital, positionSize, maxConcurrent, maxTotalTrades,
         margin, marginMap,
+        txCostPct: computeTxCostPct(premiumCharges),
         gateToken: getGateToken(),
         onProgress: (phase, completed, total, current) => {
           setProgress({ phase, completed, total, current });
@@ -178,7 +182,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       setRunning(false);
       abortRef.current = null;
     }
-  }, [running, date, startTime, endTime, nseIndex, localEngine, capital, positionSize, maxConcurrent, maxTotalTrades, margin]);
+  }, [running, date, startTime, endTime, nseIndex, localEngine, capital, positionSize, maxConcurrent, maxTotalTrades, margin, premiumCharges]);
 
   const pct = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0;
   const s = results?.summary;
@@ -199,6 +203,8 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       maxTotalTrades,
       margin,
       marginMultiplier: margin ? MARGIN_MULTIPLIER : 1,
+      premiumCharges,
+      txCostPct: computeTxCostPct(premiumCharges),
       dataSource: dataSource || 'yahoo',
     };
     const trades = (results.trades || []).map((t) => ({
@@ -242,7 +248,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       document.body.removeChild(ta);
     }
     setTimeout(() => setCopyStatus(''), 2500);
-  }, [results, nseIndex, date, startTime, endTime, localEngine, capital, positionSize, maxConcurrent, maxTotalTrades, margin, dataSource]);
+  }, [results, nseIndex, date, startTime, endTime, localEngine, capital, positionSize, maxConcurrent, maxTotalTrades, margin, premiumCharges, dataSource]);
 
   const inputStyle = {
     padding: '8px 10px', fontSize: 13, borderRadius: 6,
@@ -298,7 +304,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
       {/* 3. Index */}
       <div style={{ marginBottom: 10 }}>
         <div style={labelStyle}>Index</div>
-        <select value={nseIndex} onChange={e => setNseIndex(e.target.value)}
+        <select value={nseIndex} onChange={e => onIndexChange(e.target.value)}
           disabled={running} style={{ ...inputStyle, width: '100%', cursor: 'pointer' }}>
           {allOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
         </select>
@@ -332,12 +338,13 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, indexOption
         </div>
       </div>
 
-      {/* Margin toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      {/* Margin + Broker Premium toggles */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <ToggleSwitch checked={margin} onChange={setMargin} label="5× Margin (MIS)" compact disabled={running} />
         {margin && <span style={{ fontSize: 11, color: '#6b7280' }}>
           Buying power: {((capital * MARGIN_MULTIPLIER) / 100000).toFixed(1)}L
         </span>}
+        <ToggleSwitch checked={premiumCharges} onChange={(v) => { setPremiumCharges(v); try { localStorage.setItem(BROKER_PREMIUM_STORAGE_KEY, String(v)); } catch {} }} label="Broker Premium" compact disabled={running} />
       </div>
 
       {/* Run button */}

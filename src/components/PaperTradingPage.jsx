@@ -22,7 +22,7 @@ import { computeRiskScore as computeRiskScoreV2 } from '../engine/risk-v2.js';
 import { detectPatterns as detectPatternsClassic } from '../engine/patterns-classic.js';
 import { detectLiquidityBox as detectLiquidityBoxClassic } from '../engine/liquidityBox-classic.js';
 import { computeRiskScore as computeRiskScoreClassic } from '../engine/risk-classic.js';
-import { MARGIN_MULTIPLIER } from '../data/marginData.js';
+import { MARGIN_MULTIPLIER, CHARGES_REGULAR, CHARGES_PREMIUM, BROKER_PREMIUM_STORAGE_KEY } from '../data/marginData.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const STORAGE_KEY = 'candlescan_paper_trades';
@@ -36,26 +36,6 @@ const POLL_OPTIONS = [
   { label: '30s', ms: 30000 },
   { label: '1m', ms: 60000 },
 ];
-
-// Regular plan: standard NSE charges
-const CHARGES_REGULAR = {
-  BROKERAGE_PER_ORDER: 20,
-  STT_SELL_PCT: 0.00025,             // 0.025% sell side
-  EXCHANGE_TURNOVER_PCT: 0.0000345,  // 0.00345%
-  SEBI_PCT: 0.000001,               // Rs.10 per crore
-  STAMP_DUTY_BUY_PCT: 0.00003,      // 0.003% buy side
-  GST_PCT: 0.18,
-};
-
-// Premium plan: lower exchange turnover (reverse-engineered from actual broker statement)
-const CHARGES_PREMIUM = {
-  BROKERAGE_PER_ORDER: 20,
-  STT_SELL_PCT: 0.00025,             // 0.025% sell side
-  EXCHANGE_TURNOVER_PCT: 0.0000307,  // 0.00307% (actual from broker)
-  SEBI_PCT: 0.000001,               // Rs.10 per crore
-  STAMP_DUTY_BUY_PCT: 0.00003,      // 0.003% buy side
-  GST_PCT: 0.18,
-};
 
 function getEngineFns(engine) {
   if (engine === 'scalp') return {
@@ -155,13 +135,13 @@ const sectionHeader = (onClick, open, label, count, rightEl) => (
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-export default function PaperTradingPage({ savedIndex, indexOptions, engineVersion, dataSource }) {
+export default function PaperTradingPage({ savedIndex, onIndexChange, indexOptions, engineVersion, dataSource }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
 
   // Load saved settings
   const savedSettings = useRef((() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })());
 
-  const [nseIndex, setNseIndex] = useState('TOP GAINERS (Live)');
+  const nseIndex = savedIndex || 'NIFTY 200';
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState([]);
   const [scanProgress, setScanProgress] = useState({ completed: 0, total: 0, current: '' });
@@ -175,7 +155,9 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
   const [margin, setMargin] = useState(savedSettings.current.margin !== false);
   const [maxPositions, setMaxPositions] = useState(savedSettings.current.maxPositions || 1);
   const [pollMs, setPollMs] = useState(savedSettings.current.pollMs || 1000);
-  const [premiumCharges, setPremiumCharges] = useState(savedSettings.current.premiumCharges !== false);
+  const [premiumCharges, setPremiumCharges] = useState(() => {
+    try { return localStorage.getItem(BROKER_PREMIUM_STORAGE_KEY) === 'true'; } catch { return false; }
+  });
 
   const [trades, setTrades] = useState(() => {
     try { const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); return Array.isArray(s) ? s : []; } catch { return []; }
@@ -189,8 +171,8 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
   // Persist
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(trades)); } catch {} }, [trades]);
   useEffect(() => {
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ capital, margin, maxPositions, pollMs, premiumCharges })); } catch {}
-  }, [capital, margin, maxPositions, pollMs, premiumCharges]);
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ capital, margin, maxPositions, pollMs })); } catch {}
+  }, [capital, margin, maxPositions, pollMs]);
   useEffect(() => { requestNotifPermission(); }, []);
   useEffect(() => {
     if (!notifications.length) return;
@@ -330,7 +312,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       {/* Controls */}
       <div style={{ marginBottom: 10 }}>
         <div style={labelStyle}>Index</div>
-        <select value={nseIndex} onChange={e => setNseIndex(e.target.value)} disabled={scanning} style={{ ...inputStyle, width: '100%', cursor: 'pointer' }}>
+        <select value={nseIndex} onChange={e => onIndexChange(e.target.value)} disabled={scanning} style={{ ...inputStyle, width: '100%', cursor: 'pointer' }}>
           {allOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
         </select>
       </div>
@@ -352,7 +334,7 @@ export default function PaperTradingPage({ savedIndex, indexOptions, engineVersi
       {/* Toggles row */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <ToggleSwitch checked={margin} onChange={setMargin} label="5x Margin (MIS)" compact disabled={scanning} />
-        <ToggleSwitch checked={premiumCharges} onChange={setPremiumCharges} label="Premium Plan" compact />
+        <ToggleSwitch checked={premiumCharges} onChange={(v) => { setPremiumCharges(v); try { localStorage.setItem(BROKER_PREMIUM_STORAGE_KEY, String(v)); } catch {} }} label="Broker Premium" compact />
         {premiumCharges && <span style={{ fontSize: 10, color: '#8892a8' }}>(lower exchange fees)</span>}
       </div>
 
