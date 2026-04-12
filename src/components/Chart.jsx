@@ -11,7 +11,7 @@
  *   - HistogramSeries (volume overlay)
  *   - Price lines (entry/SL/target, user hlines, liquidity box bounds)
  *   - Series markers (pattern signal annotations)
- *   - Crosshair + subscribeCrosshairMove (OHLCV info bar)
+ *   - Crosshair + subscribeCrosshairMove (OHLCV legend overlay)
  *   - Pinch-to-zoom, scroll-wheel zoom, touch pan (all native)
  *   - subscribeVisibleLogicalRangeChange (lazy history prefetch)
  *   - subscribeClick (drawing tool placement)
@@ -26,6 +26,9 @@ import {
 const mono = "'SF Mono', Menlo, monospace";
 const RISK_ACTIONS = new Set(['BUY', 'STRONG BUY', 'SHORT', 'STRONG SHORT']);
 
+/** Visible bars target per timeframe — enough context without overcrowding. */
+const VISIBLE_BARS = { '1m': 80, '5m': 60, '15m': 50, '30m': 40, '1h': 40, '1d': 120 };
+
 function formatTimestamp(ts, timeframe) {
   const d = new Date(ts * 1000);
   if (timeframe === '1d') {
@@ -34,26 +37,62 @@ function formatTimestamp(ts, timeframe) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** Deduplicate and sort candle data for TV (requires strictly ascending integer timestamps). */
+/**
+ * Deduplicate, sort, and gap-compress candle data for TV.
+ *
+ * TV lightweight charts renders timestamps with real-time spacing,
+ * so overnight/weekend gaps between trading sessions create huge
+ * empty zones that make intraday charts look ultra-zoomed-in.
+ *
+ * Fix: detect gaps > 2× the median bar interval and compress them
+ * to 1× the interval. This gives evenly-spaced bars while preserving
+ * relative intra-session spacing. A timeMap is returned so the OHLCV
+ * overlay can show the original timestamp.
+ */
 function prepareData(candles) {
+  // Step 1: deduplicate (keep latest for each rounded timestamp)
   const seen = new Set();
-  const ohlc = [];
-  const vol = [];
+  const raw = [];
   for (let i = candles.length - 1; i >= 0; i--) {
     const t = Math.round(candles[i].t);
     if (seen.has(t)) continue;
     seen.add(t);
-    ohlc.push({ time: t, open: candles[i].o, high: candles[i].h, low: candles[i].l, close: candles[i].c });
-    vol.push({ time: t, value: candles[i].v || 0, color: candles[i].c >= candles[i].o ? 'rgba(22,163,74,0.2)' : 'rgba(220,38,38,0.2)' });
+    raw.push({ t, o: candles[i].o, h: candles[i].h, l: candles[i].l, c: candles[i].c, v: candles[i].v || 0 });
   }
-  ohlc.reverse();
-  vol.reverse();
-  return { ohlc, vol };
+  raw.reverse();
+
+  if (raw.length === 0) return { ohlc: [], vol: [], timeMap: new Map() };
+
+  // Step 2: compute median interval to detect gaps
+  const intervals = [];
+  for (let i = 1; i < raw.length; i++) {
+    intervals.push(raw[i].t - raw[i - 1].t);
+  }
+  intervals.sort((a, b) => a - b);
+  const medianInterval = intervals.length > 0 ? intervals[Math.floor(intervals.length / 2)] : 60;
+  const gapThreshold = medianInterval * 2.5;
+
+  // Step 3: remap timestamps to close gaps
+  const timeMap = new Map(); // remappedTime → originalTime
+  const ohlc = [];
+  const vol = [];
+  let remapped = raw[0].t;
+  for (let i = 0; i < raw.length; i++) {
+    if (i > 0) {
+      const gap = raw[i].t - raw[i - 1].t;
+      remapped += gap > gapThreshold ? medianInterval : gap;
+    }
+    timeMap.set(remapped, raw[i].t);
+    ohlc.push({ time: remapped, open: raw[i].o, high: raw[i].h, low: raw[i].l, close: raw[i].c });
+    vol.push({ time: remapped, value: raw[i].v, color: raw[i].c >= raw[i].o ? 'rgba(22,163,74,0.2)' : 'rgba(220,38,38,0.2)' });
+  }
+
+  return { ohlc, vol, timeMap };
 }
 
-/* ── OHLCV info bar ──────────────────────────────────────────────── */
+/* ── OHLCV legend overlay (inside chart, top-left) ───────────────── */
 
-function OhlcvBar({ data, lastCandle, timeframe }) {
+function OhlcvOverlay({ data, lastCandle, timeframe }) {
   const c = data || (lastCandle
     ? { open: lastCandle.o, high: lastCandle.h, low: lastCandle.l, close: lastCandle.c, volume: lastCandle.v, time: lastCandle.t }
     : null);
@@ -61,12 +100,13 @@ function OhlcvBar({ data, lastCandle, timeframe }) {
   const bull = c.close >= c.open;
   return (
     <div style={{
+      position: 'absolute', top: 6, left: 6, zIndex: 10,
       display: 'flex', gap: 5, alignItems: 'center',
-      padding: '3px 6px', marginBottom: 4, borderRadius: 6,
-      background: data ? '#f0f4ff' : '#f8f9fb',
-      border: `1px solid ${data ? '#dbeafe' : '#e2e5eb'}`,
+      padding: '2px 6px', borderRadius: 4,
+      background: 'rgba(255,255,255,0.85)',
       fontSize: 10, fontFamily: mono, color: '#4a5068',
-      whiteSpace: 'nowrap', overflow: 'hidden',
+      whiteSpace: 'nowrap', pointerEvents: 'none',
+      backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
     }}>
       <span>O <b>{c.open?.toFixed(2)}</b></span>
       <span>H <b>{c.high?.toFixed(2)}</b></span>
@@ -111,6 +151,7 @@ export default forwardRef(function Chart({
   const pendingBoxRef = useRef(null);
   const chartIdRef = useRef(0);
   const roRef = useRef(null);
+  const timeMapRef = useRef(new Map());
   const [ohlcvData, setOhlcvData] = useState(null);
   const [pendingBoxHint, setPendingBoxHint] = useState(false);
 
@@ -123,9 +164,6 @@ export default forwardRef(function Chart({
   }, [drawingMode]);
 
   /* ── Effect 1: Chart creation (mount only) ────────────────────── */
-  // Creates the chart + series once on mount, destroys on unmount.
-  // Never re-runs for data/timeframe changes — those are handled by
-  // the data effect below.
   useEffect(() => {
     if (!containerRef.current) return;
     const container = containerRef.current;
@@ -150,6 +188,18 @@ export default forwardRef(function Chart({
         borderColor: '#e2e5eb',
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 5,
+        tickMarkFormatter: (remappedTime) => {
+          const origTime = timeMapRef.current.get(remappedTime) || remappedTime;
+          const d = new Date(origTime * 1000);
+          const h = d.getHours();
+          const m = d.getMinutes();
+          // Show date label at session start, time label otherwise
+          if (h === 9 && m <= 20) {
+            return `${d.getDate()}/${d.getMonth() + 1}`;
+          }
+          return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        },
       },
       handleScroll: {
         mouseWheel: true,
@@ -179,7 +229,7 @@ export default forwardRef(function Chart({
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
-    // Crosshair → OHLCV bar
+    // Crosshair → OHLCV legend overlay
     chart.subscribeCrosshairMove((param) => {
       if (chartIdRef.current !== id) return;
       if (!param.time) {
@@ -194,9 +244,11 @@ export default forwardRef(function Chart({
       const cd = param.seriesData.get(candleSeries);
       const vd = param.seriesData.get(volumeSeries);
       if (cd) {
+        // Map remapped time back to original for display
+        const originalTime = timeMapRef.current.get(param.time) || param.time;
         setOhlcvData({
           open: cd.open, high: cd.high, low: cd.low, close: cd.close,
-          volume: vd?.value, time: param.time,
+          volume: vd?.value, time: originalTime,
         });
       }
     });
@@ -248,6 +300,7 @@ export default forwardRef(function Chart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
+    if (typeof window !== 'undefined') window.__tvChart = chart; // dev inspection
 
     return () => {
       roRef.current?.disconnect();
@@ -261,9 +314,6 @@ export default forwardRef(function Chart({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Effect 2: Set data on existing chart ─────────────────────── */
-  // Runs whenever candles/sym/timeframe change. Reads refs set by
-  // the creation effect. If the chart isn't ready yet (shouldn't
-  // happen, but defensive), skips silently.
   useEffect(() => {
     const series = candleSeriesRef.current;
     const volSeries = volumeSeriesRef.current;
@@ -280,7 +330,8 @@ export default forwardRef(function Chart({
     prevSymKeyRef.current = key;
 
     const savedRange = isPrepend ? chart.timeScale().getVisibleRange() : null;
-    const { ohlc, vol } = prepareData(candles);
+    const { ohlc, vol, timeMap } = prepareData(candles);
+    timeMapRef.current = timeMap;
 
     try {
       series.setData(ohlc);
@@ -293,7 +344,14 @@ export default forwardRef(function Chart({
     if (isPrepend && savedRange) {
       chart.timeScale().setVisibleRange(savedRange);
     } else {
-      chart.timeScale().fitContent();
+      // Set bar spacing for a sensible default zoom level, then scroll
+      // to the latest bar. This avoids both fitContent (which crams all
+      // bars into hairlines) and setVisibleLogicalRange (timing-sensitive).
+      const target = VISIBLE_BARS[timeframe] || 60;
+      const chartWidth = containerRef.current?.clientWidth || 594;
+      const spacing = Math.max(4, Math.min(12, chartWidth / target));
+      chart.timeScale().applyOptions({ barSpacing: spacing, rightOffset: 5 });
+      chart.timeScale().scrollToRealTime();
     }
 
     // Reset crosshair data for new series
@@ -455,8 +513,6 @@ export default forwardRef(function Chart({
 
   return (
     <div style={{ marginBottom: 12, userSelect: 'none', WebkitUserSelect: 'none' }}>
-      <OhlcvBar data={ohlcvData} lastCandle={lastCandle} timeframe={timeframe} />
-
       {drawingMode && (
         <div style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 500, marginBottom: 4 }}>
           {drawingMode === 'hline'
@@ -468,12 +524,15 @@ export default forwardRef(function Chart({
       <div
         ref={containerRef}
         style={{
+          position: 'relative',
           borderRadius: 10,
           overflow: 'hidden',
           border: '1px solid #e2e5eb',
           cursor: drawingMode ? 'crosshair' : 'default',
         }}
-      />
+      >
+        <OhlcvOverlay data={ohlcvData} lastCandle={lastCandle} timeframe={timeframe} />
+      </div>
     </div>
   );
 });
