@@ -22,7 +22,8 @@ export function useAppView() {
   });
   const [cameFromBatch, setCameFromBatch] = useState(false);
   const [cameFromSimulation, setCameFromSimulation] = useState(false);
-  const [settingsReturnView, setSettingsReturnView] = useState('main');
+  // settingsReturnView removed — bottom tab bar makes it unnecessary
+  // because Settings is always a direct-tap away.
 
   const lastBackTime = useRef(0);
   const viewRef = useRef('main');
@@ -67,6 +68,5 @@ export function useAppView() {
     view, setView,
     cameFromBatch, setCameFromBatch,
     cameFromSimulation, setCameFromSimulation,
-    settingsReturnView, setSettingsReturnView,
   };
 }

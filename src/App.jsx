@@ -4,6 +4,7 @@ import { useIndexUniverse } from './hooks/useIndexUniverse.js';
 import { useAppView } from './hooks/useAppView.js';
 import { useScheduledChecks } from './hooks/useScheduledChecks.js';
 import ScheduledChecksPanel from './components/ScheduledChecksPanel.jsx';
+import BottomTabBar, { TAB_HEIGHT } from './components/BottomTabBar.jsx';
 import Header from './components/Header.jsx';
 import TimeframePills, { SOURCE_TIMEFRAMES } from './components/TimeframePills.jsx';
 import SearchBar from './components/SearchBar.jsx';
@@ -11,7 +12,6 @@ import Chart from './components/Chart.jsx';
 import EmptyState from './components/EmptyState.jsx';
 import AdvancedView from './components/AdvancedView.jsx';
 import ToggleSwitch from './components/ToggleSwitch.jsx';
-import GlobalMenu from './components/GlobalMenu.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
 import BatchScanPage from './components/BatchScanPage.jsx';
@@ -51,15 +51,16 @@ function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
 // Session-cache helpers for index constituents are owned by useIndexUniverse.
 
 const shell = {
-  minHeight: '100vh',
+  minHeight: '100dvh',   // dvh avoids the permanent scrollbar on Android Chrome
   background: '#f5f6f8',
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
   fontSize: 14,
   color: '#1a1d26',
-  padding: '12px 12px 32px',
+  padding: `12px 12px ${TAB_HEIGHT + 16}px`,  // enough bottom clearance for the fixed tab bar
   maxWidth: 620,
   margin: '0 auto',
   boxSizing: 'border-box',
+  overflowX: 'hidden',
 };
 
 export default function App() {
@@ -131,7 +132,6 @@ export default function App() {
     view, setView,
     cameFromBatch, setCameFromBatch,
     cameFromSimulation, setCameFromSimulation,
-    settingsReturnView, setSettingsReturnView,
   } = useAppView();
 
   // Re-sync dataSource from localStorage when returning from Settings or on page reload
@@ -271,40 +271,9 @@ export default function App() {
   return (
     <div style={shell}>
       <UpdatePrompt />
-      {/* Shared header — single instance, nav action changes per view */}
-      <Header>
-        <GlobalMenu
-          activeFilters={activeFilters}
-          onFiltersChange={setActiveFilters}
-          navAction={view === 'main'
-            ? { label: 'Index Scanner', onClick: () => setView('batch') }
-            : { label: 'Stock Scanner', onClick: () => setView('main') }
-          }
-          noviceMode={noviceMode}
-          onNoviceModeChange={setNoviceMode}
-          simulationAction={{
-            label: view === 'simulate' ? 'Index Scanner' : 'Simulation',
-            onClick: () => setView(view === 'simulate' ? 'batch' : 'simulate'),
-          }}
-          paperTradingAction={{
-            label: view === 'paper' ? 'Index Scanner' : 'Paper Trading',
-            onClick: () => setView(view === 'paper' ? 'batch' : 'paper'),
-          }}
-          settingsAction={{
-            label: 'Settings',
-            onClick: () => {
-              // Remember where we are so Back from Settings returns here
-              if (view !== 'settings') setSettingsReturnView(view);
-              setView('settings');
-            },
-          }}
-          customIndices={customIndices}
-          onAddCustomIndex={handleAddCustomIndex}
-          onRemoveCustomIndex={handleRemoveCustomIndex}
-          engineVersion={engineVersion}
-          onEngineVersionChange={setEngineVersion}
-        />
-      </Header>
+      {/* Shared header — navigation lives in the bottom tab bar.
+          All configuration (engine, filters, data source) is in Settings. */}
+      <Header onSettings={() => setView('settings')} />
 
       {/* Global Scheduled Checks panel — visible in every view. Shows
           a compact strip when schedules exist; expands to a full list
@@ -323,6 +292,7 @@ export default function App() {
         {noviceMode ? (
           <NoviceModePage
             savedIndex={nseIndex}
+            onIndexChange={setNseIndex}
             indexOptions={allIndexOptions}
             dataSource={dataSource}
             onSelectSymbol={(s) => {
@@ -342,6 +312,7 @@ export default function App() {
               setCameFromBatch(true);
             }}
             savedIndex={nseIndex}
+            onIndexChange={setNseIndex}
             indexOptions={allIndexOptions}
             engineVersion={engineVersion}
             dataSource={dataSource}
@@ -361,6 +332,7 @@ export default function App() {
             setCameFromSimulation(true);
           }}
           savedIndex={nseIndex}
+          onIndexChange={setNseIndex}
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
           dataSource={dataSource}
@@ -372,6 +344,7 @@ export default function App() {
       <div style={{ display: view === 'paper' ? 'block' : 'none' }}>
         <PaperTradingPage
           savedIndex={nseIndex}
+          onIndexChange={setNseIndex}
           indexOptions={allIndexOptions}
           engineVersion={engineVersion}
           dataSource={dataSource}
@@ -380,7 +353,27 @@ export default function App() {
 
       {/* Settings page */}
       {view === 'settings' && (
-        <SettingsPage onBack={() => setView(settingsReturnView)} debugMode={debugMode} onDebugModeChange={setDebugMode} />
+        <SettingsPage
+          onBack={() => setView('main')}
+          debugMode={debugMode}
+          onDebugModeChange={setDebugMode}
+          noviceMode={noviceMode}
+          onNoviceModeChange={(v) => {
+            setNoviceMode(v);
+            // When Simple Mode turns ON while on an expert-only view,
+            // navigate to the scan view (those tabs disappear).
+            if (v && (view === 'simulate' || view === 'paper')) {
+              setView('batch');
+            }
+          }}
+          engineVersion={engineVersion}
+          onEngineVersionChange={setEngineVersion}
+          activeFilters={activeFilters}
+          onFiltersChange={setActiveFilters}
+          customIndices={customIndices}
+          onAddCustomIndex={handleAddCustomIndex}
+          onRemoveCustomIndex={handleRemoveCustomIndex}
+        />
       )}
 
       {/* Main view — hidden when not active */}
@@ -627,6 +620,9 @@ export default function App() {
       `}</style>
 
       <DebugPanel open={debugMode} onClose={() => setDebugMode(false)} />
+
+      {/* Fixed bottom tab bar — always visible, replaces hamburger nav */}
+      <BottomTabBar view={view} setView={setView} noviceMode={noviceMode} />
     </div>
   );
 }

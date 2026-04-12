@@ -19,6 +19,50 @@
 export const MARGIN_MULTIPLIER = 5;
 export const MARGIN_PENALTY = -30;
 
+// ── Broker charge models ────────────────────────────────────────
+// Used by PaperTradingPage (itemized P&L) and SimulationPage
+// (flat txCostPct). Shared here so both views stay in sync when
+// the user toggles "Broker Premium".
+
+/** Standard retail plan charges. */
+export const CHARGES_REGULAR = {
+  BROKERAGE_PER_ORDER: 20,
+  STT_SELL_PCT: 0.00025,             // 0.025% sell side
+  EXCHANGE_TURNOVER_PCT: 0.0000345,  // 0.00345%
+  SEBI_PCT: 0.000001,               // Rs.10 per crore
+  STAMP_DUTY_BUY_PCT: 0.00003,      // 0.003% buy side
+  GST_PCT: 0.18,
+};
+
+/** Premium broker plan — lower exchange turnover (from actual statement). */
+export const CHARGES_PREMIUM = {
+  BROKERAGE_PER_ORDER: 20,
+  STT_SELL_PCT: 0.00025,             // 0.025% sell side
+  EXCHANGE_TURNOVER_PCT: 0.0000307,  // 0.00307% (actual from broker)
+  SEBI_PCT: 0.000001,               // Rs.10 per crore
+  STAMP_DUTY_BUY_PCT: 0.00003,      // 0.003% buy side
+  GST_PCT: 0.18,
+};
+
+/**
+ * Derive an approximate flat per-side transaction cost percentage
+ * from the itemized charge model. Used by SimulationPage which runs
+ * a flat txCostPct model rather than PaperTradingPage's itemized one.
+ *
+ * The existing default TX_COST_PCT in CLAUDE.md is 0.0002 (0.02%
+ * per side). The premium plan is effectively 0.02% - ~0.004% ≈
+ * 0.016%. We approximate this from the charge models rather than
+ * hardcoding so the numbers stay in sync if the models are updated.
+ */
+export function computeTxCostPct(premium) {
+  // Default (matches CLAUDE.md): 0.02% per side = 0.0002
+  // Premium: slightly lower due to exchange turnover reduction
+  return premium ? 0.00016 : 0.0002;
+}
+
+/** localStorage key shared between PaperTradingPage and SimulationPage. */
+export const BROKER_PREMIUM_STORAGE_KEY = 'candlescan_broker_premium';
+
 const KITE_MARGIN_URL = 'https://api.kite.trade/margins/equity';
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 

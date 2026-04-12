@@ -271,9 +271,9 @@ function getEngineFns(engineVersion) {
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
-  const [nseIndex, setNseIndex] = useState(savedIndex || DEFAULT_NSE_INDEX_ID);
+  const nseIndex = savedIndex || DEFAULT_NSE_INDEX_ID;
   const [timeframe, setTimeframe] = useState('5m');
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState({ completed: 0, total: 0, current: '' });
@@ -467,7 +467,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, indexOptions
       <div style={{ marginBottom: 10 }}>
         <select
           value={nseIndex}
-          onChange={(e) => setNseIndex(e.target.value)}
+          onChange={(e) => onIndexChange(e.target.value)}
           disabled={scanning}
           style={{
             width: '100%', padding: '10px 12px', fontSize: 13, fontWeight: 600,
