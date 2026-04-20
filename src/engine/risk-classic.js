@@ -1,4 +1,5 @@
 import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
+import { sma, atrLike } from './riskCommon.js';
 
 /**
  * Classic (Swing) risk scoring engine.
@@ -21,23 +22,7 @@ export const RISK_SIGNAL_DEFINITIONS = [
   { key: 'confluence', label: 'Confluence', max: 15, meaning: 'Volume, SMA alignment, context.' },
 ];
 
-function sma(vals, n) {
-  if (!vals.length || n < 1) return null;
-  const slice = vals.slice(-n);
-  return slice.reduce((a, b) => a + b, 0) / slice.length;
-}
-
-function atrLike(candles, n = 14) {
-  if (candles.length < 2) return 0;
-  let s = 0;
-  const m = Math.min(n, candles.length - 1);
-  for (let i = candles.length - m; i < candles.length; i++) {
-    const c = candles[i];
-    const p = candles[i - 1];
-    s += Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c));
-  }
-  return s / m;
-}
+// sma, atrLike live in ./riskCommon.js
 
 export function detectContext(candles, box) {
   if (!candles || candles.length < 5) return 'mid_range';

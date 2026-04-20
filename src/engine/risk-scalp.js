@@ -21,6 +21,7 @@
  */
 
 import { isMarginEligible, MARGIN_PENALTY } from '../data/marginData.js';
+import { atrLike } from './riskCommon.js';
 
 // Note: market context (VIX, gap, liquidity, FII/DII, news) is no longer
 // composed into the confidence score here. It moved to the four-phase
@@ -37,17 +38,7 @@ export const RISK_SIGNAL_DEFINITIONS = [
   { key: 'regime', label: 'Regime alignment', max: 10, meaning: 'Index direction match.' },
 ];
 
-function atrLike(candles, n = 14) {
-  if (candles.length < 2) return 0;
-  let s = 0;
-  const m = Math.min(n, candles.length - 1);
-  for (let i = candles.length - m; i < candles.length; i++) {
-    const c = candles[i];
-    const p = candles[i - 1];
-    s += Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c));
-  }
-  return s / m;
-}
+// atrLike lives in ./riskCommon.js
 
 function detectContext(candles) {
   if (!candles || candles.length < 5) return 'mid_range';

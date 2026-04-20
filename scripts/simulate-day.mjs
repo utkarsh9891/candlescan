@@ -585,7 +585,10 @@ async function main() {
           dayCandles = parsed?.candles?.length ? trimTrailingFlatCandles(parsed.candles) : null;
           fetchedLive++;
           await new Promise(r => setTimeout(r, 200)); // throttle live fetches
-        } catch { dayCandles = null; }
+        } catch (e) {
+          dayCandles = null;
+          console.warn(`[sim] live fetch failed for ${sym}: ${e?.message || e}`);
+        }
       } else {
         // Past date: cache-first, auto-fetch on miss and cache the result
         const hadCache = !!readCachedChartJson(yahooSym, tf.interval, resolvedDate);
@@ -617,7 +620,9 @@ async function main() {
 
       allStockBase[sym] = { dayCandles, priorCandles, prevDayHigh, prevDayLow, orbHigh, orbLow };
       loaded++;
-    } catch (e) { /* skip */ }
+    } catch (e) {
+      console.warn(`[sim] skip ${sym}: ${e?.message || e}`);
+    }
   }
   filterStats.loaded = loaded;
   console.log(`\n── Stock Filter Pipeline ──`);
