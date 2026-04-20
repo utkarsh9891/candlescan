@@ -335,7 +335,7 @@ export default function PaperTradingPage({ savedIndex, onIndexChange, indexOptio
       <div style={{ display: 'flex', gap: 12, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <ToggleSwitch checked={margin} onChange={setMargin} label="5x Margin (MIS)" compact disabled={scanning} />
         <ToggleSwitch checked={premiumCharges} onChange={(v) => { setPremiumCharges(v); try { localStorage.setItem(BROKER_PREMIUM_STORAGE_KEY, String(v)); } catch {} }} label="Broker Premium" compact />
-        {premiumCharges && <span style={{ fontSize: 10, color: '#8892a8' }}>(lower exchange fees)</span>}
+        <span style={{ fontSize: 10, color: '#8892a8' }}>(lower exchange fees)</span>
       </div>
 
       <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, display: 'flex', gap: 12 }}>

@@ -105,10 +105,12 @@ describe('SearchBar', () => {
     });
   });
 
-  it('keeps dropdown in DOM after selection until gesture completes (prevents click-through)', () => {
+  it('absorbs the synthesized click after selection (prevents click-through)', () => {
     const onScan = vi.fn();
     const setInputVal = vi.fn();
-    renderSearchBar({ inputVal: 'RE', onScan, setInputVal });
+    // Underlying CTA that must NOT fire when selecting a suggestion.
+    const onOpenStockList = vi.fn();
+    renderSearchBar({ inputVal: 'RE', onScan, setInputVal, onOpenStockList });
 
     const input = screen.getByPlaceholderText(/search symbol/i);
     fireEvent.focus(input);
@@ -121,14 +123,17 @@ describe('SearchBar', () => {
     const btn = item.closest('button');
     fireEvent.pointerDown(btn);
 
-    // setInputVal should have been called
     expect(setInputVal).toHaveBeenCalledWith('RELIANCE');
 
-    // Dropdown is still in DOM (opacity:0) to absorb gesture events
+    // Dropdown is still in DOM (opacity:0) to absorb the synthesized click
     expect(screen.queryByText('Reliance Industries Ltd')).toBeInTheDocument();
 
-    // Simulate finger lift — dropdown fully closes
-    fireEvent.pointerUp(document);
+    // Simulate the synthesized click landing on the Browse CTA below.
+    // The document-level capture listener should swallow it so onOpenStockList
+    // does NOT fire, and then close the dropdown.
+    const browseBtn = screen.getByRole('button', { name: /browse/i });
+    fireEvent.click(browseBtn);
+    expect(onOpenStockList).not.toHaveBeenCalled();
     expect(screen.queryByText('Reliance Industries Ltd')).not.toBeInTheDocument();
   });
 

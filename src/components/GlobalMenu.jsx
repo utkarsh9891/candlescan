@@ -1,37 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import CustomIndexInput from './CustomIndexInput.jsx';
 import ToggleSwitch from './ToggleSwitch.jsx';
-
-const INTRADAY_CATEGORIES = [
-  { key: 'engulfing', label: 'Engulfing' },
-  { key: 'piercing', label: 'Piercing' },
-  { key: 'hammer', label: 'Hammer' },
-  { key: 'reversal', label: 'Reversal' },
-  { key: 'pullback', label: 'Pullback' },
-  { key: 'liquidity', label: 'Liquidity' },
-  { key: 'momentum', label: 'Momentum' },
-  { key: 'indecision', label: 'Indecision' },
-];
-
-const SCALP_CATEGORIES_UI = [
-  { key: 'vwap', label: 'VWAP' },
-  { key: 'orb', label: 'ORB' },
-  { key: 'micro-momentum', label: 'Momentum' },
-  { key: 'ema-cross', label: 'EMA Cross' },
-  { key: 'volume-climax', label: 'Vol Climax' },
-  { key: 'prev-day', label: 'Prev Day' },
-  { key: 'micro-double', label: 'Double B/T' },
-];
-
-const CLASSIC_CATEGORIES_UI = [
-  { key: 'ma-cross', label: 'MA Cross' },
-  { key: 'support-resistance', label: 'Support/Resist' },
-  { key: 'channel', label: 'Channel' },
-  { key: 'volume-surge', label: 'Vol Surge' },
-  { key: 'swing-structure', label: 'Swing Struct' },
-  { key: 'daily-engulfing', label: 'Engulfing' },
-  { key: 'gap', label: 'Gap' },
-];
+import { getCategoriesUIForEngine } from '../data/signalCategories.js';
 
 /**
  * Configuration menu (no longer navigation — bottom tab bar handles nav).
@@ -55,7 +25,7 @@ export default function GlobalMenu({
     return () => document.removeEventListener('pointerdown', handler);
   }, [open]);
 
-  const CATEGORIES = engineVersion === 'scalp' ? SCALP_CATEGORIES_UI : engineVersion === 'v1' ? CLASSIC_CATEGORIES_UI : INTRADAY_CATEGORIES;
+  const CATEGORIES = getCategoriesUIForEngine(engineVersion);
 
   const toggleFilter = (key) => {
     const next = new Set(activeFilters);

@@ -5,7 +5,7 @@ import PasteInput from './PasteInput.jsx';
 import ToggleSwitch from './ToggleSwitch.jsx';
 import CustomIndexInput from './CustomIndexInput.jsx';
 import DhanSettings from './DhanSettings.jsx';
-import { getCategoriesForEngine } from '../data/signalCategories.js';
+import { getCategoriesUIForEngine } from '../data/signalCategories.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
@@ -372,7 +372,7 @@ export default function SettingsPage({
         <div style={card}>
           <div style={sectionTitle}>Signal Filters</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {getCategoriesForEngine(engineVersion).map(({ key, label }) => (
+            {getCategoriesUIForEngine(engineVersion).map(({ key, label }) => (
               <button key={key} type="button"
                 onClick={() => {
                   const next = new Set(activeFilters);
@@ -391,7 +391,7 @@ export default function SettingsPage({
             ))}
           </div>
           <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-            <button type="button" onClick={() => onFiltersChange(new Set(getCategoriesForEngine(engineVersion).map(c => c.key)))}
+            <button type="button" onClick={() => onFiltersChange(new Set(getCategoriesUIForEngine(engineVersion).map(c => c.key)))}
               style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>
             <button type="button" onClick={() => onFiltersChange(new Set())}
               style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#8892a8', cursor: 'pointer' }}>None</button>

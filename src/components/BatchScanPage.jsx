@@ -3,7 +3,8 @@ import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../co
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan, resetBatchScanRateLimitState } from '../engine/batchScan.js';
 import { fetchLiveMarketContext, enrichWithGoogleNews } from '../engine/marketContextLive.js';
-import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
+import { getGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
+import { unlockGate } from '../utils/credentialVault.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
 // Engine-specific imports for engine-aware batch scanning
 import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
@@ -434,7 +435,10 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
   }, [scanning, startScan]);
 
   const handlePassphraseSubmit = useCallback(async (passphrase) => {
-    await setGateToken(passphrase);
+    // unlockGate stores both the hash (gate token) AND the RSA public key,
+    // so downstream flows like Dhan auth can encrypt credentials without
+    // needing a second passphrase entry.
+    await unlockGate(passphrase);
     setShowPassphrase(false);
     startScan(getGateToken()); // read the stored hash, not the plaintext
   }, [startScan]);

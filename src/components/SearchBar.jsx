@@ -57,19 +57,33 @@ export default function SearchBar({
   useEffect(() => { if (loading) setFocused(false); }, [loading]);
 
   const selectSymbol = useCallback((sym) => {
-    // Don't close the dropdown yet — enter "dismissing" state where the
-    // dropdown stays in the DOM (opacity 0) to absorb the pointerup/click
-    // from this same gesture. Close it when the finger lifts.
+    // The touch→click synthesis on mobile fires AFTER pointerup. If we close
+    // the dropdown on pointerup, the synthesized click lands on whatever is
+    // underneath (Browse CTA, recent stocks, etc). Instead: capture the next
+    // click event at document level and swallow it, then close.
     setDismissing(true);
     setInputVal(sym);
-    const close = () => {
+
+    // Absorb ANY click in the next instant — the gesture that just selected
+    // this suggestion will fire a synthesized click on whatever is beneath
+    // (Browse CTA, recent-stocks row, etc), and we don't want that to run.
+    const absorbClick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      document.removeEventListener('click', absorbClick, true);
       setDismissing(false);
       setFocused(false);
-      document.removeEventListener('pointerup', close);
-      document.removeEventListener('touchend', close);
     };
-    document.addEventListener('pointerup', close);
-    document.addEventListener('touchend', close);
+    document.addEventListener('click', absorbClick, true);
+
+    // Safety fallback: if no click ever fires (e.g. keyboard selection),
+    // close after a short delay so the dropdown doesn't get stuck.
+    setTimeout(() => {
+      document.removeEventListener('click', absorbClick, true);
+      setDismissing(false);
+      setFocused(false);
+    }, 500);
+
     setTimeout(() => onScan(sym), 0);
   }, [setInputVal, onScan]);
 
@@ -145,7 +159,7 @@ export default function SearchBar({
                 maxHeight: 260,
                 overflowY: 'auto',
                 opacity: dismissing ? 0 : 1,
-                pointerEvents: dismissing ? 'auto' : undefined,
+                pointerEvents: dismissing ? 'none' : undefined,
               }}
             >
               {suggestions.map((s, i) => (
