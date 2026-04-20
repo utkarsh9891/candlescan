@@ -33,6 +33,8 @@
  *   - Multiple confirmations prevent false signals
  */
 
+import { vwapProxy } from './riskCommon.js';
+
 function ema(candles, period) {
   if (candles.length < period) return null;
   const k = 2 / (period + 1);
@@ -41,17 +43,6 @@ function ema(candles, period) {
     val = candles[i].c * k + val * (1 - k);
   }
   return val;
-}
-
-function vwapProxy(candles, n = 20) {
-  const slice = candles.slice(-n);
-  let sumPV = 0, sumV = 0;
-  for (const c of slice) {
-    const tp = (c.h + c.l + c.c) / 3;
-    sumPV += tp * (c.v || 1);
-    sumV += (c.v || 1);
-  }
-  return sumV > 0 ? sumPV / sumV : null;
 }
 
 function volFactor(candles) {

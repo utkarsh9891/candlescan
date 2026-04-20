@@ -216,15 +216,18 @@ export default function App() {
   const chartH = 260;
 
   // Filter patterns for display (score uses all patterns)
-  const filteredPatterns = patterns.filter((p) => activeFilters.has(p.category));
+  const filteredPatterns = useMemo(
+    () => patterns.filter((p) => activeFilters.has(p.category)),
+    [patterns, activeFilters],
+  );
 
   const currentCategories = getCategoriesForEngine(engineVersion);
-  const signalMeta = {
+  const signalMeta = useMemo(() => ({
     categoryCount: currentCategories.length,
     rulesApprox: getRuleCountForEngine(engineVersion),
-  };
+  }), [currentCategories.length, engineVersion]);
 
-  const viewProps = {
+  const viewProps = useMemo(() => ({
     sym,
     companyName,
     candles,
@@ -240,7 +243,7 @@ export default function App() {
     signalMeta,
     stockNews,
     stockNewsLoading,
-  };
+  }), [sym, companyName, candles, filteredPatterns, patterns, risk, box, changePct, activeFilters, yahooSym, quote, signalMeta, stockNews, stockNewsLoading]);
 
   // Drawings for current symbol
   const currentDrawings = drawingsMap[sym] || [];
