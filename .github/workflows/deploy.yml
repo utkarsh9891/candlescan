@@ -10,6 +10,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  pull-requests: read
 
 # Any new push (branch or tag) cancels the current running deploy
 concurrency:
