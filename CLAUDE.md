@@ -36,7 +36,7 @@ This file is auto-loaded by Claude Code at every session start. It contains the 
 
 ```bash
 npm start            # dev server at 127.0.0.1:5173/candlescan/
-npm test             # 138 unit tests (vitest)
+npm test             # 223 unit tests (vitest)
 npm run build        # production build → dist/
 npm run simulate     # CLI simulation: node scripts/simulate-day.mjs
 npm run cache:charts # warm local chart cache
