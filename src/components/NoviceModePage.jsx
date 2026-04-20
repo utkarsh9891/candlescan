@@ -37,11 +37,14 @@ import { getIndexDirection } from '../engine/indexDirection.js';
 import { fetchLiveMarketContext } from '../engine/marketContextLive.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
-import { getGateToken, setGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
+import { getGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
+import { unlockGate } from '../utils/credentialVault.js';
 import { DEFAULT_NSE_INDEX_ID, NSE_INDEX_OPTIONS } from '../config/nseIndices.js';
 import {
   PassphraseModal, TradeNowCard, WatchCard, EmptyPanel, SectionHeader,
 } from './NoviceCards.jsx';
+
+const mono = "'SF Mono', Menlo, monospace";
 
 // App owner defaults per CLAUDE.md
 const DEFAULT_CAPITAL = 300000;       // Rs 3 lakh
@@ -316,7 +319,9 @@ export default function NoviceModePage({
 
   const handlePassphraseSubmit = useCallback(async (pass) => {
     try {
-      await setGateToken(pass);
+      // unlockGate stores both the hash AND the RSA public key so the
+      // same unlock satisfies the Dhan/Zerodha credential flows.
+      await unlockGate(pass);
       setShowPassphrase(false);
       runFullScan(getGateToken());
     } catch {

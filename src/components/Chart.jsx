@@ -504,9 +504,21 @@ export default forwardRef(function Chart({
   }, [height]);
 
   /* ── Imperative API ────────────────────────────────────────────── */
+  // Reset to the same default view Effect 2 produces on first data load:
+  // barSpacing sized from VISIBLE_BARS[timeframe] and scroll to real-time.
+  // Do NOT call native fitContent() — it crams every loaded bar into the
+  // visible width, producing hairline candles when history is large.
   useImperativeHandle(ref, () => ({
-    fitContent: () => chartRef.current?.timeScale().fitContent(),
-  }), []);
+    fitContent: () => {
+      const chart = chartRef.current;
+      if (!chart) return;
+      const target = VISIBLE_BARS[timeframe] || 60;
+      const chartWidth = containerRef.current?.clientWidth || 594;
+      const spacing = Math.max(4, Math.min(12, chartWidth / target));
+      chart.timeScale().applyOptions({ barSpacing: spacing, rightOffset: 5 });
+      chart.timeScale().scrollToRealTime();
+    },
+  }), [timeframe]);
 
   /* ── Render ────────────────────────────────────────────────────── */
   const lastCandle = candles?.length ? candles[candles.length - 1] : null;

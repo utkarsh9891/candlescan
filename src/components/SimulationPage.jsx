@@ -345,6 +345,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, onIndexChan
           Buying power: {((capital * MARGIN_MULTIPLIER) / 100000).toFixed(1)}L
         </span>}
         <ToggleSwitch checked={premiumCharges} onChange={(v) => { setPremiumCharges(v); try { localStorage.setItem(BROKER_PREMIUM_STORAGE_KEY, String(v)); } catch {} }} label="Broker Premium" compact disabled={running} />
+        <span style={{ fontSize: 10, color: '#8892a8' }}>(lower exchange fees)</span>
       </div>
 
       {/* Run button */}
