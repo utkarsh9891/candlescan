@@ -16,7 +16,7 @@ This file is auto-loaded by Claude Code at every session start. It contains the 
 
 1. **Branch protection**: Never push directly to `main`. All work goes through a PR via `gh pr create` → `gh pr merge <n> --merge --delete-branch`. Merge method is `--merge` only — never `--squash` or `--rebase`.
 
-2. **Version / tags**: **Do not create git tags manually.** CI auto-tags every merge to main with the next patch version. `package.json` has no `version` field — it comes from `git describe --tags` at build time via `vite.config.js`.
+2. **Version / tags**: **Do not create git tags manually.** CI auto-tags every merge to main — **patch** by default, or **minor/major when the PR carries the `release:minor` / `release:major` label at merge time** (apply the label *before* merging; applying it after has no effect). `package.json` has no `version` field — it comes from `git describe --tags` at build time via `vite.config.js`. See [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) for the full label flow.
 
 3. **Tests and build before push**: Pre-push hook runs `npm test && npm run build`. Do not bypass with `--no-verify` unless the user explicitly asks.
 

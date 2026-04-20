@@ -1,21 +1,21 @@
 import { useState, useCallback, useEffect } from 'react';
 import { getGateToken, hasGateToken } from '../utils/batchAuth.js';
 import { encryptToVault, getVaultBlob, hasVault, clearVault, getGatePublicKey } from '../utils/credentialVault.js';
+import { encryptLocal, decryptLocal } from '../utils/localCipher.js';
 import { fetchDhanInstruments, clearDhanInstruments, getInstrumentsMeta, hasCachedInstruments } from '../engine/dhanInstruments.js';
 import PasteInput from './PasteInput.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_DHAN_CLIENT_ID = 'candlescan_dhan_client_id';
-const LS_DHAN_PIN = 'candlescan_dhan_pin';
+const LS_DHAN_PIN_ENC = 'candlescan_dhan_pin_enc';
+const LS_DHAN_PIN_LEGACY = 'candlescan_dhan_pin';
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 export default function DhanSettings({ gateUnlocked, dataSource, apiKey, apiSecret, onClearZerodha }) {
   const [dhanClientId, setDhanClientId] = useState(() => {
     try { return localStorage.getItem(LS_DHAN_CLIENT_ID) || ''; } catch { return ''; }
   });
-  const [dhanPin, setDhanPin] = useState(() => {
-    try { return localStorage.getItem(LS_DHAN_PIN) || ''; } catch { return ''; }
-  });
+  const [dhanPin, setDhanPin] = useState('');
   const [dhanTotp, setDhanTotp] = useState('');
   const [dhanPastedToken, setDhanPastedToken] = useState('');
   const [dhanStatus, setDhanStatus] = useState(() => hasVault() && hasGateToken() ? 'checking' : 'none');
@@ -24,6 +24,46 @@ export default function DhanSettings({ gateUnlocked, dataSource, apiKey, apiSecr
   const [dhanConnecting, setDhanConnecting] = useState(false);
   const [dhanShowAuth, setDhanShowAuth] = useState(false);
   const [refreshingInstruments, setRefreshingInstruments] = useState(false);
+
+  // Hydrate PIN from encrypted-at-rest storage once the gate is unlocked.
+  // Also migrate any legacy plaintext PIN into the encrypted slot.
+  useEffect(() => {
+    if (!gateUnlocked || !hasGateToken()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        let legacy = null;
+        try { legacy = localStorage.getItem(LS_DHAN_PIN_LEGACY); } catch { /* ok */ }
+        if (legacy) {
+          const blob = await encryptLocal(legacy);
+          try {
+            localStorage.setItem(LS_DHAN_PIN_ENC, blob);
+            localStorage.removeItem(LS_DHAN_PIN_LEGACY);
+          } catch { /* ok */ }
+          if (!cancelled) setDhanPin(legacy);
+          return;
+        }
+        let enc = null;
+        try { enc = localStorage.getItem(LS_DHAN_PIN_ENC); } catch { /* ok */ }
+        if (!enc) return;
+        const pt = await decryptLocal(enc);
+        if (!cancelled && pt) setDhanPin(pt);
+      } catch { /* ok */ }
+    })();
+    return () => { cancelled = true; };
+  }, [gateUnlocked]);
+
+  const handlePinChange = useCallback(async (v) => {
+    setDhanPin(v);
+    if (!v) {
+      try { localStorage.removeItem(LS_DHAN_PIN_ENC); } catch { /* ok */ }
+      return;
+    }
+    try {
+      const blob = await encryptLocal(v);
+      try { localStorage.setItem(LS_DHAN_PIN_ENC, blob); } catch { /* ok */ }
+    } catch { /* gate locked — skip persistence */ }
+  }, []);
 
   const handleSaveDhanClientId = useCallback(() => {
     if (!dhanClientId.trim()) {
@@ -181,7 +221,11 @@ export default function DhanSettings({ gateUnlocked, dataSource, apiKey, apiSecr
   const handleClearDhan = useCallback(() => {
     clearVault();
     clearDhanInstruments();
-    try { localStorage.removeItem(LS_DHAN_CLIENT_ID); localStorage.removeItem(LS_DHAN_PIN); } catch { /* ok */ }
+    try {
+      localStorage.removeItem(LS_DHAN_CLIENT_ID);
+      localStorage.removeItem(LS_DHAN_PIN_ENC);
+      localStorage.removeItem(LS_DHAN_PIN_LEGACY);
+    } catch { /* ok */ }
     setDhanClientId('');
     setDhanStatus('none');
     setDhanMsg('Credentials cleared. Note: Dhan allows token generation once every 2 minutes.');
@@ -334,7 +378,7 @@ export default function DhanSettings({ gateUnlocked, dataSource, apiKey, apiSecr
           <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10 }}>
             Enter your 6-digit Dhan PIN (saved locally) and TOTP from your authenticator app.
           </div>
-          <PasteInput value={dhanPin} onChange={(v) => { setDhanPin(v); try { localStorage.setItem(LS_DHAN_PIN, v); } catch { /* ok */ } }} placeholder="Dhan PIN (6 digits)" type="password" useMono />
+          <PasteInput value={dhanPin} onChange={handlePinChange} placeholder="Dhan PIN (6 digits)" type="password" useMono />
           <PasteInput value={dhanTotp} onChange={setDhanTotp} placeholder="TOTP (6 digits)" useMono />
           <div style={{ fontSize: 11, color: '#d97706', marginBottom: 8 }}>
             Dhan allows token generation once every 2 minutes.

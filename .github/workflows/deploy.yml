@@ -10,6 +10,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  pull-requests: read
 
 # Any new push (branch or tag) cancels the current running deploy
 concurrency:
@@ -37,9 +38,15 @@ jobs:
       # Run tests FIRST — nothing else happens if tests fail
       - run: npm test
 
-      # Auto-tag patch ONLY after tests pass (branch pushes only)
-      - name: Auto-tag patch version
+      # Auto-tag ONLY after tests pass (branch pushes only).
+      # Bump type is inferred from the merged PR's labels:
+      #   - `release:major` → vX+1.0.0
+      #   - `release:minor` → vX.Y+1.0
+      #   - (no label)      → vX.Y.Z+1   (default — patch)
+      - name: Auto-tag version
         if: startsWith(github.ref, 'refs/heads/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -62,7 +69,28 @@ jobs:
           MAJOR=$(echo $LATEST | sed 's/v//' | cut -d. -f1)
           MINOR=$(echo $LATEST | sed 's/v//' | cut -d. -f2)
           PATCH=$(echo $LATEST | sed 's/v//' | cut -d. -f3)
-          NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          # Determine bump type from merged PR labels (default: patch)
+          BUMP="patch"
+          PR_NUMBER=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$PR_NUMBER" ]; then
+            LABELS=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/labels" --jq '.[].name' 2>/dev/null || echo "")
+            echo "PR #$PR_NUMBER labels: $(echo $LABELS | tr '\n' ' ')"
+            if echo "$LABELS" | grep -qx 'release:major'; then
+              BUMP="major"
+            elif echo "$LABELS" | grep -qx 'release:minor'; then
+              BUMP="minor"
+            fi
+          else
+            echo "No PR found for commit ${{ github.sha }} — defaulting to patch"
+          fi
+          echo "Bump type: $BUMP"
+
+          case "$BUMP" in
+            major) NEW_TAG="v$((MAJOR + 1)).0.0" ;;
+            minor) NEW_TAG="v${MAJOR}.$((MINOR + 1)).0" ;;
+            *)     NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          esac
 
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
