@@ -122,12 +122,12 @@ The app checks the GitHub Releases API (once per 24 hours) to detect updates.
 
 | Change | Version bump | How it happens |
 |--------|-------------|----------------|
-| Any PR merge to main | **Patch** (auto) | CI auto-tags + creates release |
-| Significant milestone | **Minor** (manual) | Owner tags `v0.11.0`, `v0.12.0`, etc. |
-| Stable production release | **Major** (manual) | Owner tags `v1.0.0` |
+| Any PR merge to main (no label) | **Patch** (auto) | CI auto-tags + creates release |
+| PR labelled `release:minor` | **Minor** (auto) | CI reads the label on the merged PR |
+| PR labelled `release:major` | **Major** (auto) | CI reads the label on the merged PR |
+| Rescue / out-of-band tag | **Manual** | Owner tags directly — reserved for exceptional cases |
 
-**For coding agents: always let the auto-patch handle versioning.**
-Only the repo owner manually tags minor/major versions when needed.
+**For coding agents**: always let CI handle the tag. Default is patch. To cut a minor or major release, add the `release:minor` or `release:major` label to the PR *before* merging — the label is read from the merged PR at tag-time, so applying it after the merge has no effect. Only one label should be present; `release:major` wins if both are set.
 
 ### How auto-tagging works (deploy.yml)
 
@@ -135,7 +135,12 @@ Only the repo owner manually tags minor/major versions when needed.
 Push to main (PR merge)
   → CI checks: is HEAD already tagged?
     → Yes: skip tagging, proceed to build
-    → No: read latest tag → increment patch → push new tag
+    → No: look up the merged PR for this commit
+         read its labels:
+           release:major → bump MAJOR (vX+1.0.0)
+           release:minor → bump MINOR (vX.Y+1.0)
+           otherwise     → bump PATCH (vX.Y.Z+1)
+         push the new tag
   → npm ci → npm test → npm run build → deploy
   → Create GitHub Release (prerelease for 0.x.y)
 ```
@@ -143,6 +148,26 @@ Push to main (PR merge)
 If the owner pushes a manual tag (e.g., `v0.11.0`), CI triggers a second deploy
 with that version. `cancel-in-progress: true` ensures the manual tag deploy
 replaces any in-flight auto-patch deploy.
+
+### Release-label cheat sheet
+
+```bash
+# Add the label before merging the PR
+gh pr edit <number> --add-label release:minor
+
+# Verify the label is on the PR
+gh pr view <number> --json labels
+
+# Merge normally — CI will cut vX.Y+1.0 automatically
+gh pr merge <number> --merge --delete-branch
+```
+
+The labels `release:minor` and `release:major` must exist in the repo. Create them once:
+
+```bash
+gh label create release:minor --color B60205 --description "CI: bump minor version on merge"
+gh label create release:major --color 5319E7 --description "CI: bump major version on merge"
+```
 
 ### Update detection
 
@@ -168,7 +193,8 @@ Shown in Settings → About section. Format: `v0.10.1 (pre-release)`
 |-------|-----|
 | Push directly to `main` | Branch protection blocks it |
 | Add a `version` field to `package.json` | Version comes from git tags only |
-| Create git tags manually | CI auto-tags on every merge |
+| Create git tags manually | CI auto-tags on every merge — use `release:minor`/`release:major` labels instead |
+| Apply `release:minor`/`release:major` *after* merging | Label is read at tag-time; post-merge edits are ignored |
 | Use `git push --no-verify` | Skips test + build safety checks |
 | Use `--squash` or `--rebase` merge | Only `--merge` is allowed |
 | Amend commits after pushing | Creates force-push situations |

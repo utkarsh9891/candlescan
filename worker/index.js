@@ -46,6 +46,18 @@ async function sha256(text) {
 }
 
 /**
+ * Constant-time string equality. Prevents timing-attack leakage of the
+ * server-side GATE_PASSPHRASE_HASH secret byte-by-byte.
+ */
+function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
  * Validate gate token against stored hash.
  * Client sends SHA-256 hash of passphrase (never plaintext).
  * Worker compares directly to env.GATE_PASSPHRASE_HASH.
@@ -57,7 +69,7 @@ async function validateGateToken(request, env) {
   // Ignore tokens that don't look like SHA-256 hashes (stale plaintext tokens)
   if (!/^[a-f0-9]{64}$/.test(token)) return null; // treat as no token, not invalid
   if (!env.GATE_PASSPHRASE_HASH) return null; // secret not configured = skip auth
-  return token === env.GATE_PASSPHRASE_HASH;
+  return timingSafeEqual(token, env.GATE_PASSPHRASE_HASH);
 }
 
 /**
