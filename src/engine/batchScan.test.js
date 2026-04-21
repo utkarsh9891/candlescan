@@ -1,5 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { batchScan, _resetBatchScanNewsCache } from './batchScan.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  batchScan,
+  fetchFlowClass,
+  _resetBatchScanNewsCache,
+  _resetBatchScanFlowCache,
+} from './batchScan.js';
 import { bullishEngulfing } from './__fixtures__/candles.js';
 
 // Mock fetchOHLCV to return deterministic data without network
@@ -22,8 +27,24 @@ vi.mock('./marketContextLive.js', () => ({
   fetchLiveGoogleNewsDetailForSymbol: vi.fn(async () => ({ score: null, headlines: [] })),
 }));
 
+// Silence the FII/DII console.warn that our scan emits when the Worker
+// fetch falls through to the NEUTRAL fallback. Individual tests that
+// want to assert on the warning spy it explicitly.
+let warnSpy;
+// Default-stub global fetch so batchScan's /market/fiidii call doesn't
+// hit the network during tests that don't care about flow. Tests that
+// exercise the flow path pass `flowFetchFn` directly.
+let originalFetch;
 beforeEach(() => {
   _resetBatchScanNewsCache();
+  _resetBatchScanFlowCache();
+  warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  originalFetch = globalThis.fetch;
+  globalThis.fetch = vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }));
+});
+afterEach(() => {
+  warnSpy?.mockRestore();
+  globalThis.fetch = originalFetch;
 });
 
 describe('batchScan', () => {
@@ -262,5 +283,178 @@ describe('batchScan per-symbol news enrichment', () => {
 
     expect(newsFetchFn).not.toHaveBeenCalled();
     expect(results.telemetry.newsFetched).toBe(0);
+  });
+});
+
+describe('batchScan live FII/DII flow wiring', () => {
+  const makeFlowFetchFn = (fii, dii, { ok = true, status = 200 } = {}) =>
+    vi.fn(async () => ({
+      ok,
+      status,
+      json: async () => ({ fii, dii, date: '2026-04-21' }),
+    }));
+
+  it('hydrates telemetry.flowClass from the Worker when no marketContext given', async () => {
+    // +800cr combined → STRONG_BUY in classifyInstitutionalFlow
+    const flowFetchFn = makeFlowFetchFn(500, 300);
+
+    const results = await batchScan({
+      symbols: ['RELIANCE', 'TCS'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      flowFetchFn,
+    });
+
+    expect(flowFetchFn).toHaveBeenCalledTimes(1);
+    expect(flowFetchFn.mock.calls[0][0]).toMatch(/\/market\/fiidii$/);
+    expect(results.telemetry.flowClass).toBe('STRONG_BUY');
+    expect(results.telemetry.flowSource).toBe('worker');
+    // Every row carries the hydrated flow through to stockContext
+    for (const r of results) expect(r.flow).toBe('STRONG_BUY');
+  });
+
+  it('applies the flow delta to sizeMult on BULLISH alignment', async () => {
+    const flowFetchFn = makeFlowFetchFn(500, 300); // STRONG_BUY
+
+    const withFlow = await batchScan({
+      symbols: ['RELIANCE'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      flowFetchFn,
+    });
+
+    _resetBatchScanFlowCache();
+
+    // Same scan but with no flow signal — sizeMultiplier falls through to
+    // the no-flow baseline path (1.0 on a clean, single-symbol scan).
+    const withoutFlow = await batchScan({
+      symbols: ['RELIANCE'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      marketContext: { flow: 'NEUTRAL' },
+    });
+
+    const longWithFlow = withFlow.find((r) => r.direction === 'long');
+    const longNeutral = withoutFlow.find((r) => r.direction === 'long');
+    expect(longWithFlow).toBeDefined();
+    expect(longNeutral).toBeDefined();
+    // STRONG_BUY aligned with a long trade → positive flow delta applied.
+    expect(longWithFlow.sizeMult).toBeGreaterThan(longNeutral.sizeMult);
+  });
+
+  it('defaults to NEUTRAL and does not crash when the Worker returns 5xx', async () => {
+    const flowFetchFn = vi.fn(async () => ({
+      ok: false,
+      status: 502,
+      json: async () => ({ error: 'upstream' }),
+    }));
+
+    const results = await batchScan({
+      symbols: ['RELIANCE'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      flowFetchFn,
+    });
+
+    expect(results.telemetry.flowClass).toBe('NEUTRAL');
+    expect(results.telemetry.flowSource).toBe('fallback');
+    expect(results.length).toBe(1);
+    // warning logged to console.warn (already captured by the suite-wide
+    // spy); scan does not crash.
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('defaults to NEUTRAL on thrown fetch errors (network failure)', async () => {
+    const flowFetchFn = vi.fn(async () => {
+      throw new Error('CF Worker unreachable');
+    });
+
+    const results = await batchScan({
+      symbols: ['RELIANCE'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      flowFetchFn,
+    });
+
+    expect(results.telemetry.flowClass).toBe('NEUTRAL');
+    expect(results.telemetry.flowSource).toBe('fallback');
+  });
+
+  it('shares a single fetch across concurrent scans (cache hit on 2nd)', async () => {
+    const flowFetchFn = makeFlowFetchFn(500, 300);
+
+    // Fire both scans in parallel — the in-flight promise inside
+    // fetchFlowClass should coalesce them to one Worker call.
+    const [a, b] = await Promise.all([
+      batchScan({
+        symbols: ['RELIANCE'],
+        timeframe: '5m',
+        gateToken: 'test',
+        delayMs: 0,
+        flowFetchFn,
+      }),
+      batchScan({
+        symbols: ['TCS'],
+        timeframe: '5m',
+        gateToken: 'test',
+        delayMs: 0,
+        flowFetchFn,
+      }),
+    ]);
+
+    expect(flowFetchFn).toHaveBeenCalledTimes(1);
+    expect(a.telemetry.flowClass).toBe('STRONG_BUY');
+    expect(b.telemetry.flowClass).toBe('STRONG_BUY');
+
+    // Third scan after both settle — should still hit the 10-min cache
+    const c = await batchScan({
+      symbols: ['INFY'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      flowFetchFn,
+    });
+    expect(flowFetchFn).toHaveBeenCalledTimes(1);
+    expect(c.telemetry.flowClass).toBe('STRONG_BUY');
+  });
+
+  it('prefers the caller-provided marketContext.flow over the Worker fetch', async () => {
+    const flowFetchFn = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ fii: 500, dii: 300 }),
+    }));
+
+    const results = await batchScan({
+      symbols: ['RELIANCE'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      marketContext: { flow: 'SELL' },
+      flowFetchFn,
+    });
+
+    expect(flowFetchFn).not.toHaveBeenCalled();
+    expect(results.telemetry.flowClass).toBe('SELL');
+    expect(results.telemetry.flowSource).toBe('marketContext');
+  });
+
+  it('fetchFlowClass unit: returns classified value and caches it', async () => {
+    _resetBatchScanFlowCache();
+    const f = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ fii: 500, dii: 300 }),
+    }));
+    const a = await fetchFlowClass({ fetchFn: f });
+    const b = await fetchFlowClass({ fetchFn: f });
+    expect(a).toBe('STRONG_BUY');
+    expect(b).toBe('STRONG_BUY');
+    expect(f).toHaveBeenCalledTimes(1); // cached
   });
 });
