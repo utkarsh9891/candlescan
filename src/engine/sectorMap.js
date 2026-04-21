@@ -14,14 +14,28 @@
  * sector=null, which the pipeline treats as "neutral sector info"
  * (doesn't block the trade, just doesn't contribute sector strength).
  *
+ * Cross-sector overlays: NIFTY INFRASTRUCTURE, NIFTY PSE, and NIFTY
+ * FIN SERVICE are thematic overlays, not primary sector indices. A
+ * symbol can legitimately appear in both a primary sector index
+ * (e.g. NIFTY ENERGY for RELIANCE / NTPC, NIFTY BANK for SBIN /
+ * HDFCBANK) and one of these overlays. We deliberately keep the
+ * *primary* sector label in this map because the downstream sector-
+ * strength signal correlates with the stock's own price action via
+ * the primary NIFTY <sector> index. See the 2026-04-21 freshness
+ * diff in the PR history for the exact overlap list (RELIANCE,
+ * NTPC, ONGC, POWERGRID, IOC, BPCL, GAIL, HINDPETRO, COALINDIA,
+ * BHEL, NHPC, NMDC, TATAPOWER, SUZLON, CGPOWER, ADANIGREEN,
+ * ASHOKLEY, BHARATFORG, MOTHERSON, DLF, PFC, RECLTD, OIL, and the
+ * big four private banks + SBIN).
+ *
  * Used by:
  *   - pattern/risk engines: read sector intraday strength alongside
  *     stock and NIFTY direction
  *   - CLI / browser sims: load the matching sector index candles
  *     so per-bar lookups are available without lookahead
  *
- * To refresh: re-run the NSE sector fetch script (which writes to
- * /tmp/sector_map.json) and regenerate this file.
+ * To refresh: run `node scripts/check-sector-map-freshness.mjs` and
+ * apply the reported patch. Last refresh: 2026-04-21.
  */
 
 /** Yahoo symbols for NIFTY sector indices that have reliable 1m data. */
@@ -44,8 +58,9 @@ export const SECTOR_INDEX_SYMBOLS = {
 
 /**
  * Stock → sector mapping, generated from NSE sector indices.
- * 208 stocks classified. Stocks not in this map return
- * null (unmapped) and the pipeline treats them as sector-neutral.
+ * 194 stocks classified (as of 2026-04-21 refresh). Stocks not in
+ * this map return null (unmapped) and the pipeline treats them as
+ * sector-neutral.
  */
 export const STOCK_SECTOR = {
   "ABB": "ENERGY",
@@ -63,7 +78,6 @@ export const STOCK_SECTOR = {
   "AMBUJACEM": "INFRA",
   "ANANTRAJ": "REALTY",
   "APLAPOLLO": "METAL",
-  "APOLLOHOSP": "PHARMA",
   "ASHOKLEY": "AUTO",
   "ATGL": "ENERGY",
   "AUBANK": "BANK",
@@ -72,9 +86,7 @@ export const STOCK_SECTOR = {
   "BAJAJ-AUTO": "AUTO",
   "BAJAJFINSV": "FIN",
   "BAJFINANCE": "FIN",
-  "BANDHANBNK": "BANK",
   "BANKBARODA": "BANK",
-  "BANKINDIA": "BANK",
   "BATAINDIA": "CONSUMER",
   "BEL": "PSE",
   "BHARATFORG": "AUTO",
@@ -89,10 +101,8 @@ export const STOCK_SECTOR = {
   "BSE": "FIN",
   "CANBK": "BANK",
   "CASTROLIND": "ENERGY",
-  "CENTRALBK": "BANK",
   "CESC": "ENERGY",
   "CGPOWER": "ENERGY",
-  "CHENNPETRO": "ENERGY",
   "CHOLAFIN": "FIN",
   "CIPLA": "PHARMA",
   "COALINDIA": "ENERGY",
@@ -112,7 +122,6 @@ export const STOCK_SECTOR = {
   "ENRIN": "ENERGY",
   "EXIDEIND": "AUTO",
   "FEDERALBNK": "BANK",
-  "FORTIS": "PHARMA",
   "GAIL": "ENERGY",
   "GLAND": "PHARMA",
   "GLENMARK": "PHARMA",
@@ -138,13 +147,11 @@ export const STOCK_SECTOR = {
   "IDFCFIRSTB": "BANK",
   "IGL": "ENERGY",
   "INDHOTEL": "INFRA",
-  "INDIANB": "BANK",
   "INDIGO": "INFRA",
   "INDUSINDBK": "BANK",
   "INDUSTOWER": "INFRA",
   "INFY": "IT",
   "INOXWIND": "ENERGY",
-  "IOB": "BANK",
   "IOC": "ENERGY",
   "IPCALAB": "PHARMA",
   "IRCTC": "PSE",
@@ -169,11 +176,9 @@ export const STOCK_SECTOR = {
   "LTM": "IT",
   "LUPIN": "PHARMA",
   "M&M": "AUTO",
-  "MAHABANK": "BANK",
   "MANKIND": "PHARMA",
   "MARICO": "FMCG",
   "MARUTI": "AUTO",
-  "MAXHEALTH": "PHARMA",
   "MFSL": "FIN",
   "MGL": "ENERGY",
   "MOTHERSON": "AUTO",
@@ -204,10 +209,8 @@ export const STOCK_SECTOR = {
   "POWERINDIA": "ENERGY",
   "PPLPHARMA": "PHARMA",
   "PRESTIGE": "REALTY",
-  "PSB": "BANK",
   "PVRINOX": "MEDIA",
   "RADICO": "FMCG",
-  "RBLBANK": "BANK",
   "RECLTD": "FIN",
   "RELIANCE": "ENERGY",
   "RPOWER": "ENERGY",
@@ -226,7 +229,6 @@ export const STOCK_SECTOR = {
   "SUNPHARMA": "PHARMA",
   "SUNTV": "MEDIA",
   "SUZLON": "ENERGY",
-  "SYNGENE": "PHARMA",
   "TATACONSUM": "FMCG",
   "TATAPOWER": "ENERGY",
   "TATASTEEL": "METAL",
@@ -241,7 +243,6 @@ export const STOCK_SECTOR = {
   "TORNTPOWER": "ENERGY",
   "TVSMOTOR": "AUTO",
   "UBL": "FMCG",
-  "UCOBANK": "BANK",
   "ULTRACEMCO": "INFRA",
   "UNIONBANK": "BANK",
   "UNITDSPR": "FMCG",
