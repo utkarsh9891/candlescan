@@ -99,11 +99,13 @@ describe('bucketTrades — confidence dimension', () => {
 
 describe('bucketTrades — feature-based dimensions', () => {
   it('buckets volFactor / rs / intraPct from trade.features.*', () => {
+    // features.rs and features.intraPct are stored as decimal fractions
+    // on real trades (e.g. 0.008 == 0.8%). volFactor is a raw multiplier.
     const trades = [
-      mkTrade({ confidence: 80, netPnl: 100, volFactor: 1.2, rs: 0.8, intraPct: 1.0 }),
-      mkTrade({ confidence: 80, netPnl: 200, volFactor: 1.8, rs: 1.3, intraPct: 1.8 }),
-      mkTrade({ confidence: 80, netPnl: 300, volFactor: 2.5, rs: 2.0, intraPct: 2.5 }),
-      mkTrade({ confidence: 80, netPnl: 400, volFactor: 3.5, rs: 3.0, intraPct: 3.5 }),
+      mkTrade({ confidence: 80, netPnl: 100, volFactor: 1.2, rs: 0.008, intraPct: 0.010 }),
+      mkTrade({ confidence: 80, netPnl: 200, volFactor: 1.8, rs: 0.013, intraPct: 0.018 }),
+      mkTrade({ confidence: 80, netPnl: 300, volFactor: 2.5, rs: 0.020, intraPct: 0.025 }),
+      mkTrade({ confidence: 80, netPnl: 400, volFactor: 3.5, rs: 0.030, intraPct: 0.035 }),
     ];
     const vol = bucketTrades(trades, 'volFactor');
     expect(vol['<1.5'].n).toBe(1);
