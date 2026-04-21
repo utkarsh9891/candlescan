@@ -7,6 +7,7 @@
  *   npm run cache:charts -- 5m --index "NIFTY TOTAL MARKET"
  *   npm run cache:charts -- --all-timeframes              # warm 1m, 5m, 15m in sequence
  *   npm run cache:charts -- --all-timeframes --index "NIFTY TOTAL MARKET"
+ *   npm run cache:charts -- --all-timeframes --from-cache # top up every symbol already on disk
  *
  * Fetches directly from Yahoo Finance (no CF worker proxy — avoids rate limits).
  *
@@ -44,7 +45,7 @@
 
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
 import { TIMEFRAME_MAP } from '../src/engine/fetcher.js';
-import { writeCachedChartJson, unixToIstDate, listCachedDates } from './lib/chart-cache-fs.mjs';
+import { writeCachedChartJson, unixToIstDate, listCachedDates, listCachedSymbols } from './lib/chart-cache-fs.mjs';
 import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
 
 const YAHOO_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
@@ -57,6 +58,7 @@ function parseArgs(argv) {
   let tfKey = '5m';
   let indexName = DEFAULT_NSE_INDEX_ID;
   let allTimeframes = false;
+  let fromCache = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--index' && argv[i + 1]) {
@@ -68,10 +70,14 @@ function parseArgs(argv) {
       allTimeframes = true;
       continue;
     }
+    if (a === '--from-cache') {
+      fromCache = true;
+      continue;
+    }
     if (a.startsWith('--')) continue;
     tfKey = a;
   }
-  return { tfKey, indexName, allTimeframes };
+  return { tfKey, indexName, allTimeframes, fromCache };
 }
 
 function normalizeSymbol(raw) {
@@ -187,11 +193,23 @@ async function warmTimeframe(stocks, interval, range, label) {
 }
 
 async function main() {
-  const { tfKey, indexName, allTimeframes } = parseArgs(process.argv.slice(2));
+  const { tfKey, indexName, allTimeframes, fromCache } = parseArgs(process.argv.slice(2));
 
-  console.log(`\nNSE index: ${indexName}`);
-  const stocks = await fetchNseIndexSymbolsNode(indexName);
-  console.log(`Symbols: ${stocks.length}`);
+  let stocks;
+  let sourceLabel;
+  if (fromCache) {
+    // Warm exactly the symbols already on disk — useful for topping up
+    // the existing cache universe across new trading days without depending
+    // on a live NSE index fetch.
+    stocks = listCachedSymbols();
+    sourceLabel = `cache (${stocks.length} symbols on disk)`;
+    console.log(`\nSource: ${sourceLabel}`);
+  } else {
+    console.log(`\nNSE index: ${indexName}`);
+    stocks = await fetchNseIndexSymbolsNode(indexName);
+    sourceLabel = indexName;
+    console.log(`Symbols: ${stocks.length}`);
+  }
 
   if (allTimeframes) {
     // Warm all 3 intraday timeframes in sequence.
@@ -205,7 +223,7 @@ async function main() {
 
     let totalOk = 0, totalFail = 0, totalFiles = 0;
     for (const { interval, range } of runs) {
-      const r = await warmTimeframe(stocks, interval, range, indexName);
+      const r = await warmTimeframe(stocks, interval, range, sourceLabel);
       totalOk += r.ok;
       totalFail += r.fail;
       totalFiles += r.dateFiles;
@@ -214,7 +232,7 @@ async function main() {
     console.log(`\n=== All timeframes done. Total: ${totalOk} cached, ${totalFail} failed, ${totalFiles} date files ===\n`);
   } else {
     const tf = TIMEFRAME_MAP[tfKey] || TIMEFRAME_MAP['5m'];
-    await warmTimeframe(stocks, tf.interval, tf.range, indexName);
+    await warmTimeframe(stocks, tf.interval, tf.range, sourceLabel);
   }
 }
 

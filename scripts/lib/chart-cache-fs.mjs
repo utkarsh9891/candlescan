@@ -76,11 +76,14 @@ export function listCachedDates(yahooSymbol, interval) {
 
 /**
  * List all cached symbols (top-level directories in cache/charts/).
+ * Filters to valid NSE/Yahoo symbol shapes (starts with A-Z or `^`), so stray
+ * tool directories like `.claude` don't leak into symbol iteration.
  * @returns {string[]}
  */
 export function listCachedSymbols() {
   if (!fs.existsSync(CHART_CACHE_DIR)) return [];
   return fs.readdirSync(CHART_CACHE_DIR)
+    .filter(f => /^[A-Z^]/.test(f))
     .filter(f => fs.statSync(path.join(CHART_CACHE_DIR, f)).isDirectory());
 }
 
