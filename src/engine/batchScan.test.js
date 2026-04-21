@@ -5,6 +5,7 @@ import {
   _resetBatchScanNewsCache,
   _resetBatchScanFlowCache,
 } from './batchScan.js';
+import { clearNewsCache } from './newsCacheLocal.js';
 import { bullishEngulfing } from './__fixtures__/candles.js';
 
 // Mock fetchOHLCV to return deterministic data without network
@@ -38,6 +39,7 @@ let originalFetch;
 beforeEach(() => {
   _resetBatchScanNewsCache();
   _resetBatchScanFlowCache();
+  clearNewsCache();
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   originalFetch = globalThis.fetch;
   globalThis.fetch = vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }));
@@ -456,5 +458,166 @@ describe('batchScan live FII/DII flow wiring', () => {
     expect(a).toBe('STRONG_BUY');
     expect(b).toBe('STRONG_BUY');
     expect(f).toHaveBeenCalledTimes(1); // cached
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 1.5d — 4-tier news fallback chain
+// ─────────────────────────────────────────────────────────────────────
+describe('batchScan news fallback chain (Wave 1.5d)', () => {
+  it('tier 3 STALE: Worker served from KV; scan uses it and marks it stale', async () => {
+    const newsFetchFn = vi.fn(async () => ({
+      score: 0.35,
+      headlines: [{ title: 'old news but valid', score: 0.35 }],
+      cacheStatus: 'STALE',
+      cacheSource: 'kv',
+    }));
+
+    const results = await batchScan({
+      symbols: ['AAA'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      newsFetchFn,
+    });
+
+    const actionable = results.filter((r) => r.action && r.action !== 'NO TRADE');
+    expect(actionable.length).toBeGreaterThan(0);
+    for (const r of actionable) {
+      // STALE Google score propagates; source distinguishes it from a fresh HIT.
+      expect(r.newsScore).toBeCloseTo(0.35);
+      expect(r.newsSource).toBe('stale');
+    }
+    // Telemetry: none of the Wave 1.5d fallback counters should fire
+    // because tier 3 succeeded (just with stale data).
+    expect(results.telemetry.newsFetched).toBeGreaterThan(0);
+    expect(results.telemetry.newsFromFallback).toBe(0);
+    expect(results.telemetry.newsUnavailable).toBe(0);
+  });
+
+  it('tier 3 UNAVAILABLE → tier 4 Moneycontrol: scan completes with MC sentiment', async () => {
+    // Worker says it has nothing, not even stale.
+    const newsFetchFn = vi.fn(async () => ({
+      score: null,
+      headlines: [],
+      cacheStatus: 'UNAVAILABLE',
+      cacheSource: null,
+    }));
+    const moneycontrolFn = vi.fn(async () => ({
+      score: -0.4,
+      headlines: [{ title: 'downgrade', source: 'moneycontrol' }],
+    }));
+
+    const results = await batchScan({
+      symbols: ['BBB'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      newsFetchFn,
+      moneycontrolFn,
+    });
+
+    expect(newsFetchFn).toHaveBeenCalled();
+    expect(moneycontrolFn).toHaveBeenCalled();
+    const r = results.find((x) => x.symbol === 'BBB');
+    expect(r).toBeDefined();
+    expect(r.newsScore).toBeCloseTo(-0.4);
+    expect(r.newsSource).toBe('moneycontrol');
+    expect(results.telemetry.newsFromFallback).toBeGreaterThan(0);
+    expect(results.telemetry.newsUnavailable).toBe(0);
+  });
+
+  it('tier 3 UNAVAILABLE + no Moneycontrol: scan still yields a row with score=null', async () => {
+    const newsFetchFn = vi.fn(async () => ({
+      score: null,
+      headlines: [],
+      cacheStatus: 'UNAVAILABLE',
+    }));
+
+    const results = await batchScan({
+      symbols: ['CCC'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      newsFetchFn,
+      // No moneycontrolFn, no marketContext.newsMap — tier 4 empty.
+    });
+
+    expect(results.length).toBe(1);
+    const r = results[0];
+    // No news at any tier — row still exists, just no sentiment bonus.
+    expect(r.newsScore == null).toBe(true);
+    expect(results.telemetry.newsUnavailable).toBeGreaterThan(0);
+  });
+
+  it('tier 2 localStorage hit: second scan within TTL skips the Worker', async () => {
+    const newsFetchFn = vi.fn(async () => ({
+      score: 0.55,
+      headlines: [{ title: 'fresh', score: 0.55 }],
+      cacheStatus: 'HIT',
+    }));
+
+    const first = await batchScan({
+      symbols: ['DDD'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      newsFetchFn,
+    });
+    expect(first.telemetry.newsFetched).toBeGreaterThan(0);
+    const worker1 = newsFetchFn.mock.calls.length;
+    expect(worker1).toBeGreaterThan(0);
+
+    // Drop the in-memory hour cache so the disk cache (tier 2) is
+    // the only thing that can satisfy the second scan. This simulates
+    // a page reload: in-memory cache is empty, but localStorage survives.
+    _resetBatchScanNewsCache();
+
+    const second = await batchScan({
+      symbols: ['DDD'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      newsFetchFn,
+    });
+
+    // Worker was NOT called again — localStorage served the request.
+    expect(newsFetchFn.mock.calls.length).toBe(worker1);
+    expect(second.telemetry.newsFetched).toBe(0);
+    expect(second.telemetry.newsFromCache).toBeGreaterThan(0);
+
+    // Score and headlines survived the disk round-trip.
+    const r = second.find((x) => x.symbol === 'DDD');
+    expect(r).toBeDefined();
+    expect(r.newsScore).toBeCloseTo(0.55);
+    expect(r.newsHeadlines.length).toBeGreaterThan(0);
+  });
+
+  it('cold start + Worker throws 502: falls through to Moneycontrol, no crash', async () => {
+    // Simulate the exact Google News 502 scenario the load-test saw.
+    const newsFetchFn = vi.fn(async () => {
+      throw new Error('CF Worker upstream 502');
+    });
+    const moneycontrolFn = vi.fn(async (sym) => ({
+      score: sym === 'EEE' ? -0.2 : 0.2,
+      headlines: [{ title: `mc-${sym}`, source: 'moneycontrol' }],
+    }));
+
+    const results = await batchScan({
+      symbols: ['EEE'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      newsFetchFn,
+      moneycontrolFn,
+    });
+
+    expect(results.length).toBe(1);
+    const r = results[0];
+    expect(r.newsScore).toBeCloseTo(-0.2);
+    expect(r.newsSource).toBe('moneycontrol');
+    // Thrown errors get counted AND the fallback ran.
+    expect(results.telemetry.newsFetchErrors).toBeGreaterThan(0);
+    expect(results.telemetry.newsFromFallback).toBeGreaterThan(0);
   });
 });

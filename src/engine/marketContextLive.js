@@ -185,16 +185,27 @@ export function clearMarketContextCache() {
  * }>}
  */
 export async function fetchLiveGoogleNewsDetailForSymbol(symbol) {
-  if (!symbol) return { score: null, headlines: [] };
+  if (!symbol) return { score: null, headlines: [], cacheStatus: null };
   const clean = String(symbol).toUpperCase().replace(/\.NS$/, '');
   try {
     const res = await fetch(`${CF_WORKER_URL}/news/google?symbol=${encodeURIComponent(clean)}`, {
       headers: { Accept: 'application/json' },
     });
-    if (!res.ok) return { score: null, headlines: [] };
+    // Worker now sets `X-Cache: HIT|STALE|MISS|UNAVAILABLE` (PR #198).
+    // Surface it so the batchScan fallback chain can branch on stale /
+    // unavailable upstream without a second network round trip.
+    const cacheStatus = typeof res?.headers?.get === 'function'
+      ? (res.headers.get('X-Cache') || null)
+      : null;
+    const cacheSource = typeof res?.headers?.get === 'function'
+      ? (res.headers.get('X-Cache-Source') || null)
+      : null;
+    if (!res.ok) {
+      return { score: null, headlines: [], cacheStatus, cacheSource };
+    }
     const data = await res.json();
     const items = data.items || [];
-    if (!items.length) return { score: null, headlines: [] };
+    if (!items.length) return { score: null, headlines: [], cacheStatus, cacheSource };
     // Cutoff recent items only (5 days) — identical to the score-only path
     const cutoff = Date.now() - 5 * 24 * 3600 * 1000;
     const scored = [];
@@ -212,7 +223,7 @@ export async function fetchLiveGoogleNewsDetailForSymbol(symbol) {
         source: 'google',
       });
     }
-    if (!scored.length) return { score: null, headlines: [] };
+    if (!scored.length) return { score: null, headlines: [], cacheStatus, cacheSource };
     const avg = scored.reduce((a, b) => a + b.score, 0) / scored.length;
     // Sort by most impactful first, cap to top 5 (matches batch UI behaviour)
     const headlines = scored
@@ -221,9 +232,11 @@ export async function fetchLiveGoogleNewsDetailForSymbol(symbol) {
     return {
       score: Math.max(-1, Math.min(1, avg)),
       headlines,
+      cacheStatus,
+      cacheSource,
     };
   } catch {
-    return { score: null, headlines: [] };
+    return { score: null, headlines: [], cacheStatus: null };
   }
 }
 
