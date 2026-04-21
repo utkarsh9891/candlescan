@@ -8,6 +8,7 @@ import { fetchOHLCV } from './fetcher.js';
 import { fetchNseIndexSymbolList } from './nseIndexFetch.js';
 import { MARGIN_MULTIPLIER } from '../data/marginData.js';
 import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
+import { classifyGap, liquidityTier } from './marketContext.js';
 
 const IST_OFFSET = 19800; // +5:30 in seconds
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
@@ -256,6 +257,17 @@ export async function runSimulation({
           entryTime: istTime(sd.windowCandles[pos.entryBar].t),
           exitTime: istTime(bar.t),
           confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
+          maxHoldBars: pos.maxHoldBars || null,
+          sizeMult: pos.sizeMult ?? null,
+          // Gate-level attribution — objects (never undefined). When a
+          // signal had no feature payload (e.g. noTrade path), features
+          // is null here; contextSnapshot is always an object.
+          features: pos.features || null,
+          contextSnapshot: pos.contextSnapshot || {
+            vixRegime: null, gap: null, liquidity: null, flow: null,
+            sentiment: null, sizeMult: pos.sizeMult ?? null,
+            consecutiveLosses: null,
+          },
         });
         if (netPnl > 0) consecutiveLosses = 0;
         else consecutiveLosses++;
@@ -318,15 +330,28 @@ export async function runSimulation({
       if (!ACTIONABLE.has(risk.action)) continue;
 
       // PHASE 2b: regime gate (post-pattern, day-level context)
-      // marketContext may be null in older call sites — handled inside gate.
-      const marketCtx = null; // browser sim doesn't build marketContext yet
+      // Build the multi-factor market context from whatever the browser
+      // sim has in scope. Day-level signals the browser cannot fetch
+      // (VIX, FII/DII flow, per-stock news sentiment) stay as UNKNOWN
+      // sentinels — the classifiers return neutral values for null
+      // inputs so trade ranking is unchanged vs the pre-parity behavior.
+      const prevClose = sd.priorCandles?.length ? sd.priorCandles[sd.priorCandles.length - 1].c : null;
+      const gapClass = classifyGap(prevClose, stockDayOpen);
+      const liqTier = liquidityTier(sd.avgVol);
+      const marketCtx = {
+        vixRegime: null,     // UNKNOWN: browser has no VIX feed
+        gap: gapClass,
+        liquidity: liqTier,
+        flow: null,          // UNKNOWN: browser can't fetch FII/DII live
+        sentiment: null,     // UNKNOWN: per-stock news not wired here yet
+      };
       const gateRes = regimeGate(risk.direction, marketCtx);
       if (!gateRes.ok) continue;
 
       // PHASE 3a: rank score (per-stock signals only)
       const score = rankScore(risk, marketCtx);
 
-      candidates.push({ sym, risk, patterns, score });
+      candidates.push({ sym, risk, patterns, score, marketCtx });
     }
 
     // PHASE 3b: sort by rank score, pick top N
@@ -336,9 +361,14 @@ export async function runSimulation({
       if (totalTradesOpened >= maxTotalTrades) break;
 
       // PHASE 4: position size multiplier (day-level signals control exposure)
-      // Browser sim doesn't yet compute day-level VIX/flow, but loss-streak
-      // protection works with zero extra context.
-      const sizeRes = sizeMultiplier({ consecutiveLosses }, { direction: c.risk.direction });
+      // Browser sim passes whatever day-level context it has (VIX / flow
+      // are UNKNOWN so they're no-ops here); loss-streak protection works
+      // regardless and is the primary sizing lever in the browser today.
+      const sizeRes = sizeMultiplier({
+        vixRegime: c.marketCtx?.vixRegime || null,
+        flow: c.marketCtx?.flow || null,
+        consecutiveLosses,
+      }, { direction: c.risk.direction });
       const basePosition = positionSize * sizeRes.mult;
       const effectivePositionSize = margin ? basePosition * MARGIN_MULTIPLIER : basePosition;
       const shares = Math.floor(effectivePositionSize / c.risk.entry);
@@ -352,6 +382,19 @@ export async function runSimulation({
         pattern: c.patterns[0]?.name || 'None',
         maxHoldBars: c.risk.maxHoldBars || null,
         sizeMult: sizeRes.mult,
+        // Gate-level attribution payload — persisted from entry to exit
+        // so the emitted trade record can be joined back to the signal's
+        // raw features and the day's market context at entry time.
+        features: c.risk.features || null,
+        contextSnapshot: {
+          vixRegime: c.marketCtx?.vixRegime ?? null,
+          gap: c.marketCtx?.gap ?? null,
+          liquidity: c.marketCtx?.liquidity ?? null,
+          flow: c.marketCtx?.flow ?? null,
+          sentiment: c.marketCtx?.sentiment ?? null,
+          sizeMult: sizeRes.mult,
+          consecutiveLosses,
+        },
       });
       totalTradesOpened++;
     }

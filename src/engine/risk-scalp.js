@@ -177,11 +177,27 @@ export function computeRiskScore({ candles, patterns, opts }) {
   const signalBarTs = cur.t || null;
   const validTillTs = signalBarTs ? signalBarTs + 3 * 60 : null;
 
+  // Gate-level feature snapshot: the raw per-stock signals that fed the
+  // confidence score for THIS candidate at THIS bar. Preserved on the
+  // emitted trade record so post-hoc attribution can ask "which factor
+  // correlates with wins vs losses?" without having to replay the sim.
+  const features = {
+    intraPct: stockIntraPct,
+    rs,
+    vwapDist: null,          // VWAP not computed by the scalp scorer
+    volFactor,
+    pullbackPct: null,       // pullback gate is in the pattern detector, not here
+    emaDiff: null,           // EMA not used by the scalp scorer
+    preWindowMove: opts?.indexDirection?.preWindowMove ?? null,
+    patternStrength: top.strength ?? null,
+    idxIntraPct,
+  };
+
   return {
     total: Math.round(raw), confidence, breakdown, level, action,
     entry, sl, target, rr: Math.min(9, rr), direction, context,
     maxHoldBars: 30, // 30 min — enough for 1% target to hit on 1m bars
-    signalBarTs, validTillTs,
+    signalBarTs, validTillTs, features,
   };
 }
 
@@ -194,5 +210,6 @@ function noTrade(cur, candles) {
     entry: cur.c, sl: cur.c, target: cur.c, rr: 0, direction: 'long', context,
     maxHoldBars: 15,
     signalBarTs: cur.t || null, validTillTs: null,
+    features: null,
   };
 }
