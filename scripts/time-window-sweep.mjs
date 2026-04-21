@@ -10,6 +10,15 @@
  * the 17-day canonical window Mar 12 – Apr 10 2026 and aggregates per-window
  * performance (mean daily P&L, WR, PF, max drawdown, total trades).
  *
+ * Wave 2b re-sweep (2026-04-21, 23-day window Mar 12 – Apr 21, post rs-threshold
+ * + HIGH-VIX veto): 09:30-11:00, 09:30-12:00 and 09:30-13:00 TIE exactly on
+ * all four metrics (mean daily Rs 3,020, WR 71.4%, PF 3.75, max DD Rs 4,330).
+ * Extending the window past 11:00 adds zero new trades — all strict-gate
+ * signals fire before 11:00 under the current params. 10:00-11:30 and
+ * 10:30-12:30 are both net negative. Default 09:30-11:00 is retained:
+ * ties do not satisfy the "beats on ALL four metrics" flip rule, and the
+ * narrower window is the safer ops surface (shorter session, earlier done).
+ *
  * Pattern matches `scripts/walk-forward.mjs`:
  *   - child_process workers for the existing simulate-day.mjs CLI (no
  *     shared-lib carve-out, to minimize merge surface)
