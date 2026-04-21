@@ -7,7 +7,30 @@
  */
 
 import { resolveDhanSecurityId, hasCachedInstruments } from './dhanInstruments.js';
-import { TokenExpiredError, consumeSimulatedExpiry } from './brokerErrors.js';
+import { TokenExpiredError, consumeSimulatedExpiry, isTokenExpiredError } from './brokerErrors.js';
+import { createSemaphore, retryWithBackoff } from './rateLimit.js';
+import { getCachedChart, setCachedChart } from './chartCacheLocal.js';
+
+// Dhan enforces 10 req/sec, 250 req/min on the historical endpoint. Cap at
+// 5 concurrent as a 50% safety margin — matches the warm-chart-cache pattern
+// of batching without bursting. Shared across all callers in the process.
+const dhanSemaphore = createSemaphore(5);
+/** @internal — exported for tests only. */
+export const _dhanSemaphore = dhanSemaphore;
+
+// Token-expiry errors must never be retried — they surface a reconnect
+// banner. Also skip retries on 4xx other than 429.
+function shouldRetryDhan(err) {
+  if (!err) return false;
+  if (isTokenExpiredError(err)) return false;
+  const status = Number(err.status || 0);
+  if (status === 429) return true;
+  if (status >= 500 && status < 600) return true;
+  const msg = String(err.message || '');
+  if (/HTTP 429\b/.test(msg)) return true;
+  if (/HTTP 5\d\d\b/.test(msg)) return true;
+  return false;
+}
 
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
@@ -97,6 +120,23 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
   const toStr = formatDate(today, isIntraday);
   const fromStr = formatDate(from, isIntraday);
 
+  // localStorage cache — keyed by (symbol, interval, today YYYY-MM-DD).
+  // Browser-only (no-op in Node via graceful fallback). TTL 24h; same-day
+  // re-scans skip the network. Key includes today's date so the cache
+  // naturally rotates without manual invalidation.
+  const cacheDate = formatDate(today, false);
+  const cacheHit = getCachedChart('dhan', sym, timeframe, cacheDate);
+  if (cacheHit?.candles?.length) {
+    return {
+      candles: cacheHit.candles,
+      live: true,
+      simulated: false,
+      displaySymbol: sym,
+      companyName: sym,
+      cached: true,
+    };
+  }
+
   try {
     // Dev-only: window.__simulateTokenExpiry('dhan') flips a one-shot
     // flag that we consume here so the UI banner can be QA'd without
@@ -114,34 +154,50 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
       dhanClientId: (() => { try { return localStorage.getItem('candlescan_dhan_client_id') || ''; } catch { return ''; } })(),
     };
     const bodyStr = JSON.stringify(reqBody);
-    const res = await fetch(`${CF_WORKER_URL}/dhan/historical`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Gate-Token': gateToken,
-      },
-      body: bodyStr,
-    });
+    // Run under the Dhan semaphore with 429/5xx retry. Token-expiry is
+    // propagated without retry via shouldRetryDhan so the reconnect
+    // banner fires on the first failure.
+    const data = await dhanSemaphore.run(() =>
+      retryWithBackoff(async () => {
+        const res = await fetch(`${CF_WORKER_URL}/dhan/historical`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Gate-Token': gateToken,
+          },
+          body: bodyStr,
+        });
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      // Token-expiry detection. Dhan surfaces expired / invalid tokens as
-      // HTTP 401 (and occasionally 403). The Worker forwards Dhan's
-      // original status + error body verbatim, so we also match on
-      // broker-specific markers in the message: `DH-901` (invalid
-      // token — empirically the most common), `DH-904` (kill-switch),
-      // and textual fallbacks ("Invalid_Authentication", "token expired",
-      // "unauthorized"). Widened on purpose so a future Dhan code change
-      // doesn't silently regress this banner to "empty scan".
-      const tokenMarkerRe = /DH-90[14]|Invalid_Authentication|token[\s_-]*(?:expired|invalid)|unauthori[sz]ed/i;
-      if (res.status === 401 || (res.status === 403 && tokenMarkerRe.test(text)) || tokenMarkerRe.test(text)) {
-        throw new TokenExpiredError('dhan');
-      }
-      throw new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
-    }
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          // Token-expiry detection. Dhan surfaces expired / invalid tokens as
+          // HTTP 401 (and occasionally 403). The Worker forwards Dhan's
+          // original status + error body verbatim, so we also match on
+          // broker-specific markers in the message: `DH-901` (invalid
+          // token — empirically the most common), `DH-904` (kill-switch),
+          // and textual fallbacks ("Invalid_Authentication", "token expired",
+          // "unauthorized"). Widened on purpose so a future Dhan code change
+          // doesn't silently regress this banner to "empty scan".
+          const tokenMarkerRe = /DH-90[14]|Invalid_Authentication|token[\s_-]*(?:expired|invalid)|unauthori[sz]ed/i;
+          if (res.status === 401 || (res.status === 403 && tokenMarkerRe.test(text)) || tokenMarkerRe.test(text)) {
+            throw new TokenExpiredError('dhan');
+          }
+          const err = new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
+          err.status = res.status;
+          throw err;
+        }
 
-    const data = await res.json();
+        return res.json();
+      }, { retries: 3, baseMs: 500, maxMs: 10_000, shouldRetry: shouldRetryDhan })
+    );
     const candles = data.candles || [];
+
+    // Cache non-empty results under today's date key (24h TTL).
+    if (candles.length > 0) {
+      try {
+        setCachedChart('dhan', sym, timeframe, cacheDate, candles);
+      } catch { /* best-effort */ }
+    }
 
     return {
       candles,

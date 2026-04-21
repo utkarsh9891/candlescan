@@ -3,7 +3,29 @@
  * Primary: Cloudflare Worker proxy (candlescan-proxy.workers.dev).
  * Fallback: Jina Reader (r.jina.ai).
  * Simulated OHLCV exists only in Vite dev when the URL has ?simulate=1 (or simulate=true).
+ *
+ * Browser hardening (Phase 1 rate-limit pass):
+ *  - Outbound requests go through a module-level semaphore (max 3 in
+ *    flight) so bursts don't trip Yahoo's 429 threshold (~150 concurrent
+ *    empirically).
+ *  - Each attempt is wrapped with exponential-backoff retry for 429/5xx.
+ *  - Successful responses are cached in localStorage (24h) keyed by
+ *    (yahoo, symbol, interval, date) so repeat scans of the same day
+ *    skip the network entirely. The existing disk cache used by the CLI
+ *    (vite-plugin-chart-cache.mjs) is unaffected — localStorage is only
+ *    touched when `typeof localStorage !== 'undefined'` and a `date`
+ *    option is present.
  */
+
+import { createSemaphore, retryWithBackoff } from './rateLimit.js';
+import { getCachedChart, setCachedChart } from './chartCacheLocal.js';
+
+// Max 3 concurrent outbound Yahoo requests — matches the empirically
+// stable batch size used by the warm-chart-cache script. Shared across
+// all callers in the process (singleton module state).
+const yahooSemaphore = createSemaphore(3);
+/** @internal — exported for tests only. */
+export const _yahooSemaphore = yahooSemaphore;
 
 const BASE_PRICES = {
   RELIANCE: 2450,
@@ -168,7 +190,11 @@ export function trimTrailingFlatCandles(candles) {
 
 async function tryFetch(url) {
   const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error(String(res.status));
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return res.json();
 }
 
@@ -189,7 +215,11 @@ async function tryFetchCfWorker(yahooUrl, gateToken) {
 async function tryFetchJinaReader(yahooUrl) {
   const proxyUrl = `https://r.jina.ai/${yahooUrl}`;
   const res = await fetch(proxyUrl, { cache: 'no-store' });
-  if (!res.ok) throw new Error(String(res.status));
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   const text = await res.text();
   const marker = 'Markdown Content:';
   const i = text.indexOf(marker);
@@ -221,7 +251,11 @@ async function tryFetchAllOriginsGet(yahooUrl) {
     `https://api.allorigins.win/get?url=${enc}`,
     { cache: 'no-store' }
   );
-  if (!res.ok) throw new Error(String(res.status));
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   const wrap = await res.json();
   if (wrap.contents == null || wrap.contents === '') throw new Error('empty contents');
   return JSON.parse(typeof wrap.contents === 'string' ? wrap.contents : String(wrap.contents));
@@ -265,7 +299,13 @@ async function fetchWithFallbacks(symbol, interval, range, options) {
 
   for (const run of attempts) {
     try {
-      const json = await run();
+      // Gate every outbound attempt through the shared Yahoo semaphore
+      // (max 3 concurrent) and retry transient 429/5xx with exponential
+      // backoff. Non-retriable errors (4xx other than 429) propagate up
+      // to the for-loop's catch so the next fallback runs immediately.
+      const json = await yahooSemaphore.run(() =>
+        retryWithBackoff(run, { retries: 3, baseMs: 500, maxMs: 10_000 })
+      );
       // If Yahoo returned a valid response structure (has chart.result[0].meta)
       // but no candle data, that's authoritative — don't waste 25s on fallbacks.
       const hasYahooMeta = json?.chart?.result?.[0]?.meta;
@@ -415,6 +455,27 @@ export async function fetchOHLCV(inputSymbol, timeframeKey, options) {
     };
   }
 
+  // localStorage chart cache — browser only, keyed by (symbol, interval, date).
+  // Only valid when `date` is provided (historical day); same-session live
+  // scans (no date) skip the cache. The CLI / warm-chart-cache script runs
+  // in Node where `localStorage` is undefined, so the existing disk cache
+  // under cache/charts/ remains the source of truth for backtests.
+  const cacheDate = options?.date || null;
+  if (cacheDate && level === 0) {
+    const hit = getCachedChart('yahoo', displaySymbol, tf.interval, cacheDate);
+    if (hit?.candles?.length) {
+      return {
+        candles: hit.candles,
+        live: true,
+        simulated: false,
+        yahooSymbol,
+        displaySymbol,
+        companyName: displaySymbol,
+        cached: true,
+      };
+    }
+  }
+
   const { candles, live, companyName: cn } = await fetchWithFallbacks(
     yahooSymbol,
     tf.interval,
@@ -424,6 +485,15 @@ export async function fetchOHLCV(inputSymbol, timeframeKey, options) {
 
   if (candles?.length) {
     const trimmed = trimTrailingFlatCandles(candles);
+    // Persist to localStorage when date-scoped (historical/immutable slice).
+    // Same-session live scans (no date) bypass the cache — we only want to
+    // memoize bounded, deterministic slices to avoid poisoning the cache
+    // with mid-day partial data that the user reloads.
+    if (cacheDate && level === 0) {
+      try {
+        setCachedChart('yahoo', displaySymbol, tf.interval, cacheDate, trimmed);
+      } catch { /* cache is best-effort */ }
+    }
     return {
       candles: trimmed,
       live,

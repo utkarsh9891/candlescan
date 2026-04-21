@@ -254,7 +254,10 @@ describe('fetchOHLCV (with mocked fetch)', () => {
   });
 
   it('handles fetch returning non-ok status', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 429 });
+    // 404 is non-retriable — bypasses the backoff wrapper and fails fast.
+    // (429/5xx now go through retryWithBackoff; the retry path is covered
+    // separately in rateLimit.test.js.)
+    mockFetch.mockResolvedValue({ ok: false, status: 404, text: async () => 'not found' });
 
     const result = await fetchOHLCV('SBIN', '5m');
     expect(result.candles).toEqual([]);

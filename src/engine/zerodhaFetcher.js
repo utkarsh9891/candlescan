@@ -4,7 +4,27 @@
  * No external dependencies — plain JS only.
  */
 
-import { TokenExpiredError, consumeSimulatedExpiry } from './brokerErrors.js';
+import { TokenExpiredError, consumeSimulatedExpiry, isTokenExpiredError } from './brokerErrors.js';
+import { createSemaphore, retryWithBackoff } from './rateLimit.js';
+import { getCachedChart, setCachedChart } from './chartCacheLocal.js';
+
+// Kite Connect caps historical-data requests at 3 req/sec. Cap at 2
+// concurrent for a 33% safety margin. Shared across all callers.
+const kiteSemaphore = createSemaphore(2);
+/** @internal — exported for tests only. */
+export const _kiteSemaphore = kiteSemaphore;
+
+function shouldRetryKite(err) {
+  if (!err) return false;
+  if (isTokenExpiredError(err)) return false;
+  const status = Number(err.status || 0);
+  if (status === 429) return true;
+  if (status >= 500 && status < 600) return true;
+  const msg = String(err.message || '');
+  if (/HTTP 429\b/.test(msg)) return true;
+  if (/HTTP 5\d\d\b/.test(msg)) return true;
+  return false;
+}
 
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
@@ -77,6 +97,21 @@ export async function fetchZerodhaOHLCV(symbol, timeframe, { vault, gateToken })
   const toStr = formatDate(today);
   const fromStr = formatDate(from);
 
+  // localStorage cache — keyed by (symbol, timeframe, today). 24h TTL;
+  // browser-only via graceful fallback.
+  const cacheDate = toStr;
+  const cacheHit = getCachedChart('kite', sym, timeframe, cacheDate);
+  if (cacheHit?.candles?.length) {
+    return {
+      candles: cacheHit.candles,
+      live: true,
+      simulated: false,
+      displaySymbol: sym,
+      companyName: sym,
+      cached: true,
+    };
+  }
+
   try {
     // Dev-only: window.__simulateTokenExpiry('kite') flips a one-shot
     // flag that we consume here so the UI banner can be QA'd without
@@ -84,37 +119,42 @@ export async function fetchZerodhaOHLCV(symbol, timeframe, { vault, gateToken })
     if (consumeSimulatedExpiry('kite')) {
       throw new TokenExpiredError('kite');
     }
-    const res = await fetch(`${CF_WORKER_URL}/zerodha/historical`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Gate-Token': gateToken,
-      },
-      body: JSON.stringify({
-        symbol: sym,
-        interval,
-        from: fromStr,
-        to: toStr,
-        vault,
-      }),
-    });
+    const data = await kiteSemaphore.run(() =>
+      retryWithBackoff(async () => {
+        const res = await fetch(`${CF_WORKER_URL}/zerodha/historical`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Gate-Token': gateToken,
+          },
+          body: JSON.stringify({
+            symbol: sym,
+            interval,
+            from: fromStr,
+            to: toStr,
+            vault,
+          }),
+        });
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      // Token-expiry detection for Kite. Kite's canonical signal is
-      // HTTP 403 with `error_type: "TokenException"` in the JSON body
-      // ("Incorrect api_key or access_token" is the typical message),
-      // but we also accept a looser textual fallback so any future
-      // wording change doesn't regress this banner to "empty scan".
-      // useStockScan.js already uses a similar pattern (/TokenException/i)
-      // so we keep the two paths in sync.
-      if (res.status === 403 && /TokenException|Incorrect.*(?:api_key|access_token)|token[\s_-]*(?:expired|invalid)/i.test(text)) {
-        throw new TokenExpiredError('kite');
-      }
-      throw new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
-    }
-
-    const data = await res.json();
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          // Token-expiry detection for Kite. Kite's canonical signal is
+          // HTTP 403 with `error_type: "TokenException"` in the JSON body
+          // ("Incorrect api_key or access_token" is the typical message),
+          // but we also accept a looser textual fallback so any future
+          // wording change doesn't regress this banner to "empty scan".
+          // useStockScan.js already uses a similar pattern (/TokenException/i)
+          // so we keep the two paths in sync.
+          if (res.status === 403 && /TokenException|Incorrect.*(?:api_key|access_token)|token[\s_-]*(?:expired|invalid)/i.test(text)) {
+            throw new TokenExpiredError('kite');
+          }
+          const err = new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
+          err.status = res.status;
+          throw err;
+        }
+        return res.json();
+      }, { retries: 3, baseMs: 500, maxMs: 10_000, shouldRetry: shouldRetryKite })
+    );
     const rawCandles = data.candles || [];
 
     // Normalize from Kite format [date, o, h, l, c, v] to { t, o, h, l, c, v }
@@ -126,6 +166,12 @@ export async function fetchZerodhaOHLCV(symbol, timeframe, { vault, gateToken })
       c,
       v,
     }));
+
+    if (candles.length > 0) {
+      try {
+        setCachedChart('kite', sym, timeframe, cacheDate, candles);
+      } catch { /* best-effort */ }
+    }
 
     return {
       candles,
