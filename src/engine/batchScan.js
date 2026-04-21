@@ -5,13 +5,13 @@
  * Computes ORB + prev day levels per stock for pattern context.
  */
 
-import { fetchOHLCV } from './fetcher.js';
+import { fetchOHLCV, CF_WORKER_URL } from './fetcher.js';
 // Fallback imports (used when engineFns not provided)
 import { detectPatterns as detectPatternsDefault } from './patterns.js';
 import { detectLiquidityBox as detectLiquidityBoxDefault } from './liquidityBox.js';
 import { computeRiskScore as computeRiskScoreDefault } from './risk.js';
 import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
-import { classifyNewsSentiment, liquidityTier } from './marketContext.js';
+import { classifyNewsSentiment, classifyInstitutionalFlow, liquidityTier } from './marketContext.js';
 import { getSector } from './sectorMap.js';
 import { fetchLiveGoogleNewsDetailForSymbol } from './marketContextLive.js';
 import { isTokenExpiredError } from './brokerErrors.js';
@@ -143,6 +143,101 @@ function istDate(t) {
   return new Date((t + IST_OFFSET) * 1000).toISOString().slice(0, 10);
 }
 
+// ── FII/DII flow cache ───────────────────────────────────────────────
+// FII/DII net values are published once per day after the 5pm NSE
+// cutoff, so intraday fetches within the same date are guaranteed
+// identical. A 10-minute TTL keyed by the IST date means the first
+// scan of the day hits the Worker and subsequent scans within the
+// same 10-minute window reuse the classification without a network
+// call. Past the TTL we refetch in case the day has rolled over or
+// NSE finally posted previously-delayed data. Concurrent scans share
+// a single in-flight promise to guarantee only one network round trip
+// even when two scans fire at the same instant.
+const FLOW_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const flowCache = { date: null, flow: null, fetchedAt: 0 };
+let inflightFlowFetch = null; // Promise<string> | null — coalesces concurrent callers
+
+/** Exported for tests only — clears the module-level FII/DII flow cache. */
+export function _resetBatchScanFlowCache() {
+  flowCache.date = null;
+  flowCache.flow = null;
+  flowCache.fetchedAt = 0;
+  inflightFlowFetch = null;
+}
+
+/** IST-aware date stamp (YYYY-MM-DD). FII/DII cutoff is 5pm IST. */
+function todayIstDate() {
+  const nowMs = Date.now() + IST_OFFSET * 1000;
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Fetch today's FII/DII classification from the CF Worker's
+ * `/market/fiidii` endpoint. Never throws — on any failure
+ * (network error, 404/5xx, malformed body, missing fields) it logs
+ * a `console.warn` and returns `'NEUTRAL'` so the caller can proceed
+ * without a crash. FII/DII data is occasionally delayed by NSE, so
+ * a missing value is not an error — it just means no flow signal.
+ *
+ * Results are cached in-memory for 10 minutes keyed by the IST date,
+ * and concurrent callers share a single in-flight promise so the
+ * Worker only sees one request per cache miss.
+ *
+ * @param {Object} [opts]
+ * @param {Function} [opts.fetchFn] override global fetch (tests)
+ * @param {AbortSignal} [opts.signal]
+ * @returns {Promise<string>} one of the `classifyInstitutionalFlow`
+ *   outputs (`STRONG_BUY` | `BUY` | `NEUTRAL` | `SELL` | `STRONG_SELL`),
+ *   defaulting to `'NEUTRAL'` when the endpoint / classification fails.
+ */
+export async function fetchFlowClass({ fetchFn, signal } = {}) {
+  const today = todayIstDate();
+  const age = Date.now() - flowCache.fetchedAt;
+  if (flowCache.date === today && flowCache.flow && age < FLOW_CACHE_TTL_MS) {
+    return flowCache.flow;
+  }
+  // Share an in-flight fetch between concurrent scans so the Worker
+  // receives exactly one request even when N callers race the cache.
+  if (inflightFlowFetch) return inflightFlowFetch;
+  inflightFlowFetch = (async () => {
+    try {
+      const f = fetchFn || (typeof globalThis !== 'undefined' ? globalThis.fetch : null);
+      if (!f) {
+        // eslint-disable-next-line no-console
+        console.warn('[batchScan] fetchFlowClass: no fetch implementation available; defaulting to NEUTRAL');
+        return 'NEUTRAL';
+      }
+      const res = await f(`${CF_WORKER_URL}/market/fiidii`, {
+        headers: { Accept: 'application/json' },
+        signal,
+      });
+      if (!res || !res.ok) {
+        // eslint-disable-next-line no-console
+        console.warn(`[batchScan] FII/DII endpoint returned ${res?.status ?? 'no response'} — defaulting flow to NEUTRAL`);
+        return 'NEUTRAL';
+      }
+      const data = await res.json();
+      const classified = classifyInstitutionalFlow(data?.fii, data?.dii);
+      if (!classified) {
+        // eslint-disable-next-line no-console
+        console.warn('[batchScan] FII/DII endpoint returned empty/unclassifiable values — defaulting flow to NEUTRAL');
+        return 'NEUTRAL';
+      }
+      flowCache.date = today;
+      flowCache.flow = classified;
+      flowCache.fetchedAt = Date.now();
+      return classified;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[batchScan] FII/DII fetch failed: ${err?.message || err} — defaulting flow to NEUTRAL`);
+      return 'NEUTRAL';
+    } finally {
+      inflightFlowFetch = null;
+    }
+  })();
+  return inflightFlowFetch;
+}
+
 /**
  * @param {Object} params
  * @param {string[]} params.symbols — list of NSE symbols (without .NS)
@@ -173,6 +268,7 @@ export async function batchScan({
   fetchFn, // optional: custom fetch function (e.g. fetchDhanOHLCV) — defaults to Yahoo
   newsFetchFn, // optional: override for per-symbol news fetch (tests)
   newsConcurrency = 6, // cap on parallel per-symbol news fetches (Worker rate-limit)
+  flowFetchFn, // optional: override for the CF Worker fetch inside fetchFlowClass (tests)
 }) {
   // Use provided engine functions or fall back to defaults
   const detectPatterns = engineFns?.detectPatterns || detectPatternsDefault;
@@ -221,9 +317,36 @@ export async function batchScan({
     newsFetched: 0,
     newsCacheHits: 0,
     newsFetchErrors: 0,
+    // FII/DII flow (P1 #6 follow-up). `flowClass` is the classification
+    // string consumed by sizeMultiplier; `flowSource` tells the dev
+    // console whether it came from the caller's pre-fetched marketContext,
+    // the scan-start Worker fetch, or the NEUTRAL fallback.
+    flowClass: null,
+    flowSource: null,
     concurrency,
     delayMs,
   };
+
+  // ── Live FII/DII flow ────────────────────────────────────────────
+  // Prefer the pre-fetched value from `marketContext` when the caller
+  // supplied one (BatchScanPage, NoviceMode), otherwise fire a single
+  // Worker call at scan start and reuse its result for every symbol.
+  // Callers that rely on the cached/inflight behaviour include the
+  // paper-trading page and the scheduled-check hook — they previously
+  // passed `flow: null` end-to-end, so sizeMultiplier fell through to
+  // the no-flow path. `fetchFlowClass` never throws and returns
+  // `'NEUTRAL'` on any failure, so the scan is robust to CF Worker
+  // hiccups or NSE delays.
+  let flowClass = marketContext?.flow || null;
+  let flowSource = flowClass ? 'marketContext' : null;
+  if (!flowClass && !signal?.aborted) {
+    flowClass = await fetchFlowClass({ fetchFn: flowFetchFn, signal });
+    // If the cache was populated by this call (or an earlier one today)
+    // the fetch succeeded; otherwise we're on the NEUTRAL fallback.
+    flowSource = flowCache.flow === flowClass ? 'worker' : 'fallback';
+  }
+  telemetry.flowClass = flowClass;
+  telemetry.flowSource = flowSource;
 
   for (let i = 0; i < total; i += concurrency) {
     if (signal?.aborted) break;
@@ -305,7 +428,11 @@ export async function batchScan({
           const liquidity = liquidityTier(avgPerBarVol);
           const stockContext = {
             vixRegime: marketContext?.vixRegime || null,
-            flow: marketContext?.flow || null,
+            // `flowClass` is hydrated once at scan start (either from the
+            // caller's marketContext or the Worker), so every symbol sees
+            // the same institutional-flow signal. Defaults to 'NEUTRAL'
+            // if the endpoint failed.
+            flow: flowClass,
             liquidity,
             sentiment,
             // sector is informational only — tradeDecision.js doesn't gate on it
