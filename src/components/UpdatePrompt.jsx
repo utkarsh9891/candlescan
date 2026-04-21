@@ -22,14 +22,42 @@ function parseSemver(v) {
   return m ? [+m[1], +m[2], +m[3]] : null;
 }
 
-/** Returns true if `a` and `b` are different semver strings.
- * We intentionally match any mismatch (not just "newer") so that deleting
- * recent releases on GitHub rolls clients back to the current latest. */
-function isDifferent(a, b) {
-  const pa = parseSemver(a);
-  const pb = parseSemver(b);
-  if (!pa || !pb) return false;
-  return pa[0] !== pb[0] || pa[1] !== pb[1] || pa[2] !== pb[2];
+/** Returns true if `candidate` is strictly newer than `current` by semver.
+ * Only strictly-greater triggers an update prompt — equal or older is a no-op.
+ * Earlier logic matched any mismatch, which caused a persistent "Update to
+ * v0.15.0" banner on devices already on v0.15.8 whenever LS_LATEST_VER was
+ * stale-and-older than the running build (reported 2026-04-21). */
+export function isNewer(candidate, current) {
+  const pc = parseSemver(candidate);
+  const pcur = parseSemver(current);
+  if (!pc || !pcur) return false;
+  if (pc[0] !== pcur[0]) return pc[0] > pcur[0];
+  if (pc[1] !== pcur[1]) return pc[1] > pcur[1];
+  return pc[2] > pcur[2];
+}
+
+/** Pick the highest-semver tag from a GitHub /releases response array.
+ * The API sorts by creation time, not semver, so out-of-order publishes
+ * (e.g. backfilled/edited releases) can put a lower version at index 0. */
+export function pickLatestTag(releases) {
+  if (!Array.isArray(releases) || releases.length === 0) return null;
+  let best = null;
+  let bestParsed = null;
+  for (const r of releases) {
+    const tag = r?.tag_name;
+    const parsed = parseSemver(tag);
+    if (!parsed) continue;
+    if (
+      !bestParsed ||
+      parsed[0] > bestParsed[0] ||
+      (parsed[0] === bestParsed[0] && parsed[1] > bestParsed[1]) ||
+      (parsed[0] === bestParsed[0] && parsed[1] === bestParsed[1] && parsed[2] > bestParsed[2])
+    ) {
+      best = tag;
+      bestParsed = parsed;
+    }
+  }
+  return best;
 }
 
 export default function UpdatePrompt() {
@@ -80,9 +108,12 @@ export default function UpdatePrompt() {
     setChecking(true);
     setCheckError('');
     try {
-      // Use /releases?per_page=1 (includes pre-releases) instead of
-      // /releases/latest (which only returns full releases — 404 for 0.x.y)
-      const ghUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=1`;
+      // Use /releases?per_page=5 (includes pre-releases) instead of
+      // /releases/latest (which only returns full releases — 404 for 0.x.y).
+      // per_page=5 so we can pick the semver-max, defending against
+      // out-of-order publishes where the creation-time sort puts a
+      // lower version at index 0.
+      const ghUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=5`;
       let res;
       try {
         res = await fetch(ghUrl, { headers: { Accept: 'application/vnd.github+json' } });
@@ -92,20 +123,20 @@ export default function UpdatePrompt() {
       }
       if (!res.ok) throw new Error(`GitHub API ${res.status}`);
       const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) {
-        // No releases published yet
+      const latest = pickLatestTag(data);
+      if (!latest) {
+        // No parseable releases
         setChecking(false);
         try { localStorage.setItem(LS_LAST_CHECK, String(Date.now())); } catch { /* quota */ }
         return;
       }
-      const latest = data[0].tag_name;
 
       try {
         localStorage.setItem(LS_LAST_CHECK, String(Date.now()));
         localStorage.setItem(LS_LATEST_VER, latest);
       } catch { /* quota */ }
 
-      if (isDifferent(latest, currentVersion)) {
+      if (isNewer(latest, currentVersion)) {
         setNewVersion(latest);
         setForceReload(true);
         setShowUpdate(true);
@@ -128,12 +159,21 @@ export default function UpdatePrompt() {
     if (isDev) return; // no update checks in dev
     if (foundRef.current) return;
     try {
+      // Reconcile stale cache: if the cached "latest" is equal-or-older than
+      // the running build, it's a leftover from before the user updated.
+      // Purge it so a later GH check (or a different device reading the
+      // same account's cache) doesn't resurrect a downgrade banner.
+      const cached = localStorage.getItem(LS_LATEST_VER);
+      if (cached && !isNewer(cached, currentVersion)) {
+        try { localStorage.removeItem(LS_LATEST_VER); } catch { /* quota */ }
+      }
+
       const last = Number(localStorage.getItem(LS_LAST_CHECK) || '0');
       if (Date.now() - last < CHECK_INTERVAL_MS) {
         // Still within window — check cached result instead
-        const cached = localStorage.getItem(LS_LATEST_VER);
-        if (cached && isDifferent(cached, currentVersion)) {
-          setNewVersion(cached);
+        const freshCached = localStorage.getItem(LS_LATEST_VER);
+        if (freshCached && isNewer(freshCached, currentVersion)) {
+          setNewVersion(freshCached);
           setForceReload(true);
           setShowUpdate(true);
           foundRef.current = true;
