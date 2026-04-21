@@ -60,7 +60,12 @@ export const BUCKETS = {
     ],
   },
   rs: {
-    extract: (t) => t?.features?.rs,
+    // features.rs is stored as a raw decimal fraction (0.0335 == 3.35%).
+    // Scale to percent at extract time so the band labels below read as "%".
+    extract: (t) => {
+      const v = t?.features?.rs;
+      return typeof v === 'number' ? v * 100 : v;
+    },
     bands: [
       { label: '<1.0',    test: (v) => v < 1.0 },
       { label: '1.0-1.5', test: (v) => v >= 1.0 && v < 1.5 },
@@ -69,7 +74,12 @@ export const BUCKETS = {
     ],
   },
   intraPct: {
-    extract: (t) => t?.features?.intraPct,
+    // features.intraPct is stored as a raw decimal fraction (0.0378 == 3.78%).
+    // Scale to percent at extract time so the band labels below read as "%".
+    extract: (t) => {
+      const v = t?.features?.intraPct;
+      return typeof v === 'number' ? v * 100 : v;
+    },
     bands: [
       { label: '<1.5',    test: (v) => v < 1.5 },
       { label: '1.5-2.0', test: (v) => v >= 1.5 && v < 2.0 },
