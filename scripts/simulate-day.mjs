@@ -76,6 +76,10 @@ function parseArgs() {
   // sizeMultiplier. Default ON so the sweep reflects the shipping
   // behavior; flip with --no-use-flow to A/B against legacy sizing.
   let useFlow = true;
+  // Regime-aware ATR-based SL/target (P2 #11). Default OFF — flip with
+  // --regime-stops so the walk-forward harness can A/B the two regimes.
+  // When OFF the legacy hardcoded 0.5%/1.0% path runs (regression-proof).
+  let regimeAwareStops = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -98,10 +102,12 @@ function parseArgs() {
     if (args[i] === '--pessimistic-fills') { pessimisticFills = true; continue; }
     if (args[i] === '--no-use-flow') { useFlow = false; continue; }
     if (args[i] === '--use-flow') { useFlow = true; continue; }
+    if (args[i] === '--regime-stops') { regimeAwareStops = true; continue; }
+    if (args[i] === '--no-regime-stops') { regimeAwareStops = false; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops };
 }
 
 function parseChartJson(data) {
@@ -220,7 +226,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops }) {
   const trades = [];
   const openPositions = [];
   const tradedSymbols = new Set();
@@ -439,7 +445,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         sector: sectorAtBar,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen, sector: sectorAtBar } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin: marginEnabled, marginMap, sym, stockDayOpen, sector: sectorAtBar, regimeAwareStops, vixRegime: vixReg || null } });
 
       if (risk.confidence < MIN_CONFIDENCE) continue;
       if (!ACTIONABLE.has(risk.action)) continue;
@@ -618,7 +624,7 @@ function writeTradesJson(resolvedDate, runMeta, summary, trades) {
 }
 
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
@@ -638,7 +644,7 @@ async function main() {
   console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
   console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${maxPositions} | Per trade: Rs.${positionSize.toLocaleString()} | Max trades: ${maxTotalTrades}`);
   console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Volume: auto (25th pctile) | Margin: ${margin ? MARGIN_MULTIPLIER + 'x' : 'Off'}`);
-  console.log(`Pessimistic fills: ${pessimisticFills ? 'ON' : 'OFF'} | Flow sizing: ${useFlow ? 'ON' : 'OFF'}`);
+  console.log(`Pessimistic fills: ${pessimisticFills ? 'ON' : 'OFF'} | Flow sizing: ${useFlow ? 'ON' : 'OFF'} | Regime-aware stops: ${regimeAwareStops ? 'ON' : 'OFF'}`);
   console.log('');
 
   // 1. Fetch index constituents (with cache fallback)
@@ -867,7 +873,7 @@ async function main() {
     } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow };
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops };
 
   if (multiWindow) {
     // Multi-window mode: run 3 windows sequentially
@@ -917,7 +923,7 @@ async function main() {
         index: indexName, engine, confidence: minConfidence,
         positionSize, maxPositions, maxTrades: maxTotalTrades,
         timestamp: Math.floor(Date.now() / 1000),
-        margin, pessimisticFills, useFlow, multiWindow: true,
+        margin, pessimisticFills, useFlow, regimeAwareStops, multiWindow: true,
         fromTime, toTime, timeframe,
       }, {
         totalPnl, wins, losses,
@@ -951,7 +957,7 @@ async function main() {
         index: indexName, engine, confidence: minConfidence,
         positionSize, maxPositions, maxTrades: maxTotalTrades,
         timestamp: Math.floor(Date.now() / 1000),
-        margin, pessimisticFills, useFlow, multiWindow: false,
+        margin, pessimisticFills, useFlow, regimeAwareStops, multiWindow: false,
         fromTime, toTime, timeframe,
       }, {
         totalPnl, wins, losses,
