@@ -90,6 +90,16 @@ export function regimeGate(direction, ctx) {
     return { ok: false, reason: `vix=${ctx.vixRegime}` };
   }
 
+  // VIX HIGH: empirically validated veto (walk-forward 2026-04-21).
+  // HIGH-VIX trades on the Mar 12 – Apr 10 2026 sample: n=14, WR 43%,
+  // profit factor 1.01 (essentially random). Non-HIGH trades: n=17,
+  // WR 65%, profit factor 2.46. Removing HIGH-VIX trades strictly
+  // improves net P&L by subtracting a near-zero-edge subset.
+  // Source: cache/analysis/confidence_wr_*.json
+  if (ctx.vixRegime === 'HIGH') {
+    return { ok: false, reason: 'vix-high-veto' };
+  }
+
   // News counter-STRONG: a strong counter-direction news story makes
   // this specific trade wrong regardless of technicals. The stock is
   // already repricing on the news.
