@@ -59,17 +59,29 @@ export function vixAllowsTrading(regime) {
 
 /**
  * Confidence adjustment for a given regime.
- * Minimal deltas — big deltas changed candidate ranking and hurt P&L
- * in the backtest. Keep the PANIC veto (which is a hard gate, not a
- * ranking shift) but make NORMAL/HIGH regime-neutral.
- * @returns {number} additive confidence bonus (signed)
+ *
+ * DESIGN RULE (CLAUDE.md §4): positive deltas on non-news layers are
+ * FORBIDDEN — they shift candidate ranking and displace high-quality
+ * winners with marginally-boosted losers. Only negative deltas
+ * (penalties / vetoes) are allowed here. News sentiment is the single
+ * exception (see composeContextScore).
+ *
+ * Flattened 2026-04-21 (P1 #9): LOW was +2, now 0. Walk-forward on
+ * HIGH-VIX trades showed PF 1.01 (essentially random) vs 2.46 for
+ * non-HIGH, so the HIGH-VIX case is now a hard veto in `regimeGate`,
+ * not a confidence penalty here — keeping this function negative-or-zero.
+ *
+ * PANIC remains -99 purely as a defensive floor; the real stop is
+ * `vixAllowsTrading` → `regimeGate`, which hard-rejects PANIC.
+ *
+ * @returns {number} additive confidence adjustment (zero or negative only)
  */
 export function vixConfidenceDelta(regime) {
   switch (regime) {
-    case 'LOW':    return +2;
+    case 'LOW':    return  0;      // was +2 — ranking-shift bonus forbidden (§4)
     case 'NORMAL': return  0;
-    case 'HIGH':   return  0;      // no penalty — changes ranking too much
-    case 'PANIC':  return -99;     // effectively rejects
+    case 'HIGH':   return  0;      // vetoed in regimeGate; no ranking penalty here
+    case 'PANIC':  return -99;     // defensive floor; regimeGate rejects before this
     default:       return  0;
   }
 }
@@ -153,15 +165,23 @@ export function liquidityAllowsTrading(tier) {
 }
 
 /**
- * Confidence adjustment for liquidity tier (small contributions only
- * — the sim's existing volume filter does most of the heavy lifting).
+ * Confidence adjustment for liquidity tier.
+ *
+ * DESIGN RULE (CLAUDE.md §4): positive deltas on non-news layers are
+ * FORBIDDEN — they shift candidate ranking and displace high-quality
+ * winners with marginally-boosted losers. Only negative deltas
+ * (penalties / vetoes) are allowed here.
+ *
+ * Flattened 2026-04-21 (P1 #9): TIER_A was +2, now 0. TIER_C and
+ * TIER_D keep their negative contributions — those are penalties /
+ * effective vetoes and consistent with the doc.
  */
 export function liquidityConfidenceDelta(tier) {
   switch (tier) {
-    case 'TIER_A': return +2;
+    case 'TIER_A': return  0;      // was +2 — ranking-shift bonus forbidden (§4)
     case 'TIER_B': return  0;
     case 'TIER_C': return -1;
-    case 'TIER_D': return -15;
+    case 'TIER_D': return -15;     // effective veto; also hard-blocked upstream
     default:       return  0;
   }
 }

@@ -5,15 +5,12 @@
  *   - Layers can VETO a trade.
  *   - News sentiment (the strongest-predictive layer) can give +2 / +5
  *     confidence bonuses when aligned with the trade direction.
- *   - Other layers (gap, liquidity, flow) contribute NO positive delta —
- *     they're either informational or veto-only in the composer.
+ *   - Other layers (VIX, gap, liquidity, flow) contribute NO positive
+ *     delta — they're either informational, penalty-only, or veto-only.
  *
- * KNOWN DISCREPANCY: vixConfidenceDelta('LOW') returns +2 (marketContext.js:69),
- * and the composer applies it. CLAUDE.md rule #4 says "positive confidence
- * bonuses from VIX/gap/liquidity/flow are kept at 0 by design". The VIX LOW
- * case therefore violates the documented rule. These tests pin the CURRENT
- * behavior so it can't drift further; tightening VIX LOW to 0 is a strategy
- * change that requires a 17-day sweep before shipping.
+ * Reconciled 2026-04-21 (P1 #9): vixConfidenceDelta('LOW') and
+ * liquidityConfidenceDelta('TIER_A') were +2, now 0. HIGH-VIX is now a
+ * hard veto in `regimeGate` (see tradeDecision.test / integration).
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -24,12 +21,14 @@ import {
   gapAlignment,
   liquidityTier,
   liquidityAllowsTrading,
+  liquidityConfidenceDelta,
   classifyInstitutionalFlow,
   flowAlignment,
   classifyNewsSentiment,
   newsAlignment,
   composeContextScore,
 } from './marketContext.js';
+import { regimeGate } from './tradeDecision.js';
 
 describe('marketContext — classifiers', () => {
   it('vixRegime partitions the VIX range correctly', () => {
@@ -183,20 +182,61 @@ describe('composeContextScore — the layer composition', () => {
     }
   });
 
-  it('VIX non-LOW regimes contribute zero delta', () => {
-    // Non-LOW regimes match CLAUDE.md rule #4 exactly.
-    for (const regime of ['NORMAL', 'HIGH']) {
+  it('VIX regimes contribute zero delta (CLAUDE.md §4 reconciled 2026-04-21)', () => {
+    for (const regime of ['LOW', 'NORMAL', 'HIGH']) {
       const r = composeContextScore({ ...emptyCtx, vixRegime: regime }, 'long');
       expect(r.delta, `regime=${regime}`).toBe(0);
     }
   });
+});
 
-  it('VIX LOW contributes +2 — current behavior; CLAUDE.md rule #4 says this should be 0', () => {
-    // If this test starts failing because the +2 was changed to 0, the fix
-    // aligned the code with CLAUDE.md — GOOD. Flip the assertion to `toBe(0)`
-    // AFTER validating on the 17-day sweep. Do NOT remove this test.
-    const r = composeContextScore({ ...emptyCtx, vixRegime: 'LOW' }, 'long');
-    expect(r.delta).toBe(2);
-    expect(r.veto).toBe(false);
+describe('marketContext — delta flattening (P1 #9 reconcile)', () => {
+  it('vixConfidenceDelta returns 0 for LOW (was +2 before 2026-04-21)', () => {
+    expect(vixConfidenceDelta('LOW')).toBe(0);
+    expect(vixConfidenceDelta('NORMAL')).toBe(0);
+    expect(vixConfidenceDelta('HIGH')).toBe(0);
+    // PANIC remains a defensive floor; real stop is regimeGate
+    expect(vixConfidenceDelta('PANIC')).toBeLessThan(0);
+  });
+
+  it('liquidityConfidenceDelta returns 0 for TIER_A (was +2 before 2026-04-21)', () => {
+    expect(liquidityConfidenceDelta('TIER_A')).toBe(0);
+    expect(liquidityConfidenceDelta('TIER_B')).toBe(0);
+    // Negative penalties kept — these are vetoes / penalties, not ranking bonuses
+    expect(liquidityConfidenceDelta('TIER_C')).toBeLessThan(0);
+    expect(liquidityConfidenceDelta('TIER_D')).toBeLessThan(0);
+  });
+
+  it('no non-news layer returns a positive delta', () => {
+    for (const r of ['LOW', 'NORMAL', 'HIGH', 'PANIC']) {
+      expect(vixConfidenceDelta(r), `vix=${r}`).toBeLessThanOrEqual(0);
+    }
+    for (const t of ['TIER_A', 'TIER_B', 'TIER_C', 'TIER_D']) {
+      expect(liquidityConfidenceDelta(t), `liq=${t}`).toBeLessThanOrEqual(0);
+    }
+  });
+});
+
+describe('regimeGate — HIGH-VIX veto (empirical 2026-04-21)', () => {
+  it('HIGH-VIX regime blocks the trade with reason "vix-high-veto"', () => {
+    const res = regimeGate('long', { vixRegime: 'HIGH' });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('vix-high-veto');
+  });
+
+  it('HIGH-VIX veto fires regardless of direction', () => {
+    expect(regimeGate('long', { vixRegime: 'HIGH' }).ok).toBe(false);
+    expect(regimeGate('short', { vixRegime: 'HIGH' }).ok).toBe(false);
+  });
+
+  it('non-HIGH regimes still pass the gate (absent other vetoes)', () => {
+    expect(regimeGate('long', { vixRegime: 'LOW' }).ok).toBe(true);
+    expect(regimeGate('long', { vixRegime: 'NORMAL' }).ok).toBe(true);
+  });
+
+  it('PANIC still vetoes with its pre-existing reason (vix=PANIC)', () => {
+    const res = regimeGate('long', { vixRegime: 'PANIC' });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('vix=PANIC');
   });
 });
