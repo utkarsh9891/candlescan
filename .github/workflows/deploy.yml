@@ -186,10 +186,12 @@ jobs:
           echo "Changelog range: $RANGE"
 
           # Collect commits grouped by type
-          FEATS=$(git log "$RANGE" --pretty=format:'- %s' --grep='^feat' --no-merges 2>/dev/null | sed 's/^- feat[:(]*/- /' || true)
-          FIXES=$(git log "$RANGE" --pretty=format:'- %s' --grep='^fix' --no-merges 2>/dev/null | sed 's/^- fix[:(]*/- /' || true)
-          CHORES=$(git log "$RANGE" --pretty=format:'- %s' --grep='^chore\|^refactor\|^docs\|^style\|^test\|^ci' --no-merges 2>/dev/null | sed 's/^- \(chore\|refactor\|docs\|style\|test\|ci\)[:(]*/- /' || true)
-          OTHER=$(git log "$RANGE" --pretty=format:'- %s' --no-merges 2>/dev/null | grep -v -E '^- (feat|fix|chore|refactor|docs|style|test|ci)[:(]' | head -20 || true)
+          # Strip conventional-commit prefix `type(scope):` or `type:` including the scope parens.
+          # Prior regex `[:(]*` was a char class that stopped at `(`, leaving a dangling `)` in the notes.
+          FEATS=$(git log "$RANGE" --pretty=format:'- %s' --grep='^feat' --no-merges 2>/dev/null | sed -E 's/^- feat(\([^)]*\))?:[[:space:]]*/- /' || true)
+          FIXES=$(git log "$RANGE" --pretty=format:'- %s' --grep='^fix' --no-merges 2>/dev/null | sed -E 's/^- fix(\([^)]*\))?:[[:space:]]*/- /' || true)
+          CHORES=$(git log "$RANGE" --pretty=format:'- %s' --grep='^chore\|^refactor\|^docs\|^style\|^test\|^ci' --no-merges 2>/dev/null | sed -E 's/^- (chore|refactor|docs|style|test|ci)(\([^)]*\))?:[[:space:]]*/- /' || true)
+          OTHER=$(git log "$RANGE" --pretty=format:'- %s' --no-merges 2>/dev/null | grep -v -E '^- (feat|fix|chore|refactor|docs|style|test|ci)(\([^)]*\))?:' | head -20 || true)
 
           # Build notes
           NOTES=""
