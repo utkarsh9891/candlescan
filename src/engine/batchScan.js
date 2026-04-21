@@ -13,6 +13,111 @@ import { computeRiskScore as computeRiskScoreDefault } from './risk.js';
 import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
 import { classifyNewsSentiment, liquidityTier } from './marketContext.js';
 import { getSector } from './sectorMap.js';
+import { fetchLiveGoogleNewsDetailForSymbol } from './marketContextLive.js';
+
+// Per-(symbol, hour) cache for the Google News per-symbol fetches. Keeps
+// us from re-hitting the Worker during back-to-back scans within the same
+// hour — the CF Worker has its own KV cache layer so this is belt-and-
+// braces, but it also cuts cold-start latency materially on the 2nd scan.
+const NEWS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const newsCache = new Map(); // key: `${symbol}:${hour}`, value: { fetchedAt, score, headlines }
+
+/** Exported for tests only — clears the per-symbol news cache. */
+export function _resetBatchScanNewsCache() {
+  newsCache.clear();
+}
+
+/** Hour bucket for cache keys. Uses local epoch hour — good enough given TTL. */
+function currentHourBucket() {
+  return Math.floor(Date.now() / NEWS_CACHE_TTL_MS);
+}
+
+/**
+ * Tiny semaphore — used to cap concurrent per-symbol news fetches.
+ * The outer scan may run with concurrency=8 (BatchScanPage, NoviceMode);
+ * we keep news at most `newsConcurrency` in flight to stay well under
+ * the Worker's rate-limit budget and avoid starving the chart fetches.
+ */
+function createSemaphore(max) {
+  let active = 0;
+  const queue = [];
+  const drain = () => {
+    if (active >= max || queue.length === 0) return;
+    active++;
+    const next = queue.shift();
+    next();
+  };
+  return {
+    async acquire() {
+      if (active < max) {
+        active++;
+        return;
+      }
+      await new Promise((resolve) => queue.push(resolve));
+    },
+    release() {
+      active = Math.max(0, active - 1);
+      drain();
+    },
+  };
+}
+
+/**
+ * Fetch per-symbol news with a 1-hour cache. Never throws — on any
+ * failure it returns null so the caller can fall back to the
+ * index-wide Moneycontrol map. Telemetry counters are updated in place.
+ *
+ * @param {string} symbol  uppercase NSE symbol (no .NS)
+ * @param {Object} opts
+ * @param {Function} [opts.newsFetchFn]  override fetcher (tests)
+ * @param {Object} opts.telemetry        batchScan telemetry object
+ * @param {Object} [opts.newsSem]        semaphore for concurrency cap
+ * @param {AbortSignal} [opts.signal]
+ * @returns {Promise<{score: number, headlines: Array}|null>}
+ */
+async function fetchPerSymbolNews(symbol, { newsFetchFn, telemetry, newsSem, signal }) {
+  if (!symbol) return null;
+  if (signal?.aborted) return null;
+  const hour = currentHourBucket();
+  const key = `${symbol}:${hour}`;
+  const hit = newsCache.get(key);
+  if (hit) {
+    telemetry.newsCacheHits++;
+    return hit;
+  }
+  if (newsSem) await newsSem.acquire();
+  try {
+    if (signal?.aborted) return null;
+    // Re-check cache after acquiring — a concurrent scanner may have
+    // filled it while we were waiting on the semaphore.
+    const hitAfter = newsCache.get(key);
+    if (hitAfter) {
+      telemetry.newsCacheHits++;
+      return hitAfter;
+    }
+    const fetcher = newsFetchFn || fetchLiveGoogleNewsDetailForSymbol;
+    telemetry.newsFetched++;
+    const res = await fetcher(symbol);
+    if (res && res.score != null) {
+      const value = { score: res.score, headlines: res.headlines || [] };
+      newsCache.set(key, value);
+      // Opportunistic eviction — keep the map small. TTL is enforced by
+      // hour bucketing (keys from older hours never match), so we just
+      // cap total entries as a safeguard against unbounded growth.
+      if (newsCache.size > 4096) {
+        const firstKey = newsCache.keys().next().value;
+        if (firstKey !== undefined) newsCache.delete(firstKey);
+      }
+      return value;
+    }
+    return null;
+  } catch {
+    telemetry.newsFetchErrors++;
+    return null;
+  } finally {
+    if (newsSem) newsSem.release();
+  }
+}
 
 const ACTION_RANK = {
   'STRONG BUY': 5,
@@ -65,6 +170,8 @@ export async function batchScan({
   onResult, // optional: called per-stock as results arrive (for progressive rendering)
   signal,
   fetchFn, // optional: custom fetch function (e.g. fetchDhanOHLCV) — defaults to Yahoo
+  newsFetchFn, // optional: override for per-symbol news fetch (tests)
+  newsConcurrency = 6, // cap on parallel per-symbol news fetches (Worker rate-limit)
 }) {
   // Use provided engine functions or fall back to defaults
   const detectPatterns = engineFns?.detectPatterns || detectPatternsDefault;
@@ -78,6 +185,10 @@ export async function batchScan({
   const results = [];
   let completed = 0;
   const total = symbols.length;
+
+  // Shared semaphore across the whole scan caps per-symbol news fetches
+  // at newsConcurrency even when the outer scan uses a wider chunk size.
+  const newsSem = createSemaphore(Math.max(1, newsConcurrency));
 
   // ── Telemetry ────────────────────────────────────────────────────
   // Tracked for the lifetime of this scan and surfaced via the
@@ -98,6 +209,12 @@ export async function batchScan({
     retriesPerformed: 0,   // count of retry attempts
     retriesRecovered: 0,   // retries that ultimately succeeded
     retriesFailed: 0,      // retries that gave up after max attempts
+    // Per-symbol news fetches (Phase A P1 #7). `newsFetched` counts the
+    // Worker calls we actually made; `newsCacheHits` counts candidates
+    // that resolved from the per-(symbol, hour) cache with no network call.
+    newsFetched: 0,
+    newsCacheHits: 0,
+    newsFetchErrors: 0,
     concurrency,
     delayMs,
   };
@@ -161,11 +278,15 @@ export async function batchScan({
           // Mixes live market context (VIX, flow, news map) with
           // per-stock derived values (sector, news sentiment, liquidity).
           const cleanSym = String(displaySymbol).toUpperCase().replace(/\.NS$/, '');
-          const newsScore = marketContext?.newsMap?.[cleanSym] ?? null;
-          const sentiment = classifyNewsSentiment(newsScore);
+          // Index-wide Moneycontrol map — used as the fallback when the
+          // per-symbol Google News fetch fails or returns nothing.
+          const indexNewsScore = marketContext?.newsMap?.[cleanSym] ?? null;
+          let newsScore = indexNewsScore;
+          let sentiment = classifyNewsSentiment(newsScore);
           // Headlines that drove this symbol's sentiment — surfaced in UI
           // so the trader can see WHY the news layer said bullish/bearish.
-          const headlines = marketContext?.headlinesMap?.[cleanSym] || [];
+          let headlines = marketContext?.headlinesMap?.[cleanSym] || [];
+          let newsSource = indexNewsScore != null ? 'moneycontrol' : null;
           // Liquidity tier from the average bar volume over recent trading
           const recentVols = candles.slice(-60).map((c) => c.v || 0);
           const avgPerBarVol = recentVols.length
@@ -195,6 +316,36 @@ export async function batchScan({
             candles, patterns, box,
             opts: { barIndex: candles.length, indexDirection: indexDirection || null, sym: cleanSym },
           });
+
+          // ── PHASE 2a.5: per-symbol news enrichment (candidates only) ──
+          // Only symbols that actually produced a tradeable signal get a
+          // per-symbol Google News fetch. That keeps Worker traffic to
+          // the ~5% of the universe that matters, vs hitting every symbol.
+          // A per-(symbol, hour) in-memory cache handles repeat scans in
+          // the same session. On fetch failure we fall back to whatever
+          // Moneycontrol gave us (which may be null → NEUTRAL).
+          const isCandidate = risk.direction && risk.action && risk.action !== 'NO TRADE';
+          if (isCandidate) {
+            const enrich = await fetchPerSymbolNews(cleanSym, {
+              newsFetchFn, telemetry, newsSem, signal,
+            });
+            if (enrich && enrich.score != null) {
+              // Per-symbol wins over index-wide: if both exist we average
+              // them (matches enrichWithGoogleNews semantics in
+              // marketContextLive.js); if only Google has data, use it.
+              newsScore = indexNewsScore != null
+                ? (indexNewsScore + enrich.score) / 2
+                : enrich.score;
+              sentiment = classifyNewsSentiment(newsScore);
+              stockContext.sentiment = sentiment;
+              // Merge headlines: per-symbol Google headlines take priority
+              // — they're the ones that drove this specific score.
+              if (enrich.headlines?.length) {
+                headlines = enrich.headlines;
+                newsSource = indexNewsScore != null ? 'both' : 'google';
+              }
+            }
+          }
 
           // ── PHASE 2b: regime gate (post-pattern) ──
           const gateRes = regimeGate(risk.direction, stockContext);
@@ -245,6 +396,7 @@ export async function batchScan({
             newsSentiment: sentiment,
             newsScore: newsScore,
             newsHeadlines: headlines,
+            newsSource,
             vixRegime: stockContext.vixRegime,
             flow: stockContext.flow,
             liquidity,
