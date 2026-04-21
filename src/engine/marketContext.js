@@ -207,6 +207,49 @@ export function flowAlignment(flow, direction) {
   return 0;
 }
 
+/**
+ * Flow-alignment sizing delta. Aligned direction upsizes by 20%,
+ * opposing direction downsizes. NEUTRAL is a no-op. Delta caps at
+ * ±0.20 — this is the only sizing signal from day-level layers aside
+ * from consecutive-losses protection.
+ *
+ * STRONG_BUY corresponds to the task spec's BULLISH_STRONG bucket
+ * (both FII and DII net-buy, combined > Rs 500cr); STRONG_SELL is
+ * the BEARISH_STRONG bucket. Mild BUY / SELL get half the magnitude
+ * (±0.10) since they're lower-conviction flow.
+ *
+ *   STRONG_BUY   on LONG  → +0.20   (aligned, upsize to 120%)
+ *   STRONG_SELL  on SHORT → +0.20   (aligned, upsize to 120%)
+ *   STRONG_BUY   on SHORT → -0.20   (against tide, downsize to 80%)
+ *   STRONG_SELL  on LONG  → -0.20   (against tide, downsize to 80%)
+ *   BUY          on LONG  → +0.10   (mild-aligned)
+ *   SELL         on SHORT → +0.10   (mild-aligned)
+ *   BUY          on SHORT → -0.10   (mild-counter)
+ *   SELL         on LONG  → -0.10   (mild-counter)
+ *   NEUTRAL / null / undefined → 0  (no-op)
+ *
+ * Sizing (not confidence) is the correct place for flow: CLAUDE.md
+ * rule #4 forbids ranking-shift bonuses on day-level layers but
+ * exposure control is the intended home for global context signals
+ * (see docs/INTEGRATIONS.md "Global → exposure, local → rank").
+ *
+ * @param {'STRONG_BUY'|'BUY'|'NEUTRAL'|'SELL'|'STRONG_SELL'|null|undefined} flow
+ * @param {'long'|'short'|null|undefined} direction
+ * @returns {number} delta in [-0.20, +0.20]
+ */
+export function flowSizeDelta(flow, direction) {
+  if (flow == null || flow === 'NEUTRAL') return 0;
+  if (direction !== 'long' && direction !== 'short') return 0;
+  const isStrong = flow === 'STRONG_BUY' || flow === 'STRONG_SELL';
+  const isBullish = flow === 'BUY' || flow === 'STRONG_BUY';
+  const isBearish = flow === 'SELL' || flow === 'STRONG_SELL';
+  const magnitude = isStrong ? 0.20 : 0.10;
+  let sign = 0;
+  if (direction === 'long')  sign = isBullish ? +1 : isBearish ? -1 : 0;
+  if (direction === 'short') sign = isBearish ? +1 : isBullish ? -1 : 0;
+  return sign * magnitude;
+}
+
 // ─── Layer 5: News / catalyst sentiment ─────────────────────────────
 
 /**
