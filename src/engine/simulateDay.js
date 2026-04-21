@@ -102,10 +102,16 @@ export async function runSimulation({
   signal,
   fetchFn, // optional custom fetch (e.g. Dhan/Zerodha)
   pessimisticFills: pessimisticFillsOpt,
+  useFlow: useFlowOpt,
 }) {
   // Default ON: entry/exit slippage + probabilistic intra-bar straddle heuristic.
   // Callers can opt-out by passing pessimisticFills: false (legacy optimistic fills).
   const pessimisticFills = pessimisticFillsOpt !== false;
+  // useFlow: FII/DII flow-alignment sizing (P1 #6). Default ON. Browser
+  // marketCtx currently has flow=null (see docs/AGENTS.md "UI sim parity"),
+  // so the delta is zero in the UI until live FII/DII wiring lands — the
+  // toggle is here for symmetry with the CLI and for future live use.
+  const useFlow = useFlowOpt !== false;
   const { detectPatterns, detectLiquidityBox, computeRiskScore } = engineFns;
   const startSecs = timeToSecs(startTime);
   const endSecs = timeToSecs(endTime);
@@ -410,7 +416,7 @@ export async function runSimulation({
         vixRegime: c.marketCtx?.vixRegime || null,
         flow: c.marketCtx?.flow || null,
         consecutiveLosses,
-      }, { direction: c.risk.direction });
+      }, { direction: c.risk.direction }, { useFlow });
       const basePosition = positionSize * sizeRes.mult;
       const effectivePositionSize = margin ? basePosition * MARGIN_MULTIPLIER : basePosition;
       // Apply entry slippage: buy (long) goes higher, sell-short (short) goes lower.

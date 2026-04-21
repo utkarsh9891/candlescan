@@ -24,6 +24,7 @@ import {
   liquidityConfidenceDelta,
   classifyInstitutionalFlow,
   flowAlignment,
+  flowSizeDelta,
   classifyNewsSentiment,
   newsAlignment,
   composeContextScore,
@@ -108,6 +109,65 @@ describe('marketContext — alignment', () => {
     expect(newsAlignment('BULLISH_STRONG', 'short')).toBe('VETO');
     expect(newsAlignment('BEARISH', 'long')).toBe(-1);
     expect(newsAlignment('BULLISH_STRONG', 'long')).toBe(1);
+  });
+});
+
+describe('flowSizeDelta — FII/DII alignment sizing (P1 #6)', () => {
+  // Strong flow × aligned direction → +0.20 (upsize to 120%)
+  it('STRONG_BUY on LONG  → +0.20', () => {
+    expect(flowSizeDelta('STRONG_BUY', 'long')).toBeCloseTo(+0.20, 10);
+  });
+  it('STRONG_SELL on SHORT → +0.20', () => {
+    expect(flowSizeDelta('STRONG_SELL', 'short')).toBeCloseTo(+0.20, 10);
+  });
+
+  // Strong flow × opposing direction → -0.20 (downsize to 80%)
+  it('STRONG_BUY on SHORT → -0.20', () => {
+    expect(flowSizeDelta('STRONG_BUY', 'short')).toBeCloseTo(-0.20, 10);
+  });
+  it('STRONG_SELL on LONG → -0.20', () => {
+    expect(flowSizeDelta('STRONG_SELL', 'long')).toBeCloseTo(-0.20, 10);
+  });
+
+  // Mild flow → half the magnitude
+  it('BUY on LONG  → +0.10', () => {
+    expect(flowSizeDelta('BUY', 'long')).toBeCloseTo(+0.10, 10);
+  });
+  it('SELL on SHORT → +0.10', () => {
+    expect(flowSizeDelta('SELL', 'short')).toBeCloseTo(+0.10, 10);
+  });
+  it('BUY on SHORT → -0.10', () => {
+    expect(flowSizeDelta('BUY', 'short')).toBeCloseTo(-0.10, 10);
+  });
+  it('SELL on LONG → -0.10', () => {
+    expect(flowSizeDelta('SELL', 'long')).toBeCloseTo(-0.10, 10);
+  });
+
+  // Neutral / missing → 0
+  it('NEUTRAL flow → 0', () => {
+    expect(flowSizeDelta('NEUTRAL', 'long')).toBe(0);
+    expect(flowSizeDelta('NEUTRAL', 'short')).toBe(0);
+  });
+  it('null flow → 0', () => {
+    expect(flowSizeDelta(null, 'long')).toBe(0);
+  });
+  it('undefined flow → 0', () => {
+    expect(flowSizeDelta(undefined, 'long')).toBe(0);
+  });
+  it('missing direction → 0', () => {
+    expect(flowSizeDelta('STRONG_BUY', null)).toBe(0);
+    expect(flowSizeDelta('STRONG_BUY', undefined)).toBe(0);
+    expect(flowSizeDelta('STRONG_BUY', 'sideways')).toBe(0);
+  });
+
+  // Delta always caps at ±0.20
+  it('magnitude never exceeds 0.20', () => {
+    for (const flow of ['STRONG_BUY', 'BUY', 'NEUTRAL', 'SELL', 'STRONG_SELL', null]) {
+      for (const dir of ['long', 'short']) {
+        const d = flowSizeDelta(flow, dir);
+        expect(Math.abs(d), `flow=${flow} dir=${dir}`).toBeLessThanOrEqual(0.20 + 1e-9);
+      }
+    }
   });
 });
 

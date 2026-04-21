@@ -41,7 +41,7 @@
  * mode across four different delta magnitudes.
  */
 
-import { vixAllowsTrading, newsAlignment, liquidityAllowsTrading } from './marketContext.js';
+import { vixAllowsTrading, newsAlignment, liquidityAllowsTrading, flowSizeDelta } from './marketContext.js';
 import { isMarginEligible } from '../data/marginData.js';
 
 /* ── Phase 1: filter (hard binary, pre-pattern) ─────────────────── */
@@ -177,9 +177,10 @@ export function rankScore(risk, ctx) {
  *
  * @param {{vixRegime?, flow?, consecutiveLosses?}} ctx
  * @param {{direction: string}} [candidate]  optional, for flow alignment
+ * @param {{useFlow?: boolean}} [opts]  toggles for individual sizing signals
  * @returns {{mult: number, reasons: string[]}}
  */
-export function sizeMultiplier(ctx, candidate) {
+export function sizeMultiplier(ctx, candidate, opts) {
   const reasons = [];
   let mult = 1.0;
 
@@ -213,17 +214,38 @@ export function sizeMultiplier(ctx, candidate) {
     }
   }
 
-  // FII/DII flow alignment: INFRASTRUCTURE READY, scaling disabled.
-  // Scaling up on aligned flow would need the flow signal to actually
-  // predict sustained intraday direction, which requires historical
-  // FII/DII data I don't have. Once cache/flow/<date>.json is
-  // populated and a predictive test passes, this can be enabled.
-  if (ctx?.flow && candidate?.direction) {
-    reasons.push(`flow:${ctx.flow}(no-op)`);
+  // FII/DII flow alignment (P1 #6): upsize on aligned institutional flow,
+  // downsize when we're trading against the day's institutional tide.
+  // Gated by opts.useFlow (default ON) so backtests can A/B and the
+  // browser sim can flip it off while live FII/DII wiring is pending.
+  //
+  // In the CLI sweep today most days have flow=null (no cached data) or
+  // flow=NEUTRAL, so flowSizeDelta returns 0 for the majority of trades —
+  // zero behavior change. Once cache/flow/<date>.json is populated per
+  // day the delta begins to modulate size; the clamp below keeps it
+  // inside the same [0.5, 1.5] envelope the engine already respected.
+  const useFlow = opts?.useFlow ?? true;
+  if (useFlow && ctx?.flow) {
+    const direction = candidate?.direction;
+    const flowDelta = flowSizeDelta(ctx.flow, direction);
+    if (flowDelta !== 0) {
+      mult *= (1 + flowDelta);
+      const sign = flowDelta > 0 ? '+' : '';
+      reasons.push(`flow:${ctx.flow}(${sign}${flowDelta.toFixed(2)})`);
+    } else {
+      // Keep a breadcrumb so backtests can still attribute trades to
+      // the flow classifier even when the delta is zero (NEUTRAL or
+      // unknown direction).
+      reasons.push(`flow:${ctx.flow}(0)`);
+    }
+  } else if (ctx?.flow) {
+    // useFlow toggled OFF — attribute but do not apply
+    reasons.push(`flow:${ctx.flow}(off)`);
   }
 
-  // Clamp to safe bounds
-  mult = Math.max(0.3, Math.min(1.5, mult));
+  // Clamp to [0.5, 1.5] — respects the existing sizing envelope documented
+  // above and in docs/AGENTS.md. Loss-streak ×0.5 already hits the floor.
+  mult = Math.max(0.5, Math.min(1.5, mult));
 
   return { mult, reasons };
 }

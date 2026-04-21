@@ -72,6 +72,10 @@ function parseArgs() {
   // with --no-save-trades for dry runs that don't want to touch the cache.
   let saveTrades = true;
   let pessimisticFills = true; // default ON (realistic fills w/ slippage + straddle heuristic)
+  // useFlow: gates whether FII/DII flow classification modulates
+  // sizeMultiplier. Default ON so the sweep reflects the shipping
+  // behavior; flip with --no-use-flow to A/B against legacy sizing.
+  let useFlow = true;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -92,10 +96,12 @@ function parseArgs() {
     if (args[i] === '--save-trades') { saveTrades = true; continue; }
     if (args[i] === '--no-pessimistic-fills') { pessimisticFills = false; continue; }
     if (args[i] === '--pessimistic-fills') { pessimisticFills = true; continue; }
+    if (args[i] === '--no-use-flow') { useFlow = false; continue; }
+    if (args[i] === '--use-flow') { useFlow = true; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow };
 }
 
 function parseChartJson(data) {
@@ -214,7 +220,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow }) {
   const trades = [];
   const openPositions = [];
   const tradedSymbols = new Set();
@@ -464,7 +470,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         vixRegime: vixReg,
         flow: flowClass,
         consecutiveLosses,
-      }, { direction: c.risk.direction });
+      }, { direction: c.risk.direction }, { useFlow });
       const basePosition = POSITION_SIZE * sizeRes.mult;
       const effectivePositionSize = marginEnabled ? basePosition * MARGIN_MULTIPLIER : basePosition;
       // Apply entry slippage: buy (long) goes higher; sell-short (short) goes lower.
@@ -612,7 +618,7 @@ function writeTradesJson(resolvedDate, runMeta, summary, trades) {
 }
 
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
@@ -632,7 +638,7 @@ async function main() {
   console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
   console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${maxPositions} | Per trade: Rs.${positionSize.toLocaleString()} | Max trades: ${maxTotalTrades}`);
   console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Volume: auto (25th pctile) | Margin: ${margin ? MARGIN_MULTIPLIER + 'x' : 'Off'}`);
-  console.log(`Pessimistic fills: ${pessimisticFills ? 'ON' : 'OFF'}`);
+  console.log(`Pessimistic fills: ${pessimisticFills ? 'ON' : 'OFF'} | Flow sizing: ${useFlow ? 'ON' : 'OFF'}`);
   console.log('');
 
   // 1. Fetch index constituents (with cache fallback)
@@ -861,7 +867,7 @@ async function main() {
     } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills };
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow };
 
   if (multiWindow) {
     // Multi-window mode: run 3 windows sequentially
@@ -911,7 +917,7 @@ async function main() {
         index: indexName, engine, confidence: minConfidence,
         positionSize, maxPositions, maxTrades: maxTotalTrades,
         timestamp: Math.floor(Date.now() / 1000),
-        margin, pessimisticFills, multiWindow: true,
+        margin, pessimisticFills, useFlow, multiWindow: true,
         fromTime, toTime, timeframe,
       }, {
         totalPnl, wins, losses,
@@ -945,7 +951,7 @@ async function main() {
         index: indexName, engine, confidence: minConfidence,
         positionSize, maxPositions, maxTrades: maxTotalTrades,
         timestamp: Math.floor(Date.now() / 1000),
-        margin, pessimisticFills, multiWindow: false,
+        margin, pessimisticFills, useFlow, multiWindow: false,
         fromTime, toTime, timeframe,
       }, {
         totalPnl, wins, losses,
