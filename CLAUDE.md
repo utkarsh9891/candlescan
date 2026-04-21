@@ -64,11 +64,11 @@ Any strategy change must be validated on the **17-day window Mar 12 - Apr 10 202
 
 **Target**: Rs 10,000+/day consistent on NIFTY SMALLCAP 100, 3L capital, 1 parallel, 5 max trades, 5x margin, 9:30-11:00 window.
 
-**Current baseline** (v0.15.0 + pessimistic fills): +Rs 22,639 over 17 days (Mar 12 – Apr 10 2026), ~Rs 1,330/day avg on the realistic-fill simulator. This is the honest number with 0.03% per-side slippage and an intra-bar straddle heuristic (bar direction picks SL-vs-target when both barriers are touched in the same minute bar).
+**Current baseline** (Wave 2a — regime-aware stops default ON): **+Rs 37,530 over 17 days (Mar 12 – Apr 10 2026)** on the pessimistic-fills simulator, ~Rs 2,200/day avg. The Wave 2a tuning ships `REGIME_STOPS_DEFAULTS` in `src/engine/risk-scalp.js` as `NORMAL=1.5, LOW=1.2, RR=1.8, slFloor=0.005, slCap=0.012, targetCap=0.030`. The win vs legacy (+Rs 8,994) is emergent: at RR=1.8 the post-clamp rr falls below the hard 2.0 min-rr gate for wide-ATR bars, so those trades (previously wide-stop losers) get dropped upstream.
 
-Prior optimistic-fills baseline was +Rs 49,296 (PR #161 era — fills at exact SL/target with no slippage and SL-first-always on straddle bars). Legacy sweep on the same window today is +Rs 45,631; the ~Rs 23k drop is entirely the slippage + straddle realism upgrade, not a strategy regression.
+Prior baseline (Wave 1 — rs-threshold tuning, legacy SL/target): +Rs 28,537. Pre-Wave-1 pessimistic baseline: +Rs 22,639. Pre-pessimistic-fills optimistic baseline: +Rs 49,296 (PR #161 era).
 
-Any strategy commit that regresses the 17-day net P&L below +Rs 19,000 (pessimistic-fills reference) should be flagged and investigated before merging. Use `--no-pessimistic-fills` only to compare against the legacy ~Rs 45,631 reference — it is **not** the shipping configuration.
+Walk-forward harness (`scripts/walk-forward.mjs`) now defaults to `--regime-stops` ON; pass `--no-regime-stops` to A/B against the legacy 0.5%/1.0% path. Any strategy commit that regresses the 17-day net P&L below +Rs 19,000 (pessimistic-fills reference, pre-Wave-1) should be flagged and investigated before merging.
 
 ---
 

@@ -103,6 +103,7 @@ export async function runSimulation({
   fetchFn, // optional custom fetch (e.g. Dhan/Zerodha)
   pessimisticFills: pessimisticFillsOpt,
   useFlow: useFlowOpt,
+  regimeAwareStops: regimeAwareStopsOpt,
 }) {
   // Default ON: entry/exit slippage + probabilistic intra-bar straddle heuristic.
   // Callers can opt-out by passing pessimisticFills: false (legacy optimistic fills).
@@ -112,6 +113,11 @@ export async function runSimulation({
   // so the delta is zero in the UI until live FII/DII wiring lands — the
   // toggle is here for symmetry with the CLI and for future live use.
   const useFlow = useFlowOpt !== false;
+  // regimeAwareStops: Wave 2a ATR-based SL/target. Default ON (matches CLI).
+  // Browser marketCtx has vixRegime=null (no live VIX feed), so regime-aware
+  // gracefully degrades to legacy 0.5%/1.0% today. Kept wired for symmetry
+  // with the CLI and for the day VIX wiring lands in the browser sim.
+  const regimeAwareStops = regimeAwareStopsOpt !== false;
   const { detectPatterns, detectLiquidityBox, computeRiskScore } = engineFns;
   const startSecs = timeToSecs(startTime);
   const endSecs = timeToSecs(endTime);
@@ -372,7 +378,7 @@ export async function runSimulation({
         stockDayOpen,
       });
       const box = detectLiquidityBox(candlesSoFar);
-      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin, marginMap, sym, stockDayOpen } });
+      const risk = computeRiskScore({ candles: candlesSoFar, patterns, box, opts: { barIndex: barIdx, indexDirection: indexAtBar, orbHigh: sd.orbHigh, orbLow: sd.orbLow, prevDayHigh: sd.prevDayHigh, prevDayLow: sd.prevDayLow, margin, marginMap, sym, stockDayOpen, regimeAwareStops, vixRegime: null } });
 
       if (risk.confidence < minConfidence) continue;
       if (!ACTIONABLE.has(risk.action)) continue;

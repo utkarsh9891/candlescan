@@ -70,9 +70,10 @@ export function parseArgs(argv) {
     testDays: 3,
     stride: 1,
     pessimisticFills: true,
-    // Regime-aware ATR-based SL/target (P2 #11). Default OFF matches
-    // simulate-day.mjs — flip with --regime-stops to A/B against legacy.
-    regimeAwareStops: false,
+    // Regime-aware ATR-based SL/target (P2 #11 + Wave 2a tuning). Default
+    // ON matches simulate-day.mjs — flip with --no-regime-stops to A/B
+    // against the legacy 0.5%/1.0% hardcoded path.
+    regimeAwareStops: true,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -129,8 +130,8 @@ function printHelp() {
       '  --stride N              window advance step (default: 1)',
       '  --pessimistic-fills     enable (default ON)',
       '  --no-pessimistic-fills  disable',
-      '  --regime-stops          enable regime-aware ATR-based SL/target (default OFF)',
-      '  --no-regime-stops       disable',
+      '  --regime-stops          enable regime-aware ATR-based SL/target (default ON)',
+      '  --no-regime-stops       disable (use legacy 0.5%/1.0% hardcoded path)',
       '',
     ].join('\n') + '\n',
   );
@@ -240,7 +241,12 @@ function buildWorkerArgs(date, opts) {
   ];
   if (opts.pessimisticFills) a.push('--pessimistic-fills');
   else a.push('--no-pessimistic-fills');
+  // Explicitly pass both variants so the child doesn't silently fall back
+  // to simulate-day.mjs's default when the walk-forward user passed the
+  // negated form. (Pre-Wave-2a this branch only appended the ON flag, which
+  // was correct when the sim default was OFF; the default flipped to ON.)
   if (opts.regimeAwareStops) a.push('--regime-stops');
+  else a.push('--no-regime-stops');
   return a;
 }
 
