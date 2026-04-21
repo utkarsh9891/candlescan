@@ -12,6 +12,11 @@ import { classifyGap, liquidityTier } from './marketContext.js';
 
 const IST_OFFSET = 19800; // +5:30 in seconds
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
+// Pessimistic-fill slippage: 0.03% per side, applied to entry and exit.
+// Roughly one tick on a Rs 1000 stock. Combined with TX_COST_PCT this makes
+// backtests match live fills more honestly — real orders rarely hit the
+// exact SL/target price. Gated by pessimisticFills (default ON).
+const SLIPPAGE_PCT = 0.0003;
 
 /** Last IST trading day (skips weekends; before 3:30 PM uses previous day). */
 /** Returns today if past 12 noon IST (trading data available), else last trading day. */
@@ -96,7 +101,11 @@ export async function runSimulation({
   onProgress,
   signal,
   fetchFn, // optional custom fetch (e.g. Dhan/Zerodha)
+  pessimisticFills: pessimisticFillsOpt,
 }) {
+  // Default ON: entry/exit slippage + probabilistic intra-bar straddle heuristic.
+  // Callers can opt-out by passing pessimisticFills: false (legacy optimistic fills).
+  const pessimisticFills = pessimisticFillsOpt !== false;
   const { detectPatterns, detectLiquidityBox, computeRiskScore } = engineFns;
   const startSecs = timeToSecs(startTime);
   const endSecs = timeToSecs(endTime);
@@ -219,12 +228,39 @@ export async function runSimulation({
       let exitPrice = null;
       let exitReason = null;
 
+      // Intra-bar straddle heuristic: when both SL and target are touched
+      // within the same bar, bar direction (open→close) is a probabilistic
+      // proxy for which barrier was struck first. Bearish bar → SL hit
+      // first on a long; bullish bar → target hit first. Without pessimistic
+      // fills the legacy behaviour is SL-first always (classic conservative).
       if (pos.direction === 'long') {
-        if (bar.l <= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-        else if (bar.h >= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
+        const slHit = bar.l <= pos.sl;
+        const tgtHit = bar.h >= pos.target;
+        if (slHit && tgtHit) {
+          if (pessimisticFills && bar.c >= bar.o) {
+            exitPrice = pos.target; exitReason = 'TARGET';
+          } else {
+            exitPrice = pos.sl; exitReason = 'SL';
+          }
+        } else if (slHit) {
+          exitPrice = pos.sl; exitReason = 'SL';
+        } else if (tgtHit) {
+          exitPrice = pos.target; exitReason = 'TARGET';
+        }
       } else {
-        if (bar.h >= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-        else if (bar.l <= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
+        const slHit = bar.h >= pos.sl;
+        const tgtHit = bar.l <= pos.target;
+        if (slHit && tgtHit) {
+          if (pessimisticFills && bar.c <= bar.o) {
+            exitPrice = pos.target; exitReason = 'TARGET';
+          } else {
+            exitPrice = pos.sl; exitReason = 'SL';
+          }
+        } else if (slHit) {
+          exitPrice = pos.sl; exitReason = 'SL';
+        } else if (tgtHit) {
+          exitPrice = pos.target; exitReason = 'TARGET';
+        }
       }
 
       // Time-based exit: maxHoldBars exceeded (scalping mode)
@@ -240,6 +276,12 @@ export async function runSimulation({
       }
 
       if (exitPrice) {
+        // Apply exit slippage: sell (long exit) goes lower, buy-to-cover (short exit) goes higher.
+        if (pessimisticFills) {
+          exitPrice = pos.direction === 'long'
+            ? exitPrice * (1 - SLIPPAGE_PCT)
+            : exitPrice * (1 + SLIPPAGE_PCT);
+        }
         const grossPnl = pos.direction === 'long'
           ? (exitPrice - pos.entry) * pos.shares
           : (pos.entry - exitPrice) * pos.shares;
@@ -371,12 +413,17 @@ export async function runSimulation({
       }, { direction: c.risk.direction });
       const basePosition = positionSize * sizeRes.mult;
       const effectivePositionSize = margin ? basePosition * MARGIN_MULTIPLIER : basePosition;
-      const shares = Math.floor(effectivePositionSize / c.risk.entry);
+      // Apply entry slippage: buy (long) goes higher, sell-short (short) goes lower.
+      const rawEntry = c.risk.entry;
+      const entryPrice = pessimisticFills
+        ? (c.risk.direction === 'long' ? rawEntry * (1 + SLIPPAGE_PCT) : rawEntry * (1 - SLIPPAGE_PCT))
+        : rawEntry;
+      const shares = Math.floor(effectivePositionSize / entryPrice);
       if (shares < 1) continue;
 
       openPositions.push({
         sym: c.sym, direction: c.risk.direction,
-        entry: c.risk.entry, sl: c.risk.sl, target: c.risk.target,
+        entry: entryPrice, sl: c.risk.sl, target: c.risk.target,
         entryBar: barIdx, shares,
         confidence: c.risk.confidence, action: c.risk.action,
         pattern: c.patterns[0]?.name || 'None',
