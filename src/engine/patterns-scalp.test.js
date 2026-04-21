@@ -102,6 +102,32 @@ describe('patterns-scalp — CLAUDE.md rule #8: single pattern only', () => {
   });
 });
 
+describe('patterns-scalp — RS gate pinned at 1.5%', () => {
+  // The RS gate was raised from 0.8% → 1.5% (2026-04-21) based on empirical
+  // bucket analysis via scripts/analyse-trades.mjs. The 1.0%-1.5% bucket had
+  // PF 0.05 (net losing), while rs >= 1.5% buckets posted PF 2.81 and 5.16.
+  // Pin the threshold in source so a drive-by tweak doesn't silently regress.
+  it('long RS gate is set to 0.015 (1.5%) in source', async () => {
+    const src = await readFile(join(__dirname, 'patterns-scalp.js'), 'utf8');
+    // Long: `(stockIntraPct - idxIntraPct) >= 0.015`
+    expect(src).toMatch(/\(stockIntraPct\s*-\s*idxIntraPct\)\s*>=\s*0\.015\b/);
+  });
+
+  it('short RS gate is set to 0.015 (1.5%) in source', async () => {
+    const src = await readFile(join(__dirname, 'patterns-scalp.js'), 'utf8');
+    // Short: `(idxIntraPct - stockIntraPct) >= 0.015`
+    expect(src).toMatch(/\(idxIntraPct\s*-\s*stockIntraPct\)\s*>=\s*0\.015\b/);
+  });
+
+  it('no surviving 0.008 (legacy 0.8%) RS threshold', async () => {
+    const src = await readFile(join(__dirname, 'patterns-scalp.js'), 'utf8');
+    // The legacy 0.8% gate has been raised; ensure it does not linger as an
+    // executable comparison. (Comments may still reference "0.8%" historically.)
+    expect(src).not.toMatch(/>=\s*0\.008\b/);
+    expect(src).not.toMatch(/<=\s*-0\.008\b/);
+  });
+});
+
 describe('patterns-scalp — output shape when it DOES fire', () => {
   it('returns an array (possibly empty) of objects with the expected keys', () => {
     const r = detectPatterns(baseCandles(), baseOpts);
