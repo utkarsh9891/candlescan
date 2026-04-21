@@ -350,123 +350,7 @@ export default function SettingsPage({
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#1a1d26' }}>Settings</h1>
       </div>
 
-
-      {/* Simple Mode toggle — mirrors the bottom tab bar's expert/novice split */}
-      {onNoviceModeChange && (
-        <div style={card}>
-          <div style={sectionTitle}>App Mode</div>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0',
-          }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1d26' }}>Simple Mode</div>
-              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, lineHeight: 1.4 }}>
-                {noviceMode
-                  ? 'ON — one-button scan, plain-english trade cards, no charts or jargon. Expert tabs (Simulate, Paper) are hidden.'
-                  : 'OFF — full expert UI with charts, filters, all tabs visible.'}
-              </div>
-            </div>
-            <ToggleSwitch checked={noviceMode} onChange={onNoviceModeChange} label="" compact />
-          </div>
-        </div>
-      )}
-
-      {/* Engine selector */}
-      {onEngineVersionChange && (
-        <div style={card}>
-          <div style={sectionTitle}>Engine</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {[
-              { key: 'scalp', label: 'Scalp', color: '#d97706' },
-              { key: 'v2', label: 'Intraday', color: '#2563eb' },
-              { key: 'v1', label: 'Classic', color: '#16a34a' },
-            ].map((v) => (
-              <button key={v.key} type="button" onClick={() => onEngineVersionChange(v.key)}
-                style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '10px 0', border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 8, cursor: 'pointer', background: engineVersion === v.key ? v.color : '#fff', color: engineVersion === v.key ? '#fff' : '#4a5068' }}>
-                {v.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Signal filters */}
-      {onFiltersChange && activeFilters && (
-        <div style={card}>
-          <div style={sectionTitle}>Signal Filters</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {getCategoriesUIForEngine(engineVersion).map(({ key, label }) => (
-              <button key={key} type="button"
-                onClick={() => {
-                  const next = new Set(activeFilters);
-                  if (next.has(key)) next.delete(key); else next.add(key);
-                  onFiltersChange(next);
-                }}
-                style={{
-                  padding: '6px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6,
-                  border: activeFilters.has(key) ? 'none' : '1px solid #e2e5eb',
-                  background: activeFilters.has(key) ? '#2563eb' : '#fff',
-                  color: activeFilters.has(key) ? '#fff' : '#4a5068',
-                  cursor: 'pointer',
-                }}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-            <button type="button" onClick={() => onFiltersChange(new Set(getCategoriesUIForEngine(engineVersion).map(c => c.key)))}
-              style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>
-            <button type="button" onClick={() => onFiltersChange(new Set())}
-              style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#8892a8', cursor: 'pointer' }}>None</button>
-          </div>
-        </div>
-      )}
-
-      {/* Custom indices */}
-      {onAddCustomIndex && (
-        <div style={card}>
-          <div style={sectionTitle}>Custom Indices</div>
-          {customIndices?.length > 0 ? (
-            customIndices.map(ci => (
-              <div key={ci.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#1a1d26' }}>{ci.id}</span>
-                <button type="button" onClick={() => onRemoveCustomIndex(ci.id)} title={`Remove ${ci.id}`}
-                  style={{ width: 24, height: 24, borderRadius: 4, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
-              </div>
-            ))
-          ) : (
-            <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 8 }}>None added yet</div>
-          )}
-          <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
-        </div>
-      )}
-
-      {/* NSE index cache — long-lived localStorage cache that hardens scans
-          against NSE's rate-limited index-constituents API. */}
-      <div style={card}>
-        <div style={sectionTitle}>NSE Index Cache</div>
-        <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 10, lineHeight: 1.5 }}>
-          {nseCacheSummary.count === 0
-            ? 'No indices cached yet. The first scan of each index populates a 7-day browser cache so NSE outages don\u2019t break subsequent scans.'
-            : `${nseCacheSummary.count} ${nseCacheSummary.count === 1 ? 'index' : 'indices'} cached, oldest ${formatAge(nseCacheSummary.oldestAgeMs)} ago.`}
-        </div>
-        <button type="button" onClick={handleClearNseCache}
-          disabled={nseCacheSummary.count === 0}
-          style={{ ...btnSecondary, opacity: nseCacheSummary.count === 0 ? 0.5 : 1 }}>
-          Clear NSE cache
-        </button>
-      </div>
-
-      {/* Market Ticker — picks the index shown in the sticky top strip. */}
-      {onTickerSymbolChange && (
-        <div style={card}>
-          <div style={sectionTitle}>Market Ticker</div>
-          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10, lineHeight: 1.5 }}>
-            The live price strip at the top of the app. Choice is saved on this device.
-          </div>
-          <SingleTickerPicker value={tickerSymbol} onChange={onTickerSymbolChange} />
-        </div>
-      )}
+      {/* ── Broker credentials (daily-use section — kept at the top) ─── */}
 
       {/* Premium Gate */}
       <div style={card}>
@@ -618,6 +502,125 @@ export default function SettingsPage({
         apiSecret={apiSecret}
         onClearZerodha={handleClearZerodha}
       />
+
+      {/* ── Less-frequent preferences below ────────────────────────── */}
+
+      {/* Simple Mode toggle — mirrors the bottom tab bar's expert/novice split */}
+      {onNoviceModeChange && (
+        <div style={card}>
+          <div style={sectionTitle}>App Mode</div>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0',
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1d26' }}>Simple Mode</div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, lineHeight: 1.4 }}>
+                {noviceMode
+                  ? 'ON — one-button scan, plain-english trade cards, no charts or jargon. Expert tabs (Simulate, Paper) are hidden.'
+                  : 'OFF — full expert UI with charts, filters, all tabs visible.'}
+              </div>
+            </div>
+            <ToggleSwitch checked={noviceMode} onChange={onNoviceModeChange} label="" compact />
+          </div>
+        </div>
+      )}
+
+      {/* Engine selector */}
+      {onEngineVersionChange && (
+        <div style={card}>
+          <div style={sectionTitle}>Engine</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[
+              { key: 'scalp', label: 'Scalp', color: '#d97706' },
+              { key: 'v2', label: 'Intraday', color: '#2563eb' },
+              { key: 'v1', label: 'Classic', color: '#16a34a' },
+            ].map((v) => (
+              <button key={v.key} type="button" onClick={() => onEngineVersionChange(v.key)}
+                style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '10px 0', border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 8, cursor: 'pointer', background: engineVersion === v.key ? v.color : '#fff', color: engineVersion === v.key ? '#fff' : '#4a5068' }}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Signal filters */}
+      {onFiltersChange && activeFilters && (
+        <div style={card}>
+          <div style={sectionTitle}>Signal Filters</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {getCategoriesUIForEngine(engineVersion).map(({ key, label }) => (
+              <button key={key} type="button"
+                onClick={() => {
+                  const next = new Set(activeFilters);
+                  if (next.has(key)) next.delete(key); else next.add(key);
+                  onFiltersChange(next);
+                }}
+                style={{
+                  padding: '6px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6,
+                  border: activeFilters.has(key) ? 'none' : '1px solid #e2e5eb',
+                  background: activeFilters.has(key) ? '#2563eb' : '#fff',
+                  color: activeFilters.has(key) ? '#fff' : '#4a5068',
+                  cursor: 'pointer',
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <button type="button" onClick={() => onFiltersChange(new Set(getCategoriesUIForEngine(engineVersion).map(c => c.key)))}
+              style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#2563eb', cursor: 'pointer' }}>All</button>
+            <button type="button" onClick={() => onFiltersChange(new Set())}
+              style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 0', border: '1px solid #e2e5eb', borderRadius: 6, background: '#fff', color: '#8892a8', cursor: 'pointer' }}>None</button>
+          </div>
+        </div>
+      )}
+
+      {/* Custom indices */}
+      {onAddCustomIndex && (
+        <div style={card}>
+          <div style={sectionTitle}>Custom Indices</div>
+          {customIndices?.length > 0 ? (
+            customIndices.map(ci => (
+              <div key={ci.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#1a1d26' }}>{ci.id}</span>
+                <button type="button" onClick={() => onRemoveCustomIndex(ci.id)} title={`Remove ${ci.id}`}
+                  style={{ width: 24, height: 24, borderRadius: 4, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+              </div>
+            ))
+          ) : (
+            <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 8 }}>None added yet</div>
+          )}
+          <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
+        </div>
+      )}
+
+      {/* NSE index cache — long-lived localStorage cache that hardens scans
+          against NSE's rate-limited index-constituents API. */}
+      <div style={card}>
+        <div style={sectionTitle}>NSE Index Cache</div>
+        <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 10, lineHeight: 1.5 }}>
+          {nseCacheSummary.count === 0
+            ? 'No indices cached yet. The first scan of each index populates a 7-day browser cache so NSE outages don\u2019t break subsequent scans.'
+            : `${nseCacheSummary.count} ${nseCacheSummary.count === 1 ? 'index' : 'indices'} cached, oldest ${formatAge(nseCacheSummary.oldestAgeMs)} ago.`}
+        </div>
+        <button type="button" onClick={handleClearNseCache}
+          disabled={nseCacheSummary.count === 0}
+          style={{ ...btnSecondary, opacity: nseCacheSummary.count === 0 ? 0.5 : 1 }}>
+          Clear NSE cache
+        </button>
+      </div>
+
+      {/* Market Ticker — picks the index shown in the sticky top strip. */}
+      {onTickerSymbolChange && (
+        <div style={card}>
+          <div style={sectionTitle}>Market Ticker</div>
+          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10, lineHeight: 1.5 }}>
+            The live price strip at the top of the app. Choice is saved on this device.
+          </div>
+          <SingleTickerPicker value={tickerSymbol} onChange={onTickerSymbolChange} />
+        </div>
+      )}
 
       {/* Debug Mode */}
       {onDebugModeChange && (

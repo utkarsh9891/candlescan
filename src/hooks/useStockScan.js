@@ -82,6 +82,7 @@ export function useStockScan({
   const [zerodhaExpiredMsg, setZerodhaExpiredMsg] = useState('');
   const [lastUsedSource, setLastUsedSource] = useState('yahoo');
   const [sourceDebugReason, setSourceDebugReason] = useState('');
+  const [fromCache, setFromCache] = useState(false);
 
   // Session history (persisted by App via its own effect)
   const [history, setHistory] = useState(() => {
@@ -214,7 +215,7 @@ export function useStockScan({
         usedSource = 'yahoo';
       }
 
-      const { candles: cd, live: lv, simulated: sim, error: err, companyName: cn, displaySymbol, yahooSymbol } = result;
+      const { candles: cd, live: lv, simulated: sim, error: err, companyName: cn, displaySymbol, yahooSymbol, cached: ca } = result;
 
       activeSymRef.current = displaySymbol;
       setSym(displaySymbol);
@@ -223,6 +224,7 @@ export function useStockScan({
       setSimulated(!!sim);
       setLastUsedSource(usedSource);
       setSourceDebugReason(debugReason);
+      setFromCache(!!ca);
 
       // Grow the broad search universe with newly-discovered symbols
       if (displaySymbol && cn && onDiscoverSymbol) {
@@ -362,7 +364,7 @@ export function useStockScan({
     // Lifecycle / status
     loading, simulated, scanError, lastScan,
     // Source tracking
-    yahooSym, lastUsedSource, sourceDebugReason,
+    yahooSym, lastUsedSource, sourceDebugReason, fromCache,
     zerodhaExpiredMsg, setZerodhaExpiredMsg,
     // Quote + news
     quote, stockNews, stockNewsLoading,

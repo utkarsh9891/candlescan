@@ -1,116 +1,171 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { fetchOHLCV } from '../engine/fetcher.js';
+import { getMarketStatus } from '../utils/marketHours.js';
 
 /**
- * TradingView Single Ticker Widget.
+ * Compact live-price strip for NSE indices.
  *
- * Embeds the TradingView `embed-widget-single-quote.js` script inside a
- * container div. The widget itself is rendered by TradingView into an
- * iframe, so the page bundle stays untouched (no added JS in our build).
+ * Renders a single-line horizontal ticker (symbol · last · change · %)
+ * sourced from Yahoo Finance daily candles via the existing fetcher
+ * pipeline. In off-market hours Yahoo returns the last trading day's
+ * close, so the strip stays populated around the clock.
+ *
+ * Refresh cadence:
+ *   - During market hours: re-polls every 60 s.
+ *   - Off-market: single fetch on mount (close won't change until 09:15).
+ *   - Pauses while the tab is hidden, re-fires immediately on focus.
  *
  * Props:
- *   symbol  — TradingView symbol, e.g. "NSE:NIFTY", "NSE:BANKNIFTY". Default "NSE:NIFTY".
- *   height  — px height of the container. Default 40.
- *
- * If the external script fails to load (blocked, offline, SW interference),
- * a tiny inline fallback is rendered instead.
+ *   symbol  — TradingView-style code ("NSE:NIFTY", "NSE:BANKNIFTY", …).
+ *             Mapped internally to a Yahoo symbol.
+ *   height  — px height of the container. Default 28.
  */
-export default function SingleTickerWidget({ symbol = 'NSE:NIFTY', height = 40 }) {
-  const containerRef = useRef(null);
-  const [failed, setFailed] = useState(false);
+
+const LIVE_REFRESH_MS = 60 * 1000;
+
+const TV_TO_YAHOO = {
+  'NSE:NIFTY': { yahoo: '^NSEI', label: 'NIFTY 50' },
+  'NSE:BANKNIFTY': { yahoo: '^NSEBANK', label: 'BANK NIFTY' },
+  'NSE:CNXIT': { yahoo: '^CNXIT', label: 'NIFTY IT' },
+  'NSE:CNXMIDCAP': { yahoo: '^CNXMDCP', label: 'NIFTY MIDCAP 100' },
+  'NSE:CNXSMALLCAP': { yahoo: '^CNXSC', label: 'NIFTY SMALLCAP 100' },
+  'NSE:INDIAVIX': { yahoo: '^INDIAVIX', label: 'INDIA VIX' },
+};
+
+function resolve(symbol) {
+  return TV_TO_YAHOO[symbol] || { yahoo: '^NSEI', label: symbol.split(':').pop() || symbol };
+}
+
+function fmtPrice(n) {
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtChange(n, { signed = false } = {}) {
+  if (!Number.isFinite(n)) return '—';
+  const abs = Math.abs(n).toFixed(2);
+  const sign = signed ? (n >= 0 ? '+' : '−') : '';
+  return `${sign}${abs}`;
+}
+
+export default function SingleTickerWidget({ symbol = 'NSE:NIFTY', height = 28 }) {
+  const { yahoo, label } = resolve(symbol);
+  const [state, setState] = useState({ status: 'loading', last: null, change: null, pct: null });
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    let cancelled = false;
+    setState({ status: 'loading', last: null, change: null, pct: null });
 
-    // Reset any previous render (e.g. when symbol changes)
-    setFailed(false);
-    container.innerHTML = '';
-
-    // TV widget expects a specific nested structure:
-    //   .tradingview-widget-container
-    //     .tradingview-widget-container__widget   <-- TV fills this
-    //     <script src="...embed-widget-single-quote.js">{JSON config}</script>
-    const widgetDiv = document.createElement('div');
-    widgetDiv.className = 'tradingview-widget-container__widget';
-    container.appendChild(widgetDiv);
-
-    const script = document.createElement('script');
-    script.type = 'text/javascript';
-    script.async = true;
-    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js';
-    script.innerHTML = JSON.stringify({
-      symbol,
-      width: '100%',
-      // TV widget has a fixed internal layout — it ignores `height` and
-      // lays itself out at ~120px. We clip via the outer container's
-      // `overflow:hidden` + fixed height so only the top price strip shows.
-      colorTheme: 'light',
-      isTransparent: true,
-      locale: 'en',
-    });
-
-    let didFail = false;
-    const onError = () => {
-      if (didFail) return;
-      didFail = true;
-      setFailed(true);
+    const runFetch = async () => {
+      try {
+        const res = await fetchOHLCV(yahoo, '1d');
+        if (cancelled) return;
+        const candles = res?.candles || [];
+        if (!candles.length) {
+          setState({ status: 'failed', last: null, change: null, pct: null });
+          return;
+        }
+        const last = candles[candles.length - 1];
+        const prev = candles.length >= 2 ? candles[candles.length - 2] : null;
+        const change = prev ? last.c - prev.c : 0;
+        const pct = prev && prev.c ? (change / prev.c) * 100 : 0;
+        setState({ status: 'ok', last: last.c, change, pct });
+      } catch {
+        if (!cancelled) setState({ status: 'failed', last: null, change: null, pct: null });
+      }
     };
-    script.addEventListener('error', onError);
 
-    container.appendChild(script);
+    runFetch();
+
+    let timer = null;
+    const startPolling = () => {
+      if (timer) return;
+      if (document.visibilityState !== 'visible') return;
+      if (!getMarketStatus().isOpen) return;
+      timer = setInterval(runFetch, LIVE_REFRESH_MS);
+    };
+    const stopPolling = () => {
+      if (timer) { clearInterval(timer); timer = null; }
+    };
+    startPolling();
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        runFetch();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
-      script.removeEventListener('error', onError);
-      // Remove the injected script and widget DOM on unmount or symbol change.
-      if (container) container.innerHTML = '';
+      cancelled = true;
+      stopPolling();
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [symbol]);
+  }, [yahoo]);
 
-  if (failed) {
+  const up = state.status === 'ok' && (state.change ?? 0) >= 0;
+  const color = state.status !== 'ok' ? '#8892a8' : up ? '#16a34a' : '#dc2626';
+
+  const containerStyle = {
+    height,
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    color: '#1a1d26',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+  };
+
+  if (state.status === 'loading') {
+    return (
+      <div
+        role="region"
+        aria-label={`Live price ticker: ${symbol}`}
+        data-testid="single-ticker-widget"
+        data-symbol={symbol}
+        style={{ ...containerStyle, color: '#8892a8', fontWeight: 500 }}
+      >
+        <span>{label}</span>
+        <span style={{ fontSize: 11 }}>loading…</span>
+      </div>
+    );
+  }
+
+  if (state.status === 'failed') {
     return (
       <div
         role="status"
         aria-label="Market ticker unavailable"
         data-testid="single-ticker-fallback"
-        style={{
-          height,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 11,
-          color: '#8892a8',
-          background: 'transparent',
-        }}
+        style={{ ...containerStyle, color: '#8892a8', fontWeight: 500, fontSize: 11 }}
       >
-        Market data unavailable
+        {label} · data unavailable
       </div>
     );
   }
 
-  // Wrapper owns the fixed height. The TV widget's own script mutates its
-  // container's inline `style.height` after load (it auto-sizes to ~120px
-  // for the single-quote layout), so we wrap it in a parent with fixed
-  // dimensions + overflow:hidden — the widget still renders, but only the
-  // top price strip is visible.
   return (
     <div
       role="region"
       aria-label={`Live price ticker: ${symbol}`}
       data-testid="single-ticker-widget"
       data-symbol={symbol}
-      style={{
-        height,
-        width: '100%',
-        border: 'none',
-        overflow: 'hidden',
-        background: 'transparent',
-      }}
+      style={containerStyle}
     >
-      <div
-        ref={containerRef}
-        className="tradingview-widget-container"
-        style={{ width: '100%' }}
-      />
+      <span style={{ color: '#4a5068', letterSpacing: 0.3 }}>{label}</span>
+      <span style={{ fontFamily: "'SF Mono', Menlo, monospace" }}>{fmtPrice(state.last)}</span>
+      <span style={{ color, fontFamily: "'SF Mono', Menlo, monospace" }}>
+        {fmtChange(state.change, { signed: true })}
+      </span>
+      <span style={{ color, fontSize: 11 }}>
+        ({up ? '+' : '−'}{Math.abs(state.pct ?? 0).toFixed(2)}%)
+      </span>
     </div>
   );
 }

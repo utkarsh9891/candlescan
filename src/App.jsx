@@ -27,7 +27,7 @@ import { getMarketStatus } from './utils/marketHours.js';
 import { getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { isDynamicIndex } from './data/dynamicIndices.js';
 
-function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
+function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan, fromCache }) {
   const sourceName = dataSource === 'zerodha' ? 'Zerodha Kite' : dataSource === 'dhan' ? 'Dhan' : 'Yahoo Finance';
   const status = getMarketStatus();
   const showDelay = !simulated && candles?.length > 0 && status.isOpen;
@@ -44,6 +44,7 @@ function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan }) {
   return (
     <div style={{ fontSize: 10, color: '#8892a8', textAlign: 'right', marginTop: -8, marginBottom: 4, paddingRight: 2 }}>
       {sourceName}
+      {fromCache && <> · from cache</>}
       {showDelay && <> · delayed by {delayText}</>}
       {lastScan && <> · scanned {lastScan}</>}
     </div>
@@ -78,10 +79,10 @@ export default function App() {
   const [noviceMode, setNoviceMode] = useState(() => {
     try {
       const v = localStorage.getItem('candlescan_novice_mode');
-      // Default novice ON for a first-time visitor (safer for the target user).
-      // Once they flip the switch, we respect their choice.
-      return v == null ? true : v === 'true';
-    } catch { return true; }
+      // Default novice OFF on fresh load — expert surface is the primary
+      // workflow now. Once the user flips the switch, we respect their choice.
+      return v == null ? false : v === 'true';
+    } catch { return false; }
   });
   useEffect(() => {
     try { localStorage.setItem('candlescan_novice_mode', String(noviceMode)); } catch { /* quota */ }
@@ -115,7 +116,8 @@ export default function App() {
   });
 
   // Compact live-price strip in the shell header. Persisted to localStorage
-  // via SingleTickerPicker helpers.
+  // via SingleTickerPicker helpers. The strip itself is non-interactive —
+  // changing the symbol lives in Settings → Market Ticker.
   const [tickerSymbol, setTickerSymbol] = useState(() => readSavedTickerSymbol());
   const handleTickerSymbolChange = useCallback((sym) => {
     setTickerSymbol(sym);
@@ -141,6 +143,7 @@ export default function App() {
     view, setView,
     cameFromBatch, setCameFromBatch,
     cameFromSimulation, setCameFromSimulation,
+    backFromSettings,
   } = useAppView();
 
   // Re-sync dataSource from localStorage when returning from Settings or on page reload
@@ -174,7 +177,7 @@ export default function App() {
     sym, companyName, activeSymRef,
     candles, patterns, box, risk,
     loading, simulated, scanError, lastScan,
-    yahooSym, lastUsedSource, sourceDebugReason,
+    yahooSym, lastUsedSource, sourceDebugReason, fromCache,
     zerodhaExpiredMsg, setZerodhaExpiredMsg,
     quote, stockNews, stockNewsLoading,
     lookbackLevel, loadingMoreHistory,
@@ -276,28 +279,26 @@ export default function App() {
   return (
     <div style={shell}>
       <UpdatePrompt />
-      {/* Sticky compact live-price strip. Always visible across views,
-          pinned to the top of the shell. TradingView's external iframe
-          widget — adds nothing to the main bundle. */}
-      <div
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 50,
-          background: '#f5f6f8',
-          marginLeft: -12,
-          marginRight: -12,
-          marginTop: -12,
-          marginBottom: 10,
-          padding: '4px 12px 2px',
-          borderBottom: '1px solid #e2e5eb',
-        }}
-      >
-        <SingleTickerWidget symbol={tickerSymbol} height={50} />
-      </div>
       {/* Shared header — navigation lives in the bottom tab bar.
           All configuration (engine, filters, data source) is in Settings. */}
       <Header onSettings={() => setView('settings')} />
+
+      {/* Compact live-price strip sourced from Yahoo. Sits below the
+          app header so it doesn't dominate the top. Non-interactive —
+          index selection lives in Settings. */}
+      <div
+        style={{
+          marginLeft: -12,
+          marginRight: -12,
+          marginBottom: 10,
+          padding: '4px 12px',
+          borderTop: '1px solid #eef0f4',
+          borderBottom: '1px solid #eef0f4',
+          background: '#f5f6f8',
+        }}
+      >
+        <SingleTickerWidget symbol={tickerSymbol} height={28} />
+      </div>
 
       {/* Global Scheduled Checks panel — visible in every view. Shows
           a compact strip when schedules exist; expands to a full list
@@ -380,7 +381,7 @@ export default function App() {
       {/* Settings page */}
       {view === 'settings' && (
         <SettingsPage
-          onBack={() => setView('main')}
+          onBack={backFromSettings}
           debugMode={debugMode}
           onDebugModeChange={setDebugMode}
           noviceMode={noviceMode}
@@ -564,7 +565,7 @@ export default function App() {
             onNearLeftEdge={handleLoadMoreHistory}
             loadingMore={loadingMoreHistory}
           />
-          <DataDelayDisclaimer candles={candles} simulated={simulated} dataSource={lastUsedSource} lastScan={lastScan} />
+          <DataDelayDisclaimer candles={candles} simulated={simulated} dataSource={lastUsedSource} lastScan={lastScan} fromCache={fromCache} />
           {debugMode && sourceDebugReason && (
             <div style={{
               fontSize: 10, color: '#64748b', background: '#f8fafc', border: '1px solid #e2e5eb',
