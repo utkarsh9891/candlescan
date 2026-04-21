@@ -76,18 +76,56 @@ export function computeRiskScore({ candles, patterns, opts }) {
   // To clear Rs 10k net on 15L we need ~Rs 13,000 gross = Rs 2,600/trade
   // = 0.173% of 15L per trade.
   //
-  // At R:R 2:1 and 0.5% SL / 1.0% target:
+  // Legacy (flag OFF): 0.5% SL / 1.0% target. At R:R 2:1:
   //   EV per trade = 0.5Y where Y = SL distance = 0.5% = Rs 7,500
   //   50% WR → 0.5 × 0.5% = +0.25% per trade = +Rs 3,750/trade
   //   5 trades × Rs 3,750 − Rs 3,000 tx = Rs 15,750 ✓
   //   45% WR → Rs 2,625/trade × 5 − Rs 3,000 = Rs 10,125 ✓
   //   40% WR → Rs 1,500/trade × 5 − Rs 3,000 = Rs 4,500 ✗
   //
-  // Bottom line with premium broker: strategy needs >=45% WR to clear
-  // the Rs 10k daily target. Standard retail (Rs 1,500/trade) would
-  // need >=50% WR — noticeably harder.
-  const slDist = entry * 0.005;       // 0.5% = Rs 7,500 risk on 15L
-  const targetDist = entry * 0.010;   // 1.0% = Rs 15,000 reward on 15L
+  // Regime-aware (flag ON, opts.regimeAwareStops=true): derive SL/target
+  // from 14-bar ATR, scale by VIX regime — HIGH-VIX widens stops so
+  // ordinary volatility doesn't knock us out; LOW-VIX tightens so we
+  // bank small wins faster. Bounded floor/cap guards against pathological
+  // ATRs (illiquid spike) producing absurd stops. Gracefully degrades to
+  // the legacy hardcoded path when vixRegime is unknown OR the flag is off.
+  const regimeAwareStops = opts?.regimeAwareStops === true;
+  const vixRegime = opts?.vixRegime ?? null;
+  const atrPct = entry > 0 ? atrVal / entry : 0;
+
+  let slDist, targetDist;
+  let regimeAwareUsed = false;
+  let slPct = 0.005;
+  let targetPct = 0.010;
+
+  if (regimeAwareStops && vixRegime && atrPct > 0) {
+    // Calibration note: typical 1m smallcap ATR is 0.1-0.4% of price.
+    // slMult is sized so that NORMAL × median atrPct lands at the legacy
+    // 0.5% anchor; the floor ensures we never tighten BELOW legacy (a
+    // tighter stop would be hit more often and turn the change into a
+    // net-negative). HIGH widens beyond the floor; LOW uses a tighter
+    // target multiplier so the WR it relies on has a shorter path.
+    const slMult = (vixRegime === 'HIGH' || vixRegime === 'PANIC')
+      ? 2.5
+      : (vixRegime === 'LOW' ? 1.5 : 2.0);
+    const rrRatio = (vixRegime === 'HIGH' || vixRegime === 'PANIC')
+      ? 2.0
+      : (vixRegime === 'LOW' ? 2.0 : 2.0);
+    // Floor 0.5% = legacy SL. Never tighten below the empirically-tuned
+    // baseline — tighter stops on 1m smallcap get hit too often and
+    // actively regress the walk-forward P&L (observed in Phase A #11
+    // calibration sweep). Cap 1.5% so one trade can't eat the daily
+    // risk budget. Target cap 3.0% = 2× SL cap so the rr>=2 gate is
+    // never hit by the caps alone.
+    slPct = Math.max(0.005, Math.min(0.015, atrPct * slMult));
+    targetPct = Math.max(0.010, Math.min(0.030, slPct * rrRatio));
+    slDist = entry * slPct;
+    targetDist = entry * targetPct;
+    regimeAwareUsed = true;
+  } else {
+    slDist = entry * 0.005;     // 0.5% = Rs 7,500 risk on 15L
+    targetDist = entry * 0.010; // 1.0% = Rs 15,000 reward on 15L
+  }
 
   let sl, target;
   if (direction === 'long') {
@@ -191,6 +229,16 @@ export function computeRiskScore({ candles, patterns, opts }) {
     preWindowMove: opts?.indexDirection?.preWindowMove ?? null,
     patternStrength: top.strength ?? null,
     idxIntraPct,
+    // Regime-aware stop attribution: the raw ATR, its share of entry, and
+    // the SL/target fractions actually used for this trade. Kept even when
+    // regime-aware stops are OFF so post-hoc analysis can bucket legacy
+    // trades by ATR too (answering "would ATR-based stops have helped?").
+    atr: atrVal,
+    atrPct,
+    slPct: regimeAwareUsed ? slPct : 0.005,
+    targetPct: regimeAwareUsed ? targetPct : 0.010,
+    vixRegime,
+    regimeAwareUsed,
   };
 
   return {

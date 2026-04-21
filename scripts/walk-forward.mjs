@@ -70,6 +70,9 @@ export function parseArgs(argv) {
     testDays: 3,
     stride: 1,
     pessimisticFills: true,
+    // Regime-aware ATR-based SL/target (P2 #11). Default OFF matches
+    // simulate-day.mjs — flip with --regime-stops to A/B against legacy.
+    regimeAwareStops: false,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -89,6 +92,8 @@ export function parseArgs(argv) {
       case '--stride': opts.stride = +next(); break;
       case '--pessimistic-fills': opts.pessimisticFills = true; break;
       case '--no-pessimistic-fills': opts.pessimisticFills = false; break;
+      case '--regime-stops': opts.regimeAwareStops = true; break;
+      case '--no-regime-stops': opts.regimeAwareStops = false; break;
       case '-h':
       case '--help':
         opts.help = true;
@@ -124,6 +129,8 @@ function printHelp() {
       '  --stride N              window advance step (default: 1)',
       '  --pessimistic-fills     enable (default ON)',
       '  --no-pessimistic-fills  disable',
+      '  --regime-stops          enable regime-aware ATR-based SL/target (default OFF)',
+      '  --no-regime-stops       disable',
       '',
     ].join('\n') + '\n',
   );
@@ -233,6 +240,7 @@ function buildWorkerArgs(date, opts) {
   ];
   if (opts.pessimisticFills) a.push('--pessimistic-fills');
   else a.push('--no-pessimistic-fills');
+  if (opts.regimeAwareStops) a.push('--regime-stops');
   return a;
 }
 
