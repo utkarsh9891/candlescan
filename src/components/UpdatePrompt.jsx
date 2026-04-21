@@ -15,6 +15,11 @@ const GITHUB_REPO = 'utkarsh9891/candlescan';
 const LS_LAST_CHECK = 'candlescan_last_update_check';
 const LS_LATEST_VER = 'candlescan_latest_version';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Fast-path probe of /version.json (emitted at build time). Runs on mount
+// and on tab-focus, throttled so rapid focus toggles don't hammer the
+// static host. 30 s is short enough that pre-release deploys surface
+// within a focus cycle but long enough to ignore mouse-over/blur bursts.
+const VERSION_JSON_MIN_INTERVAL_MS = 30 * 1000;
 
 /** Parse "vMAJOR.MINOR.PATCH" → [major, minor, patch] or null */
 function parseSemver(v) {
@@ -68,6 +73,7 @@ export default function UpdatePrompt() {
   const [forceReload, setForceReload] = useState(false);
   const [checkError, setCheckError] = useState('');
   const foundRef = useRef(false);
+  const lastVersionJsonProbeRef = useRef(0);
 
   const currentVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
   // Suppress update banner entirely in dev mode — the local git-describe
@@ -153,6 +159,49 @@ export default function UpdatePrompt() {
       setCheckError(hint);
     }
   }, [currentVersion]);
+
+  // Fast-path probe: fetch /version.json emitted at build time. Runs on
+  // mount and on tab-focus (throttled). Surfaces pre-release deploys
+  // within a focus cycle — much faster than waiting for the 24h GitHub
+  // Releases poll. GitHub check still runs as the authoritative source.
+  const probeVersionJson = useCallback(async () => {
+    if (isDev || !currentVersion || foundRef.current) return;
+    const now = Date.now();
+    if (now - lastVersionJsonProbeRef.current < VERSION_JSON_MIN_INTERVAL_MS) return;
+    lastVersionJsonProbeRef.current = now;
+    try {
+      const base = (typeof document !== 'undefined' && document.baseURI) || '/';
+      const url = new URL('version.json', base).href;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const served = data?.version;
+      if (!served) return;
+      if (isNewer(served, currentVersion)) {
+        setNewVersion(served);
+        setForceReload(true);
+        setShowUpdate(true);
+        foundRef.current = true;
+      }
+    } catch {
+      // Offline / static host hiccup — silent, GitHub poll covers us.
+    }
+  }, [currentVersion, isDev]);
+
+  useEffect(() => {
+    if (isDev) return;
+    probeVersionJson();
+    const onFocus = () => probeVersionJson();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') probeVersionJson();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [probeVersionJson, isDev]);
 
   // Auto-check: once per 24 h on mount
   useEffect(() => {

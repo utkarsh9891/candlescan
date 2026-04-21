@@ -35,6 +35,25 @@ export default defineConfig({
         return [{ tag: 'meta', attrs: { name: 'app-version', content: appVersion }, injectTo: 'head' }];
       },
     },
+    // Emit a small version.json at build time. UpdatePrompt fetches it with
+    // `cache: 'no-store'` on mount and on tab focus so pre-release builds
+    // surface an update banner within seconds of a new deploy instead of
+    // waiting for the 24h GitHub-Releases poll. Deliberately kept outside
+    // workbox's globPatterns so it isn't precached.
+    {
+      name: 'emit-version-json',
+      apply: 'build',
+      generateBundle() {
+        this.emitFile({
+          type: 'asset',
+          fileName: 'version.json',
+          source: JSON.stringify({
+            version: appVersion,
+            builtAt: new Date().toISOString(),
+          }),
+        });
+      },
+    },
     chartCacheDevPlugin(),
     VitePWA({
       registerType: 'prompt',
