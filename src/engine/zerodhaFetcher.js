@@ -4,6 +4,8 @@
  * No external dependencies — plain JS only.
  */
 
+import { TokenExpiredError, consumeSimulatedExpiry } from './brokerErrors.js';
+
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 /** Map user-facing timeframe labels to Kite Connect interval strings. */
@@ -76,6 +78,12 @@ export async function fetchZerodhaOHLCV(symbol, timeframe, { vault, gateToken })
   const fromStr = formatDate(from);
 
   try {
+    // Dev-only: window.__simulateTokenExpiry('kite') flips a one-shot
+    // flag that we consume here so the UI banner can be QA'd without
+    // touching a real broker token. No-op in production bundles.
+    if (consumeSimulatedExpiry('kite')) {
+      throw new TokenExpiredError('kite');
+    }
     const res = await fetch(`${CF_WORKER_URL}/zerodha/historical`, {
       method: 'POST',
       headers: {
@@ -93,6 +101,16 @@ export async function fetchZerodhaOHLCV(symbol, timeframe, { vault, gateToken })
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
+      // Token-expiry detection for Kite. Kite's canonical signal is
+      // HTTP 403 with `error_type: "TokenException"` in the JSON body
+      // ("Incorrect api_key or access_token" is the typical message),
+      // but we also accept a looser textual fallback so any future
+      // wording change doesn't regress this banner to "empty scan".
+      // useStockScan.js already uses a similar pattern (/TokenException/i)
+      // so we keep the two paths in sync.
+      if (res.status === 403 && /TokenException|Incorrect.*(?:api_key|access_token)|token[\s_-]*(?:expired|invalid)/i.test(text)) {
+        throw new TokenExpiredError('kite');
+      }
       throw new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
     }
 
@@ -117,6 +135,9 @@ export async function fetchZerodhaOHLCV(symbol, timeframe, { vault, gateToken })
       companyName: sym,
     };
   } catch (err) {
+    // Bubble token-expiry so batchScan can short-circuit and surface
+    // a reconnect banner. Soft-fail other errors as before.
+    if (err instanceof TokenExpiredError) throw err;
     return {
       candles: [],
       error: err.message || 'Zerodha fetch failed',

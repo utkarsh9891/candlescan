@@ -297,6 +297,7 @@ export default function App() {
               setCameFromBatch(true);
             }}
             scheduledChecks={scheduledChecks}
+            onOpenSettings={() => setView('settings')}
           />
         ) : (
           <BatchScanPage
@@ -313,6 +314,7 @@ export default function App() {
             dataSource={dataSource}
             debugMode={debugMode}
             scheduledChecks={scheduledChecks}
+            onOpenSettings={() => setView('settings')}
           />
         )}
       </div>

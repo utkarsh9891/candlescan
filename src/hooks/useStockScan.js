@@ -47,6 +47,7 @@ import { getGateToken } from '../utils/batchAuth.js';
 import { fetchZerodhaOHLCV } from '../engine/zerodhaFetcher.js';
 import { fetchDhanOHLCV } from '../engine/dhanFetcher.js';
 import { fetchYahooQuote } from '../engine/yahooQuote.js';
+import { isTokenExpiredError } from '../engine/brokerErrors.js';
 
 export function useStockScan({
   dataSource,
@@ -126,7 +127,22 @@ export function useStockScan({
             debugReason = `Setting=zerodha, vault=${!!vault}, gateToken=${!!gateToken} — missing credentials`;
           } else {
             debugReason = `Setting=zerodha, vault=yes, gateToken=yes — calling Zerodha API`;
-            result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
+            // fetchZerodhaOHLCV now throws TokenExpiredError on HTTP 403 +
+            // TokenException (see brokerErrors.js). For the single-stock
+            // flow we catch it here and fold it back into the existing
+            // result.error shape so the downstream classifier (line below)
+            // handles it the same way it always has — clear vault, fall
+            // back to Yahoo, set zerodhaExpiredMsg. The batch/novice flows
+            // take a different path via batchScan's tokenError channel.
+            try {
+              result = await fetchZerodhaOHLCV(s, timeframe, { vault, gateToken });
+            } catch (e) {
+              if (isTokenExpiredError(e)) {
+                result = { candles: [], error: 'Zerodha TokenException: token expired', displaySymbol: s };
+              } else {
+                throw e;
+              }
+            }
             if (result.error) {
               const err = result.error;
               const isTokenExpiry = /TokenException|Incorrect.*api_key|token.*invalid|token.*expired/i.test(err);
@@ -163,7 +179,18 @@ export function useStockScan({
             debugReason = `Setting=dhan, vault=${!!vault}, gateToken=${!!gateToken} — missing credentials`;
           } else {
             debugReason = `Setting=dhan, vault=yes, gateToken=yes — calling Dhan API`;
-            result = await fetchDhanOHLCV(s, timeframe, { vault, gateToken });
+            // Same fold-back as Zerodha above — keep the single-stock
+            // UX (silent fallback to Yahoo) while the batch/novice
+            // flows get the explicit reconnect banner via batchScan.
+            try {
+              result = await fetchDhanOHLCV(s, timeframe, { vault, gateToken });
+            } catch (e) {
+              if (isTokenExpiredError(e)) {
+                result = { candles: [], error: 'Dhan token expired', displaySymbol: s };
+              } else {
+                throw e;
+              }
+            }
             if (result.error) {
               debugReason += ` → error: ${result.error} → fallback Yahoo`;
               result = null;

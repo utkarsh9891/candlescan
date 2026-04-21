@@ -14,6 +14,7 @@ import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecis
 import { classifyNewsSentiment, liquidityTier } from './marketContext.js';
 import { getSector } from './sectorMap.js';
 import { fetchLiveGoogleNewsDetailForSymbol } from './marketContextLive.js';
+import { isTokenExpiredError } from './brokerErrors.js';
 
 // Per-(symbol, hour) cache for the Google News per-symbol fetches. Keeps
 // us from re-hitting the Worker during back-to-back scans within the same
@@ -185,6 +186,11 @@ export async function batchScan({
   const results = [];
   let completed = 0;
   const total = symbols.length;
+  // Token-expiry short-circuit. The first symbol that surfaces a
+  // TokenExpiredError wins; subsequent fetches in the same chunk can
+  // still throw but we only latch the first broker so the UI gets a
+  // single stable banner. Outer loop bails after the current chunk.
+  let tokenError = null;
 
   // Shared semaphore across the whole scan caps per-symbol news fetches
   // at newsConcurrency even when the outer scan uses a wider chunk size.
@@ -221,6 +227,10 @@ export async function batchScan({
 
   for (let i = 0; i < total; i += concurrency) {
     if (signal?.aborted) break;
+    // Short-circuit once a broker token is confirmed expired —
+    // every subsequent fetch would just fail the same way and the
+    // UI already has what it needs to prompt a reconnect.
+    if (tokenError) break;
 
     const chunk = symbols.slice(i, i + concurrency);
 
@@ -407,7 +417,18 @@ export async function batchScan({
             // object of detectProximity or null.
             proximityInfo,
           };
-        } catch {
+        } catch (err) {
+          // Token-expiry is the ONE error we never swallow — it means
+          // every other symbol in this scan will also fail, and the
+          // user needs to know to reconnect. Latch it on the outer
+          // tokenError so the main loop can short-circuit and the
+          // caller can render a banner.
+          if (isTokenExpiredError(err)) {
+            if (!tokenError) tokenError = { broker: err.broker };
+            return null;
+          }
+          // All other errors stay soft-failed so one bad symbol
+          // doesn't kill the entire index scan.
           return null;
         }
       })
@@ -453,12 +474,18 @@ export async function batchScan({
   telemetry.endTs = Date.now();
   telemetry.totalMs = telemetry.endTs - telemetry.startTs;
   telemetry.aborted = !!signal?.aborted;
+  telemetry.tokenExpired = tokenError ? tokenError.broker : null;
 
-  // Return results array (preserving the existing API) with a non-enumerable
-  // `telemetry` property attached so callers that destructure as an array
-  // still work. Callers that want the metrics can read results.telemetry.
+  // Return results array (preserving the existing API) with non-enumerable
+  // `telemetry` + `tokenError` properties attached so callers that
+  // destructure as an array still work. Callers that want the banner
+  // signal read results.tokenError (null when every fetch succeeded).
   Object.defineProperty(results, 'telemetry', {
     value: telemetry,
+    enumerable: false,
+  });
+  Object.defineProperty(results, 'tokenError', {
+    value: tokenError, // { broker: 'dhan' | 'kite' } | null
     enumerable: false,
   });
   return results;

@@ -43,6 +43,7 @@ import { DEFAULT_NSE_INDEX_ID, NSE_INDEX_OPTIONS } from '../config/nseIndices.js
 import {
   PassphraseModal, TradeNowCard, WatchCard, EmptyPanel, SectionHeader,
 } from './NoviceCards.jsx';
+import TokenExpiryBanner from './TokenExpiryBanner.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 
@@ -87,7 +88,7 @@ const NEW_HIGHLIGHT_MS = 45 * 1000;
 
 export default function NoviceModePage({
   savedIndex, onIndexChange, indexOptions, dataSource, onSelectSymbol,
-  scheduledChecks,
+  scheduledChecks, onOpenSettings,
 }) {
   const [scanning, setScanning] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -95,6 +96,7 @@ export default function NoviceModePage({
   const [results, setResults] = useState([]);            // latest full-scan results
   const [lastScanAt, setLastScanAt] = useState(null);
   const [error, setError] = useState('');
+  const [tokenError, setTokenError] = useState(null); // { broker } | null
   const [showPassphrase, setShowPassphrase] = useState(false);
   // NEW-badge tracking: map of symbol → expiresAt timestamp
   const [promotedUntil, setPromotedUntil] = useState({});
@@ -149,6 +151,7 @@ export default function NoviceModePage({
   const runFullScan = useCallback(async (token) => {
     setScanning(true);
     setError('');
+    setTokenError(null);
     setResults([]);
     setProgress({ completed: 0, total: 0, current: 'Loading stocks…' });
 
@@ -220,6 +223,12 @@ export default function NoviceModePage({
       if (Array.isArray(scan)) {
         setResults(scan.slice().sort(sortResults));
       }
+      // Surface broker token expiry as a reconnect banner. batchScan
+      // attaches `tokenError` as a non-enumerable property when any
+      // symbol fetch throws TokenExpiredError.
+      if (scan && scan.tokenError) {
+        setTokenError(scan.tokenError);
+      }
     } catch (e) {
       const msg = e?.message || String(e);
       if (msg.includes('403')) {
@@ -260,6 +269,13 @@ export default function NoviceModePage({
         delayMs: 0,
         fetchFn: createFetchFn(dataSource || 'yahoo'),
       });
+      // If the watch refresh detected a token expiry, stop auto-refresh
+      // from hammering the worker with guaranteed-to-fail requests and
+      // surface the banner. The user's trade-now list stays on screen;
+      // they just need to reconnect to keep getting updates.
+      if (updated && updated.tokenError) {
+        setTokenError(updated.tokenError);
+      }
 
       // Merge: replace matching symbols, keep the rest. Detect promotions
       // (went from non-trade-now → trade-now) and set their NEW badges.
@@ -299,11 +315,14 @@ export default function NoviceModePage({
   useEffect(() => {
     if (!autoRefresh) return;
     if (!results.length) return;
+    // Once a broker token has expired, every refresh would just fail
+    // the same way — pause until the user reconnects and scans again.
+    if (tokenError) return;
     const timer = setInterval(() => {
       runWatchRefresh();
     }, AUTO_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [autoRefresh, results.length, runWatchRefresh]);
+  }, [autoRefresh, results.length, runWatchRefresh, tokenError]);
 
   const handleScanClick = useCallback(() => {
     if (scanning) {
@@ -486,6 +505,13 @@ export default function NoviceModePage({
         }}>
           Refreshing watch list…
         </div>
+      )}
+
+      {/* Broker token expiry — user-visible reconnect CTA. Takes
+          priority over the generic error box so the novice sees a
+          concrete action, not just red text. */}
+      {tokenError && (
+        <TokenExpiryBanner broker={tokenError.broker} onOpenSettings={onOpenSettings} />
       )}
 
       {error && (
