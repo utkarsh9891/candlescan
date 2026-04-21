@@ -14,7 +14,7 @@
  * Setup for LONG:
  *   1. Past 09:30 (barIndex >= 15)
  *   2. Stock is up >= 1% from the session open (meaningful move)
- *   3. Stock is outperforming the index by >= 0.5% (relative strength)
+ *   3. Stock is outperforming the index by >= 1.5% (relative strength)
  *   4. Current price is within 0.4% of the 20-VWAP (a pullback, not a peak)
  *   5. Current bar is bullish (close > open, close > prev close)
  *   6. Current bar has above-average volume (>= 1.3x)
@@ -130,13 +130,18 @@ export function detectPatterns(candles, opts) {
   const sessionLow = Math.min(...session.map(c => c.l));
 
   // ─── LONG setup ───
-  // Strict: stock up 1.5%+, RS 0.8%+, NIFTY trending up, pullback to VWAP.
+  // Strict: stock up 1.5%+, RS 1.5%+, NIFTY trending up, pullback to VWAP.
+  // RS gate raised from 0.8% → 1.5% (2026-04-21): empirical bucket analysis
+  // via `scripts/analyse-trades.mjs` showed the rs 1.0%-1.5% bucket had
+  // n=3 trades, profit factor 0.05 (net losing ~Rs 17k), while rs >= 1.5%
+  // buckets posted PF 2.81 and 5.16. Raising the gate removes the weakest
+  // bucket without touching the profitable tail.
   // Sector gate: if the stock has a known sector, require sector to be
   // not-negative (intraday >= -0.1%). Leader-sector stocks get preference
   // via the strength boost below.
   const longConditions =
     stockIntraPct >= 0.015 &&                         // up 1.5%+ on the day
-    (stockIntraPct - idxIntraPct) >= 0.008 &&         // RS >= 0.8% vs NIFTY
+    (stockIntraPct - idxIntraPct) >= 0.015 &&         // RS >= 1.5% vs NIFTY (raised from 0.8%)
     idxDir?.preWindowMove > 0.002 &&                  // NIFTY must be bullish on opening move
     pullbackPct <= 0.003 &&                           // within 0.3% of VWAP (tighter pullback)
     cur.c > vwap &&                                   // above VWAP
@@ -172,7 +177,7 @@ export function detectPatterns(candles, opts) {
   // ─── SHORT setup ───
   const shortConditions =
     stockIntraPct <= -0.015 &&                        // down 1.5%+ on the day
-    (idxIntraPct - stockIntraPct) >= 0.008 &&         // RS <= -0.8%
+    (idxIntraPct - stockIntraPct) >= 0.015 &&         // RS <= -1.5% (raised from -0.8%, see LONG note)
     idxDir?.preWindowMove < -0.002 &&                 // NIFTY must be bearish on opening move
     pullbackPct <= 0.003 &&                           // within 0.3% of VWAP
     cur.c < vwap &&                                   // below VWAP
