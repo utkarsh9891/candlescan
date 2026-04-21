@@ -1,9 +1,13 @@
 /**
  * Fetch NSE index constituents (CORS-safe: dev proxy / CF worker / fallbacks).
+ * Successful fresh fetches populate the 7-day localStorage cache so the
+ * "NSE Index Cache" section in Settings reflects real activity and
+ * subsequent scans can tolerate NSE outages.
  */
 import { CF_WORKER_URL } from './fetcher.js';
 import { NSE_EQUITY_INDICES_BASE } from '../config/nseIndices.js';
 import { parseNseIndexSymbols, parseNseIndexWithNames } from './nseIndexParse.js';
+import { setCachedIndexSymbols } from './nseIndexCache.js';
 
 function isViteDev() {
   try {
@@ -84,7 +88,10 @@ export async function fetchNseIndexSymbolList(indexName) {
     try {
       const json = await run();
       const syms = parseNseIndexSymbols(json);
-      if (syms.length) return syms;
+      if (syms.length) {
+        setCachedIndexSymbols(indexName, syms);
+        return syms;
+      }
       lastErr = new Error('empty symbol list');
     } catch (e) {
       lastErr = e;
@@ -125,7 +132,10 @@ export async function fetchNseIndexWithNames(indexName) {
     try {
       const json = await run();
       const result = parseNseIndexWithNames(json);
-      if (result.symbols.length) return result;
+      if (result.symbols.length) {
+        setCachedIndexSymbols(indexName, result.symbols);
+        return result;
+      }
       lastErr = new Error('empty symbol list');
     } catch (e) {
       lastErr = e;

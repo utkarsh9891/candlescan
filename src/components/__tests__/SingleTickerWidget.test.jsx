@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+
+// Stub the fetcher so the widget's useEffect doesn't hit the network under jsdom.
+vi.mock('../../engine/fetcher.js', () => ({
+  fetchOHLCV: vi.fn(async () => ({ candles: [] })),
+}));
+
 import SingleTickerWidget from '../SingleTickerWidget.jsx';
 import SingleTickerPicker, {
   SINGLE_TICKER_LS_KEY,
@@ -16,7 +22,7 @@ afterEach(() => {
 });
 
 describe('SingleTickerWidget', () => {
-  it('renders a region with the symbol in its aria-label', () => {
+  it('renders a region with the symbol in its aria-label (loading state on mount)', () => {
     render(<SingleTickerWidget symbol="NSE:NIFTY" />);
     const el = screen.getByTestId('single-ticker-widget');
     expect(el).toBeTruthy();
@@ -25,16 +31,11 @@ describe('SingleTickerWidget', () => {
     expect(el.getAttribute('data-symbol')).toBe('NSE:NIFTY');
   });
 
-  it('injects the TradingView widget container + script into the DOM', () => {
+  it('shows the human label for the chosen symbol', () => {
     render(<SingleTickerWidget symbol="NSE:BANKNIFTY" />);
     const el = screen.getByTestId('single-ticker-widget');
-    // TV widget __widget div is nested inside
-    expect(el.querySelector('.tradingview-widget-container__widget')).toBeTruthy();
-    const script = el.querySelector('script');
-    expect(script).toBeTruthy();
-    expect(script.src).toContain('embed-widget-single-quote.js');
-    // Config JSON embedded in the script's inner text
-    expect(script.innerHTML).toContain('NSE:BANKNIFTY');
+    // Label derived from the TV_TO_YAHOO map
+    expect(el.textContent).toContain('BANK NIFTY');
   });
 
   it('defaults to NSE:NIFTY when no symbol prop is given', () => {

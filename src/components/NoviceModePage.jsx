@@ -120,6 +120,7 @@ export default function NoviceModePage({
   const [capital, setCapital] = useState(DEFAULT_CAPITAL);
 
   const abortRef = useRef(null);
+  const refreshAbortRef = useRef(null);  // separate controller so toggling auto-refresh off can cancel mid-refresh
   const indexDirRef = useRef(null);     // cached between full + refresh scans
   const marketCtxRef = useRef(null);
 
@@ -245,21 +246,31 @@ export default function NoviceModePage({
 
   // Lightweight re-scan of just the top promising symbols. Called
   // by the auto-refresh timer and when the user taps a refresh affordance.
+  // Only re-checks stocks where a signal is still possibly building —
+  // 'imminent' (proximity >= 0.85) and 'building' (proximity >= 0.60).
+  // 'early' and 'ignore' tiers are skipped so we don't burn rate limits
+  // on stocks that are far from actionable.
   const runWatchRefresh = useCallback(async () => {
     if (scanning || refreshing) return;
     if (!results.length) return;
     if (!hasGateToken()) return;
 
-    // Take the top N most interesting symbols (by sort order) — already
-    // includes both actionable and watch-list candidates.
-    const topSymbols = results.slice(0, REFRESH_UNIVERSE_SIZE).map(r => r.symbol);
-    if (!topSymbols.length) return;
+    const watchSymbols = results
+      .filter(r => {
+        const cat = classifyForNovice(r, r.proximityInfo);
+        return cat === 'imminent' || cat === 'building';
+      })
+      .slice(0, REFRESH_UNIVERSE_SIZE)
+      .map(r => r.symbol);
+    if (!watchSymbols.length) return;
 
     setRefreshing(true);
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
     try {
       const token = getGateToken();
       const updated = await batchScan({
-        symbols: topSymbols,
+        symbols: watchSymbols,
         timeframe: '1m',
         gateToken: token,
         engineFns: NOVICE_ENGINE_FNS,
@@ -268,6 +279,7 @@ export default function NoviceModePage({
         concurrency: 8,
         delayMs: 0,
         fetchFn: createFetchFn(dataSource || 'yahoo'),
+        signal: controller.signal,
       });
       // If the watch refresh detected a token expiry, stop auto-refresh
       // from hammering the worker with guaranteed-to-fail requests and
@@ -307,6 +319,7 @@ export default function NoviceModePage({
     } catch {
       /* silent — auto-refresh failures should never interrupt the user */
     } finally {
+      refreshAbortRef.current = null;
       setRefreshing(false);
     }
   }, [results, scanning, refreshing, dataSource]);
@@ -323,6 +336,15 @@ export default function NoviceModePage({
     }, AUTO_REFRESH_MS);
     return () => clearInterval(timer);
   }, [autoRefresh, results.length, runWatchRefresh, tokenError]);
+
+  // When auto-refresh is switched off mid-refresh, abort the in-flight
+  // batchScan so no more re-checks land after the user opted out.
+  useEffect(() => {
+    if (!autoRefresh && refreshAbortRef.current) {
+      refreshAbortRef.current.abort();
+      refreshAbortRef.current = null;
+    }
+  }, [autoRefresh]);
 
   const handleScanClick = useCallback(() => {
     if (scanning) {
@@ -469,7 +491,7 @@ export default function NoviceModePage({
               onChange={(e) => setAutoRefresh(e.target.checked)}
               style={{ margin: 0 }}
             />
-            <span title="Re-scans the top 20 promising stocks every ~75s. If one becomes actionable, it promotes with a NEW badge.">Auto re-check every ~1 min</span>
+            <span title="Every ~75s, re-checks only the stocks where a signal is still possibly building (Almost There / Building). If one becomes actionable, it promotes with a NEW badge. Turning this off cancels any pending re-checks.">Auto re-check every ~1 min</span>
           </label>
         </div>
       </div>
