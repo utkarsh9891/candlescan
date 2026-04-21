@@ -21,6 +21,8 @@ import NoviceModePage from './components/NoviceModePage.jsx';
 import SettingsPage from './components/SettingsPage.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
+import SingleTickerWidget from './components/SingleTickerWidget.jsx';
+import { readSavedTickerSymbol, writeTickerSymbol } from './components/SingleTickerPicker.jsx';
 import { getMarketStatus } from './utils/marketHours.js';
 import { getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
 import { isDynamicIndex } from './data/dynamicIndices.js';
@@ -111,6 +113,14 @@ export default function App() {
   const [dataSource, setDataSourceState] = useState(() => {
     try { return localStorage.getItem('candlescan_data_source') || 'yahoo'; } catch { return 'yahoo'; }
   });
+
+  // Compact live-price strip in the shell header. Persisted to localStorage
+  // via SingleTickerPicker helpers.
+  const [tickerSymbol, setTickerSymbol] = useState(() => readSavedTickerSymbol());
+  const handleTickerSymbolChange = useCallback((sym) => {
+    setTickerSymbol(sym);
+    writeTickerSymbol(sym);
+  }, []);
 
   // Index universe: nseIndex + constituents + broad search universe + custom indices
   const {
@@ -266,6 +276,25 @@ export default function App() {
   return (
     <div style={shell}>
       <UpdatePrompt />
+      {/* Sticky compact live-price strip. Always visible across views,
+          pinned to the top of the shell. TradingView's external iframe
+          widget — adds nothing to the main bundle. */}
+      <div
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 50,
+          background: '#f5f6f8',
+          marginLeft: -12,
+          marginRight: -12,
+          marginTop: -12,
+          marginBottom: 10,
+          padding: '4px 12px 2px',
+          borderBottom: '1px solid #e2e5eb',
+        }}
+      >
+        <SingleTickerWidget symbol={tickerSymbol} height={50} />
+      </div>
       {/* Shared header — navigation lives in the bottom tab bar.
           All configuration (engine, filters, data source) is in Settings. */}
       <Header onSettings={() => setView('settings')} />
@@ -370,6 +399,8 @@ export default function App() {
           customIndices={customIndices}
           onAddCustomIndex={handleAddCustomIndex}
           onRemoveCustomIndex={handleRemoveCustomIndex}
+          tickerSymbol={tickerSymbol}
+          onTickerSymbolChange={handleTickerSymbolChange}
         />
       )}
 
