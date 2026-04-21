@@ -19,6 +19,7 @@ import { computeRiskScore as computeRiskScoreClassic } from '../engine/risk-clas
 import { detectProximity, classifyForNovice } from '../engine/proximity-scalp.js';
 import { getIndexDirection } from '../engine/indexDirection.js';
 import ScheduleCheckButton from './ScheduleCheckButton.jsx';
+import TokenExpiryBanner from './TokenExpiryBanner.jsx';
 
 const mono = "'SF Mono', Menlo, monospace";
 const ALL_TFS = ['1m', '5m', '15m', '30m', '1h', '1d'];
@@ -272,7 +273,7 @@ function getEngineFns(engineVersion) {
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks, onOpenSettings }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const nseIndex = savedIndex || DEFAULT_NSE_INDEX_ID;
   const [timeframe, setTimeframe] = useState('5m');
@@ -280,6 +281,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
   const [progress, setProgress] = useState({ completed: 0, total: 0, current: '' });
   const [results, setResults] = useState([]);
   const [telemetry, setTelemetry] = useState(null);
+  const [tokenError, setTokenError] = useState(null); // { broker } | null
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('actionable'); // 'all' | 'actionable'
   const [dirFilter, setDirFilter] = useState('any'); // 'any' | 'long' | 'short'
@@ -293,6 +295,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
     setError('');
     setResults([]);
     setTelemetry(null);
+    setTokenError(null);
     setProgress({ completed: 0, total: 0, current: 'Loading index...' });
     resetBatchScanRateLimitState();
 
@@ -378,6 +381,12 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
       // Capture telemetry attached as a non-enumerable property on the result array
       if (scanResults && scanResults.telemetry) {
         setTelemetry({ ...scanResults.telemetry, dataSource: dataSource || 'yahoo', index: nseIndex, timeframe, engine: engineVersion });
+      }
+      // Surface broker token expiry as a reconnect banner. batchScan
+      // short-circuits and attaches `tokenError` as a non-enumerable
+      // property on the returned array (same convention as telemetry).
+      if (scanResults && scanResults.tokenError) {
+        setTokenError(scanResults.tokenError);
       }
 
       // ── Phase 5: Google News deep enrichment for top candidates ──
@@ -547,6 +556,12 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
             Scanning {progress.current}...
           </div>
         </div>
+      )}
+
+      {/* Broker token expiry — takes priority over generic scan errors
+          since the user can't do anything until they reconnect. */}
+      {tokenError && (
+        <TokenExpiryBanner broker={tokenError.broker} onOpenSettings={onOpenSettings} />
       )}
 
       {/* Error */}

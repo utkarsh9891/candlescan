@@ -7,6 +7,7 @@
  */
 
 import { resolveDhanSecurityId, hasCachedInstruments } from './dhanInstruments.js';
+import { TokenExpiredError, consumeSimulatedExpiry } from './brokerErrors.js';
 
 const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
@@ -97,6 +98,12 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
   const fromStr = formatDate(from, isIntraday);
 
   try {
+    // Dev-only: window.__simulateTokenExpiry('dhan') flips a one-shot
+    // flag that we consume here so the UI banner can be QA'd without
+    // touching a real broker token. No-op in production bundles.
+    if (consumeSimulatedExpiry('dhan')) {
+      throw new TokenExpiredError('dhan');
+    }
     const reqBody = {
       symbol: sym,
       securityId,
@@ -118,6 +125,18 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
+      // Token-expiry detection. Dhan surfaces expired / invalid tokens as
+      // HTTP 401 (and occasionally 403). The Worker forwards Dhan's
+      // original status + error body verbatim, so we also match on
+      // broker-specific markers in the message: `DH-901` (invalid
+      // token — empirically the most common), `DH-904` (kill-switch),
+      // and textual fallbacks ("Invalid_Authentication", "token expired",
+      // "unauthorized"). Widened on purpose so a future Dhan code change
+      // doesn't silently regress this banner to "empty scan".
+      const tokenMarkerRe = /DH-90[14]|Invalid_Authentication|token[\s_-]*(?:expired|invalid)|unauthori[sz]ed/i;
+      if (res.status === 401 || (res.status === 403 && tokenMarkerRe.test(text)) || tokenMarkerRe.test(text)) {
+        throw new TokenExpiredError('dhan');
+      }
       throw new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
     }
 
@@ -132,6 +151,11 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
       companyName: sym,
     };
   } catch (err) {
+    // Re-throw token-expiry so batchScan can short-circuit and surface
+    // a reconnect banner. Other errors keep the existing soft-fail
+    // contract (empty candles + error string) so one bad symbol
+    // doesn't kill an entire index scan.
+    if (err instanceof TokenExpiredError) throw err;
     return {
       candles: [],
       error: `Dhan fetch failed: ${err.message || err}`,

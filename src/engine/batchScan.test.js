@@ -117,6 +117,45 @@ describe('batchScan', () => {
 
     expect(results).toEqual([]);
   });
+
+  it('attaches tokenError=null to successful scans', async () => {
+    const results = await batchScan({
+      symbols: ['RELIANCE'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+    });
+    expect(results.tokenError).toBeNull();
+  });
+
+  it('surfaces tokenError + short-circuits when fetchFn throws TokenExpiredError', async () => {
+    // Phase A P1 #8 — the failure mode that used to produce an empty
+    // scan with no explanation. A fetchFn that throws TokenExpiredError
+    // must (a) not swallow silently, (b) stop scanning further symbols,
+    // (c) surface tokenError on the returned array so the UI banner
+    // can render.
+    const { TokenExpiredError } = await import('./brokerErrors.js');
+    const calls = [];
+    const failingFetch = async (sym) => {
+      calls.push(sym);
+      throw new TokenExpiredError('dhan');
+    };
+
+    const results = await batchScan({
+      symbols: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      concurrency: 2,
+      fetchFn: failingFetch,
+    });
+
+    expect(results.tokenError).toEqual({ broker: 'dhan' });
+    // Short-circuited — not every symbol got tried (first chunk of 2
+    // fires, then the outer loop breaks on the latched tokenError).
+    expect(calls.length).toBeLessThan(10);
+    expect(results.length).toBe(0);
+  });
 });
 
 describe('batchScan per-symbol news enrichment', () => {
