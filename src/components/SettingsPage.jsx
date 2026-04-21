@@ -5,6 +5,7 @@ import PasteInput from './PasteInput.jsx';
 import ToggleSwitch from './ToggleSwitch.jsx';
 import CustomIndexInput from './CustomIndexInput.jsx';
 import DhanSettings from './DhanSettings.jsx';
+import SingleTickerPicker from './SingleTickerPicker.jsx';
 import { getCategoriesUIForEngine } from '../data/signalCategories.js';
 import { summarizeIndexCache, clearAllIndexCaches } from '../engine/nseIndexCache.js';
 
@@ -43,6 +44,7 @@ export default function SettingsPage({
   engineVersion, onEngineVersionChange,
   activeFilters, onFiltersChange,
   customIndices, onAddCustomIndex, onRemoveCustomIndex,
+  tickerSymbol, onTickerSymbolChange,
 }) {
   const [gateUnlocked, setGateUnlocked] = useState(hasGateToken());
   const [passphrase, setPassphrase] = useState('');
@@ -454,6 +456,17 @@ export default function SettingsPage({
           Clear NSE cache
         </button>
       </div>
+
+      {/* Market Ticker — picks the index shown in the sticky top strip. */}
+      {onTickerSymbolChange && (
+        <div style={card}>
+          <div style={sectionTitle}>Market Ticker</div>
+          <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10, lineHeight: 1.5 }}>
+            The live price strip at the top of the app. Choice is saved on this device.
+          </div>
+          <SingleTickerPicker value={tickerSymbol} onChange={onTickerSymbolChange} />
+        </div>
+      )}
 
       {/* Premium Gate */}
       <div style={card}>
