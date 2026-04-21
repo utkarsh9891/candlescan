@@ -69,7 +69,10 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ['src/**/*.test.js', 'src/**/*.test.jsx'],
+    // Pick up worker/**/*.test.js too so the CF Worker cache-layer tests
+    // run in the same `npm test` pass — pre-push hook catches regressions
+    // without needing a separate vitest invocation.
+    include: ['src/**/*.test.js', 'src/**/*.test.jsx', 'worker/**/*.test.js'],
     environment: 'node',
     // Component tests opt into jsdom via the per-file comment:
     //   // @vitest-environment jsdom

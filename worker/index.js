@@ -6,6 +6,8 @@
  *   - RSA-encrypted credential vault for Zerodha API proxying
  *   - /gate/unlock endpoint to retrieve RSA public key
  *   - /zerodha/historical endpoint for proxied Kite API calls
+ *   - KV-backed stale-on-upstream-fail caches for /market/vix, /market/fiidii,
+ *     /news/moneycontrol, /news/google (see `worker/cache.js`)
  *
  * Deploy:
  *   cd worker && npx wrangler deploy
@@ -16,8 +18,25 @@
  *
  * KV namespace bindings (in wrangler.toml):
  *   RATE_LIMIT — for IP-based daily counters
- *   CANDLESCAN_KV — for storing GATE_PUBLIC_KEY
+ *   CANDLESCAN_KV — for storing GATE_PUBLIC_KEY + rate-hardened cache envelopes
  */
+
+import {
+  kvCacheFlow,
+  cacheHeaders,
+  vixKey,
+  vixTtlMs,
+  VIX_STALE_MAX_MS,
+  fiidiiKey,
+  FIIDII_TTL_MS,
+  FIIDII_STALE_MAX_MS,
+  moneycontrolKey,
+  moneycontrolTtlMs,
+  MONEYCONTROL_STALE_MAX_MS,
+  googleNewsKey,
+  GOOGLE_NEWS_TTL_MS,
+  GOOGLE_NEWS_STALE_MAX_MS,
+} from './cache.js';
 
 const ALLOWED_ORIGINS = [
   'https://utkarsh9891.github.io',
@@ -35,6 +54,9 @@ function corsHeaders(origin) {
     'Access-Control-Allow-Origin': allowed ? origin : ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Gate-Token',
+    // Expose cache-observability headers so the browser / load-test can
+    // read them (custom headers are otherwise hidden by CORS).
+    'Access-Control-Expose-Headers': 'X-Cache, X-Cache-Age, X-Cache-Key, X-Cache-Source, X-RateLimit-Remaining',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -518,12 +540,11 @@ async function handleDhanInstruments(request, env, origin) {
 }
 
 /**
- * Handle /news/moneycontrol — proxy the Moneycontrol RSS feeds.
- * Browser can't hit moneycontrol.com directly (CORS blocked). We
- * merge all 4 feeds into a single JSON array of items so the browser
- * only makes one request. Client-side scoring via newsSentiment.js.
+ * Fetch + parse all Moneycontrol RSS feeds. Throws if every feed
+ * fetch fails (so `kvCacheFlow` can route to the stale fallback).
+ * Returns `{ items, count, fetchedAt }` on success.
  */
-async function handleMoneycontrolNews(request, origin) {
+async function fetchMoneycontrolUpstream() {
   const feeds = [
     'https://www.moneycontrol.com/rss/buzzingstocks.xml',
     'https://www.moneycontrol.com/rss/MCtopnews.xml',
@@ -531,12 +552,18 @@ async function handleMoneycontrolNews(request, origin) {
     'https://www.moneycontrol.com/rss/business.xml',
   ];
   const items = [];
+  let anySuccess = false;
+  let lastErr = null;
   for (const url of feeds) {
     try {
       const resp = await fetch(url, {
         headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
       });
-      if (!resp.ok) continue;
+      if (!resp.ok) {
+        lastErr = new Error(`Moneycontrol ${url} HTTP ${resp.status}`);
+        continue;
+      }
+      anySuccess = true;
       const xml = await resp.text();
       // Parse minimal RSS items inline — same logic as newsSentiment.parseRssItems
       const rawItems = xml.split(/<item[\s>]/i).slice(1);
@@ -549,18 +576,90 @@ async function handleMoneycontrolNews(request, origin) {
         if (d) description = (d[1] || d[2] || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
         if (title) items.push({ title, description });
       }
-    } catch {
-      // Skip failed feeds
+    } catch (err) {
+      lastErr = err;
     }
   }
-  return new Response(JSON.stringify({ items, count: items.length, fetchedAt: new Date().toISOString() }), {
-    status: 200,
-    headers: {
-      ...corsHeaders(origin),
-      'Content-Type': 'application/json',
-      'Cache-Control': 'public, max-age=300', // 5 min cache at edge
-    },
+  if (!anySuccess) throw lastErr || new Error('All Moneycontrol feeds failed');
+  return { items, count: items.length, fetchedAt: new Date().toISOString() };
+}
+
+/**
+ * Handle /news/moneycontrol — proxy the Moneycontrol RSS feeds.
+ * Browser can't hit moneycontrol.com directly (CORS blocked). We
+ * merge all 4 feeds into a single JSON array of items so the browser
+ * only makes one request. Client-side scoring via newsSentiment.js.
+ *
+ * Cache tiering:
+ *   - Market hours: 10 min KV
+ *   - Off-hours: 60 min KV
+ *   - Upstream 502/timeout: stale up to 4h returned with X-Cache=STALE.
+ */
+async function handleMoneycontrolNews(request, env, origin) {
+  const nowMs = Date.now();
+  const key = moneycontrolKey(nowMs);
+  const ttlMs = moneycontrolTtlMs(nowMs);
+
+  try {
+    const result = await kvCacheFlow({
+      kv: env.CANDLESCAN_KV,
+      key,
+      ttlMs,
+      staleMaxMs: MONEYCONTROL_STALE_MAX_MS,
+      fetchFresh: fetchMoneycontrolUpstream,
+      unavailablePayload: () => ({ items: [], count: 0, fetchedAt: new Date().toISOString(), source: 'unavailable' }),
+    });
+    if (result.warnMessage) console.warn(result.warnMessage);
+    return new Response(JSON.stringify(result.payload), {
+      status: 200,
+      headers: {
+        ...corsHeaders(origin),
+        ...cacheHeaders({ status: result.status, key: result.key, ageMs: result.ageMs ?? 0 }),
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=300', // 5 min edge cache on top of KV
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Moneycontrol fetch failed: ${err?.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+/**
+ * Fetch + parse the Google News RSS feed for a given symbol.
+ * Throws on upstream 5xx/429/network — `kvCacheFlow` catches and
+ * falls back to stale cache or the "unavailable" sentinel.
+ */
+async function fetchGoogleNewsUpstream(symbol) {
+  const q = encodeURIComponent(`${symbol} stock NSE`);
+  const feedUrl = `https://news.google.com/rss/search?q=${q}&hl=en-IN&gl=IN&ceid=IN:en`;
+  const resp = await fetch(feedUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
   });
+  // Treat 5xx + 429 as "upstream failed" so the stale branch kicks in.
+  // 4xx other than 429 is a hard fail — propagate so the caller sees it.
+  if (!resp.ok) {
+    const err = new Error(`Google RSS HTTP ${resp.status}`);
+    err.upstreamStatus = resp.status;
+    throw err;
+  }
+  const xml = await resp.text();
+  const items = [];
+  const rawItems = xml.split(/<item[\s>]/i).slice(1);
+  for (const raw of rawItems) {
+    let title = '';
+    const t = raw.match(/<title>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i);
+    if (t) title = (t[1] || t[2] || '').trim();
+    let description = '';
+    const d = raw.match(/<description>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/description>/i);
+    if (d) description = (d[1] || d[2] || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    let pubDate = '';
+    const pd = raw.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
+    if (pd) pubDate = pd[1].trim();
+    if (title) items.push({ title, description, pubDate });
+  }
+  return { symbol, items, count: items.length, fetchedAt: new Date().toISOString() };
 }
 
 /**
@@ -571,102 +670,168 @@ async function handleMoneycontrolNews(request, origin) {
  *
  * Response: { items: [{title, description}, ...], symbol, count }
  * Client parses + scores via newsSentiment.scoreText.
+ *
+ * Cache behaviour:
+ *   - Key `google_news:${symbol}:${YYYY-MM-DD}` in KV.
+ *   - Fresh window 4h, stale window 24h.
+ *   - On upstream 502/timeout/429 with no cache: returns HTTP 200 with
+ *     `{headlines:[], score:null, source:'unavailable'}` so the caller
+ *     doesn't retry pointlessly. X-Cache header = UNAVAILABLE in that case.
  */
-async function handleGoogleNewsForSymbol(request, origin) {
-  try {
-    const url = new URL(request.url);
-    const rawSym = url.searchParams.get('symbol') || '';
-    // Sanitize: only letters, digits, hyphens, ampersand
-    const symbol = rawSym.replace(/[^A-Za-z0-9&-]/g, '').slice(0, 24);
-    if (!symbol) {
-      return new Response(JSON.stringify({ error: 'Missing or invalid symbol parameter' }), {
-        status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
-      });
-    }
-    const q = encodeURIComponent(`${symbol} stock NSE`);
-    const feedUrl = `https://news.google.com/rss/search?q=${q}&hl=en-IN&gl=IN&ceid=IN:en`;
-    const resp = await fetch(feedUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
+async function handleGoogleNewsForSymbol(request, env, origin) {
+  const url = new URL(request.url);
+  const rawSym = url.searchParams.get('symbol') || '';
+  const symbol = rawSym.replace(/[^A-Za-z0-9&-]/g, '').slice(0, 24);
+  if (!symbol) {
+    return new Response(JSON.stringify({ error: 'Missing or invalid symbol parameter' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
     });
-    if (!resp.ok) {
-      return new Response(JSON.stringify({ error: `Google RSS HTTP ${resp.status}` }), {
-        status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
-      });
-    }
-    const xml = await resp.text();
-    // Parse inline (same as Moneycontrol handler)
-    const items = [];
-    const rawItems = xml.split(/<item[\s>]/i).slice(1);
-    for (const raw of rawItems) {
-      let title = '';
-      const t = raw.match(/<title>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i);
-      if (t) title = (t[1] || t[2] || '').trim();
-      let description = '';
-      const d = raw.match(/<description>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/description>/i);
-      if (d) description = (d[1] || d[2] || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      let pubDate = '';
-      const pd = raw.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
-      if (pd) pubDate = pd[1].trim();
-      if (title) items.push({ title, description, pubDate });
-    }
-    return new Response(JSON.stringify({
-      symbol,
-      items,
-      count: items.length,
-      fetchedAt: new Date().toISOString(),
-    }), {
+  }
+
+  const nowMs = Date.now();
+  const key = googleNewsKey(symbol, nowMs);
+
+  try {
+    const result = await kvCacheFlow({
+      kv: env.CANDLESCAN_KV,
+      key,
+      ttlMs: GOOGLE_NEWS_TTL_MS,
+      staleMaxMs: GOOGLE_NEWS_STALE_MAX_MS,
+      fetchFresh: () => fetchGoogleNewsUpstream(symbol),
+      unavailablePayload: () => ({
+        symbol,
+        items: [],
+        headlines: [],
+        score: null,
+        count: 0,
+        fetchedAt: new Date().toISOString(),
+        source: 'unavailable',
+      }),
+    });
+    if (result.warnMessage) console.warn(result.warnMessage);
+    const sourceTag = result.status === 'HIT' ? 'fresh'
+      : result.status === 'MISS' ? 'miss'
+      : result.status === 'STALE' ? 'stale'
+      : 'unavailable';
+    return new Response(JSON.stringify(result.payload), {
       status: 200,
       headers: {
         ...corsHeaders(origin),
+        ...cacheHeaders({ status: result.status, key: result.key, ageMs: result.ageMs ?? 0, cacheSource: sourceTag }),
         'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=600', // 10 min — per-symbol news doesn't change fast
+        'Cache-Control': 'public, max-age=600', // 10 min edge cache on top of KV
       },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: `Google News fetch failed: ${err.message || err}` }), {
-      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    return new Response(JSON.stringify({ error: `Google News fetch failed: ${err?.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
     });
   }
+}
+
+/**
+ * Fetch India VIX close from Yahoo — throws on upstream failure.
+ */
+async function fetchVixUpstream() {
+  const resp = await fetch(
+    'https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=5d',
+    { headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' } }
+  );
+  if (!resp.ok) throw new Error(`Yahoo HTTP ${resp.status}`);
+  const data = await resp.json();
+  const result = data?.chart?.result?.[0];
+  if (!result?.indicators?.quote?.[0]?.close) throw new Error('No VIX data in response');
+  const closes = result.indicators.quote[0].close;
+  let vixClose = null;
+  for (let i = closes.length - 1; i >= 0; i--) {
+    if (closes[i] != null && Number.isFinite(closes[i])) { vixClose = closes[i]; break; }
+  }
+  if (vixClose == null) throw new Error('No finite VIX close found');
+  return { vix: vixClose, fetchedAt: new Date().toISOString() };
 }
 
 /**
  * Handle /market/vix — return current India VIX close + regime.
  * Called once at scan start so the browser has the latest VIX value
  * for regime-gating / sizing in the trade decision flow.
+ *
+ * Cache:
+ *   - Key `nse_vix_daily:${YYYY-MM-DD-IST}`
+ *   - TTL 1h during market hours, 24h otherwise.
+ *   - Stale fallback up to 24h on upstream failure.
  */
-async function handleVixFetch(request, origin) {
+async function handleVixFetch(request, env, origin) {
+  const nowMs = Date.now();
+  const key = vixKey(nowMs);
   try {
-    const resp = await fetch(
-      'https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=5d',
-      { headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' } }
-    );
-    if (!resp.ok) throw new Error(`Yahoo HTTP ${resp.status}`);
-    const data = await resp.json();
-    const result = data?.chart?.result?.[0];
-    if (!result?.indicators?.quote?.[0]?.close) throw new Error('No VIX data in response');
-    const closes = result.indicators.quote[0].close;
-    // Last non-null close
-    let vixClose = null;
-    for (let i = closes.length - 1; i >= 0; i--) {
-      if (closes[i] != null && Number.isFinite(closes[i])) { vixClose = closes[i]; break; }
-    }
-    if (vixClose == null) throw new Error('No finite VIX close found');
-    return new Response(JSON.stringify({
-      vix: vixClose,
-      fetchedAt: new Date().toISOString(),
-    }), {
+    const result = await kvCacheFlow({
+      kv: env.CANDLESCAN_KV,
+      key,
+      ttlMs: vixTtlMs(nowMs),
+      staleMaxMs: VIX_STALE_MAX_MS,
+      fetchFresh: fetchVixUpstream,
+      // No unavailable payload — caller wants a hard 502 if we can't supply VIX.
+    });
+    if (result.warnMessage) console.warn(result.warnMessage);
+    return new Response(JSON.stringify(result.payload), {
       status: 200,
       headers: {
         ...corsHeaders(origin),
+        ...cacheHeaders({ status: result.status, key: result.key, ageMs: result.ageMs ?? 0 }),
         'Content-Type': 'application/json',
         'Cache-Control': 'public, max-age=300',
       },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: `VIX fetch failed: ${err.message || err}` }), {
-      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    return new Response(JSON.stringify({ error: `VIX fetch failed: ${err?.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'UNAVAILABLE', key }), 'Content-Type': 'application/json' },
     });
   }
+}
+
+/**
+ * Fetch FII/DII flow from NSE — throws on upstream failure.
+ */
+async function fetchFiiDiiUpstream() {
+  // Step 1: get session cookies from NSE home page
+  const homeResp = await fetch('https://www.nseindia.com/', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'text/html',
+    },
+  });
+  const setCookies = homeResp.headers.get('set-cookie') || '';
+  const cookieHeader = setCookies
+    .split(/,(?=\s*\w+=)/)
+    .map((c) => c.split(';')[0].trim())
+    .filter(Boolean)
+    .join('; ');
+
+  // Step 2: call the API with cookies + referer
+  const apiResp = await fetch('https://www.nseindia.com/api/fiidiiTradeReact', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'application/json',
+      'Referer': 'https://www.nseindia.com/reports/fii-dii',
+      'Cookie': cookieHeader,
+    },
+  });
+  if (!apiResp.ok) throw new Error(`NSE HTTP ${apiResp.status}`);
+  const rows = await apiResp.json();
+  if (!Array.isArray(rows)) throw new Error('Unexpected response shape');
+
+  let fii = null, dii = null, date = null;
+  for (const r of rows) {
+    const cat = String(r.category || '').toUpperCase();
+    const net = parseFloat(r.netValue);
+    if (!Number.isFinite(net)) continue;
+    if (cat.includes('FII') || cat.includes('FPI')) fii = net;
+    if (cat.includes('DII')) dii = net;
+    if (r.date) date = r.date;
+  }
+  if (fii == null && dii == null) throw new Error('No FII/DII rows found');
+
+  return { fii, dii, date, fetchedAt: new Date().toISOString() };
 }
 
 /**
@@ -674,60 +839,36 @@ async function handleVixFetch(request, origin) {
  * NSE's /api/fiidiiTradeReact requires a session cookie fetched from
  * the home page first, and a Referer header. This handler manages
  * both. Returns { fii: number, dii: number, date: string }.
+ *
+ * Cache:
+ *   - Key `nse_fiidii_daily:${YYYY-MM-DD-IST}`
+ *   - TTL 6h (values update once EOD).
+ *   - Stale fallback up to 48h on upstream failure.
  */
-async function handleFiiDiiFetch(request, origin) {
+async function handleFiiDiiFetch(request, env, origin) {
+  const nowMs = Date.now();
+  const key = fiidiiKey(nowMs);
   try {
-    // Step 1: get session cookies from NSE home page
-    const homeResp = await fetch('https://www.nseindia.com/', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html',
-      },
+    const result = await kvCacheFlow({
+      kv: env.CANDLESCAN_KV,
+      key,
+      ttlMs: FIIDII_TTL_MS,
+      staleMaxMs: FIIDII_STALE_MAX_MS,
+      fetchFresh: fetchFiiDiiUpstream,
     });
-    const setCookies = homeResp.headers.get('set-cookie') || '';
-    // CF Workers flatten set-cookie; extract everything before '; '
-    const cookieHeader = setCookies
-      .split(/,(?=\s*\w+=)/)
-      .map((c) => c.split(';')[0].trim())
-      .filter(Boolean)
-      .join('; ');
-
-    // Step 2: call the API with cookies + referer
-    const apiResp = await fetch('https://www.nseindia.com/api/fiidiiTradeReact', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://www.nseindia.com/reports/fii-dii',
-        'Cookie': cookieHeader,
-      },
-    });
-    if (!apiResp.ok) throw new Error(`NSE HTTP ${apiResp.status}`);
-    const rows = await apiResp.json();
-    if (!Array.isArray(rows)) throw new Error('Unexpected response shape');
-
-    // Find DII and FII/FPI rows
-    let fii = null, dii = null, date = null;
-    for (const r of rows) {
-      const cat = String(r.category || '').toUpperCase();
-      const net = parseFloat(r.netValue);
-      if (!Number.isFinite(net)) continue;
-      if (cat.includes('FII') || cat.includes('FPI')) fii = net;
-      if (cat.includes('DII')) dii = net;
-      if (r.date) date = r.date;
-    }
-    if (fii == null && dii == null) throw new Error('No FII/DII rows found');
-
-    return new Response(JSON.stringify({ fii, dii, date, fetchedAt: new Date().toISOString() }), {
+    if (result.warnMessage) console.warn(result.warnMessage);
+    return new Response(JSON.stringify(result.payload), {
       status: 200,
       headers: {
         ...corsHeaders(origin),
+        ...cacheHeaders({ status: result.status, key: result.key, ageMs: result.ageMs ?? 0 }),
         'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=600', // 10 min cache — values update once/day
+        'Cache-Control': 'public, max-age=600', // 10 min edge cache on top of KV
       },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: `FII/DII fetch failed: ${err.message || err}` }), {
-      status: 502, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    return new Response(JSON.stringify({ error: `FII/DII fetch failed: ${err?.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'UNAVAILABLE', key }), 'Content-Type': 'application/json' },
     });
   }
 }
@@ -1049,7 +1190,7 @@ export default {
     // to build a symbol-sentiment map. We proxy RSS feeds and return the
     // raw XML; the browser parses and scores via newsSentiment.js.
     if (path === '/news/moneycontrol') {
-      return handleMoneycontrolNews(request, origin);
+      return handleMoneycontrolNews(request, env, origin);
     }
 
     // Google News per-symbol proxy — called for deep lookup on the top
@@ -1057,20 +1198,20 @@ export default {
     // depth beyond what Moneycontrol's market-wide feeds provide.
     // Takes ?symbol=RELIANCE (sanitized to alphanumeric + -).
     if (path === '/news/google') {
-      return handleGoogleNewsForSymbol(request, origin);
+      return handleGoogleNewsForSymbol(request, env, origin);
     }
 
     // India VIX live fetch — browser calls this at scan start to get
     // the current VIX close (and thus the current regime).
     if (path === '/market/vix') {
-      return handleVixFetch(request, origin);
+      return handleVixFetch(request, env, origin);
     }
 
     // NSE FII/DII flow — browser calls this at scan start to get today's
     // institutional flow value. NSE requires a session cookie fetched
     // from the home page first.
     if (path === '/market/fiidii') {
-      return handleFiiDiiFetch(request, origin);
+      return handleFiiDiiFetch(request, env, origin);
     }
 
     // GitHub releases proxy — used as fallback when direct GitHub API is blocked (VPN/CORS)
