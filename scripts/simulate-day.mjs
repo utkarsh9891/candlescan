@@ -17,6 +17,9 @@
  *   - Only act on confidence >= 65 and actionable signals
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { detectPatterns as detectPatternsV2 } from '../src/engine/patterns-v2.js';
 import { detectLiquidityBox as detectLiquidityBoxV2 } from '../src/engine/liquidityBox-v2.js';
 import { computeRiskScore as computeRiskScoreV2 } from '../src/engine/risk-v2.js';
@@ -61,6 +64,10 @@ function parseArgs() {
   let toTime = '11:00';
   let multiWindow = false;
   let margin = true;
+  // Save trades + run metadata to cache/trades/<date>.json by default so
+  // post-hoc attribution tools have a stable artifact to consume. Flip
+  // with --no-save-trades for dry runs that don't want to touch the cache.
+  let saveTrades = true;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -77,10 +84,12 @@ function parseArgs() {
     if (args[i] === '--multi-window') { multiWindow = true; continue; }
     if (args[i] === '--no-margin') { margin = false; continue; }
     if (args[i] === '--margin') { margin = true; continue; }
+    if (args[i] === '--no-save-trades') { saveTrades = false; continue; }
+    if (args[i] === '--save-trades') { saveTrades = true; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades };
 }
 
 function parseChartJson(data) {
@@ -263,6 +272,17 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
           entryTime: formatTime(sd.windowCandles[pos.entryBar].t),
           exitTime: formatTime(bar.t),
           confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
+          maxHoldBars: pos.maxHoldBars || null,
+          sizeMult: pos.sizeMult ?? null,
+          // Gate-level attribution: raw features that fed the confidence
+          // score + the day-level context snapshot at entry. Downstream
+          // tooling joins trades back to these without replaying the sim.
+          features: pos.features || null,
+          contextSnapshot: pos.contextSnapshot || {
+            vixRegime: null, gap: null, liquidity: null, flow: null,
+            sentiment: null, sizeMult: pos.sizeMult ?? null,
+            consecutiveLosses: null,
+          },
         });
 
         // Update loss streak: strict loss (netPnl<0) increments, a win resets.
@@ -390,7 +410,7 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       // Per-stock signals only. Currently: technical confidence + news bonus.
       const score = rankScore(risk, marketContext);
 
-      candidates.push({ sym, risk, patterns, score });
+      candidates.push({ sym, risk, patterns, score, marketContext });
     }
 
     // ── PHASE 3b: sort by rank score, pick top N ──
@@ -420,6 +440,18 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         pattern: c.patterns[0]?.name || 'None',
         maxHoldBars: c.risk.maxHoldBars || null,
         sizeMult: sizeRes.mult,
+        // Gate-level attribution payload — stashed on the position so
+        // the exit-time trade record can include it without re-computing.
+        features: c.risk.features || null,
+        contextSnapshot: {
+          vixRegime: c.marketContext?.vixRegime ?? null,
+          gap: c.marketContext?.gap ?? null,
+          liquidity: c.marketContext?.liquidity ?? null,
+          flow: c.marketContext?.flow ?? null,
+          sentiment: c.marketContext?.sentiment ?? null,
+          sizeMult: sizeRes.mult,
+          consecutiveLosses,
+        },
       });
       totalTradesOpened++;
     }
@@ -511,8 +543,33 @@ function buildWindowStockData(allStockBase, wFrom, wTo) {
   return result;
 }
 
+/**
+ * Write a simulation run's trades + summary + run metadata to
+ * cache/trades/<date>.json. Silent beyond the single acknowledgement log.
+ * @param {string} resolvedDate YYYY-MM-DD
+ * @param {object} runMeta
+ * @param {{totalPnl: number, wins: number, losses: number, stocksScanned: number}} summary
+ * @param {Array} trades
+ */
+function writeTradesJson(resolvedDate, runMeta, summary, trades) {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const repoRoot = path.resolve(__dirname, '..');
+  const dir = path.join(repoRoot, 'cache', 'trades');
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${resolvedDate}.json`);
+  const payload = {
+    date: resolvedDate,
+    runMeta,
+    summary,
+    trades,
+  };
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  console.log(`Wrote cache/trades/${resolvedDate}.json`);
+}
+
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
@@ -801,6 +858,22 @@ async function main() {
     console.log('═'.repeat(100));
     printSummary(aggregateTrades, CAPITAL, aggregateCapital, aggregateMaxDD, `AGGREGATE (All Windows) — ${simDate}`);
     console.log('');
+
+    if (saveTrades) {
+      const wins = aggregateTrades.filter(t => t.netPnl > 0).length;
+      const losses = aggregateTrades.filter(t => t.netPnl <= 0).length;
+      const totalPnl = aggregateTrades.reduce((s, t) => s + t.netPnl, 0);
+      writeTradesJson(simDate, {
+        index: indexName, engine, confidence: minConfidence,
+        positionSize, maxPositions, maxTrades: maxTotalTrades,
+        timestamp: Math.floor(Date.now() / 1000),
+        margin, pessimisticFills: false, multiWindow: true,
+        fromTime, toTime, timeframe,
+      }, {
+        totalPnl, wins, losses,
+        stocksScanned: Object.keys(allStockBase).length,
+      }, aggregateTrades);
+    }
   } else {
     // Single window mode
     const windowData = buildWindowStockData(allStockBase, fromTime, toTime);
@@ -819,6 +892,22 @@ async function main() {
     printSummary(result.trades, CAPITAL, result.currentCapital, result.maxDrawdown, `SIMULATION SUMMARY — ${simDate}`);
     console.log(`Stocks scanned:  ${stockCount}`);
     console.log('');
+
+    if (saveTrades) {
+      const wins = result.trades.filter(t => t.netPnl > 0).length;
+      const losses = result.trades.filter(t => t.netPnl <= 0).length;
+      const totalPnl = result.trades.reduce((s, t) => s + t.netPnl, 0);
+      writeTradesJson(simDate, {
+        index: indexName, engine, confidence: minConfidence,
+        positionSize, maxPositions, maxTrades: maxTotalTrades,
+        timestamp: Math.floor(Date.now() / 1000),
+        margin, pessimisticFills: false, multiWindow: false,
+        fromTime, toTime, timeframe,
+      }, {
+        totalPnl, wins, losses,
+        stocksScanned: stockCount,
+      }, result.trades);
+    }
   }
 }
 
