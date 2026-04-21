@@ -36,8 +36,9 @@
  *
  * indexDirection + marketContext are fetched FRESH at fire time. Both
  * are cheap: getIndexDirection caches for 5 minutes internally and
- * fetchLiveMarketContext caches per day. This avoids stale snapshots
- * from the schedule-time context.
+ * fetchLiveMarketContext caches each layer for 10 minutes, which
+ * matches the Worker's VIX / Moneycontrol refresh cadence and lets
+ * the HIGH-VIX veto see real intraday regime changes.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
