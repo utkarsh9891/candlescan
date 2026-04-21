@@ -7,6 +7,7 @@
 import { TokenExpiredError, consumeSimulatedExpiry, isTokenExpiredError } from './brokerErrors.js';
 import { createSemaphore, retryWithBackoff } from './rateLimit.js';
 import { getCachedChart, setCachedChart } from './chartCacheLocal.js';
+import { CF_WORKER_URL } from './transport.js';
 
 // Kite Connect caps historical-data requests at 3 req/sec. Cap at 2
 // concurrent for a 33% safety margin. Shared across all callers.
@@ -25,8 +26,6 @@ function shouldRetryKite(err) {
   if (/HTTP 5\d\d\b/.test(msg)) return true;
   return false;
 }
-
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 /** Map user-facing timeframe labels to Kite Connect interval strings. */
 const KITE_INTERVAL_MAP = {

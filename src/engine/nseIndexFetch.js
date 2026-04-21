@@ -4,7 +4,7 @@
  * "NSE Index Cache" section in Settings reflects real activity and
  * subsequent scans can tolerate NSE outages.
  */
-import { CF_WORKER_URL } from './fetcher.js';
+import { CF_WORKER_URL } from './transport.js';
 import { NSE_EQUITY_INDICES_BASE } from '../config/nseIndices.js';
 import { parseNseIndexSymbols, parseNseIndexWithNames } from './nseIndexParse.js';
 import { setCachedIndexSymbols } from './nseIndexCache.js';

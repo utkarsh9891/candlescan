@@ -15,7 +15,8 @@
  * KV cache had patchy coverage of small-cap names).
  */
 
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
+import { CF_WORKER_URL } from './transport.js';
+
 const LS_KEY = 'candlescan_dhan_instruments';
 const LS_META_KEY = 'candlescan_dhan_instruments_meta';
 

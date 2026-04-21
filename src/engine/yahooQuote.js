@@ -1,7 +1,7 @@
 /**
  * Yahoo v7 quote (bid/ask where available) — uses centralized CF proxy.
  */
-import { CF_WORKER_URL } from './fetcher.js';
+import { CF_WORKER_URL } from './transport.js';
 
 function quoteUrl(symbols) {
   return `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;

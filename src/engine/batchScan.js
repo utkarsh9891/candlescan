@@ -5,7 +5,8 @@
  * Computes ORB + prev day levels per stock for pattern context.
  */
 
-import { fetchOHLCV, CF_WORKER_URL } from './fetcher.js';
+import { fetchOHLCV } from './fetcher.js';
+import { CF_WORKER_URL } from './transport.js';
 // Fallback imports (used when engineFns not provided)
 import { detectPatterns as detectPatternsDefault } from './patterns.js';
 import { detectLiquidityBox as detectLiquidityBoxDefault } from './liquidityBox.js';

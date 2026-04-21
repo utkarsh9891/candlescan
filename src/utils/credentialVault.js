@@ -1,4 +1,4 @@
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
+import { CF_WORKER_URL } from '../engine/transport.js';
 
 const LS_KEYS = {
   gateHash: 'candlescan_gate_hash',

@@ -4,7 +4,7 @@
  * Prevents the recurring issue of individual callers forgetting to send the token.
  */
 
-import { CF_WORKER_URL } from '../engine/fetcher.js';
+import { CF_WORKER_URL } from '../engine/transport.js';
 
 const HASH_RE = /^[a-f0-9]{64}$/;
 
