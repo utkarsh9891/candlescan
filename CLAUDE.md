@@ -64,9 +64,11 @@ Any strategy change must be validated on the **17-day window Mar 12 - Apr 10 202
 
 **Target**: Rs 10,000+/day consistent on NIFTY SMALLCAP 100, 3L capital, 1 parallel, 5 max trades, 5x margin, 9:30-11:00 window.
 
-**Current baseline** (PR #161 merged): +Rs 49,296 over 17 days (~Rs 2,900/day avg). 5/17 days hit the 10k target. This is a foundation, not the final state — the gap to 10k/day-every-day is being closed by progressively populating the multi-factor layers with real data (news, flow, etc.).
+**Current baseline** (v0.15.0 + pessimistic fills): +Rs 22,639 over 17 days (Mar 12 – Apr 10 2026), ~Rs 1,330/day avg on the realistic-fill simulator. This is the honest number with 0.03% per-side slippage and an intra-bar straddle heuristic (bar direction picks SL-vs-target when both barriers are touched in the same minute bar).
 
-Any strategy commit that regresses the 17-day net P&L below Rs 45,000 should be flagged and investigated before merging.
+Prior optimistic-fills baseline was +Rs 49,296 (PR #161 era — fills at exact SL/target with no slippage and SL-first-always on straddle bars). Legacy sweep on the same window today is +Rs 45,631; the ~Rs 23k drop is entirely the slippage + straddle realism upgrade, not a strategy regression.
+
+Any strategy commit that regresses the 17-day net P&L below +Rs 19,000 (pessimistic-fills reference) should be flagged and investigated before merging. Use `--no-pessimistic-fills` only to compare against the legacy ~Rs 45,631 reference — it is **not** the shipping configuration.
 
 ---
 

@@ -47,6 +47,9 @@ const TIMEFRAME_MAP = {
 // STT + exchange + GST). Standard retail plans are ~0.05% per side;
 // configure differently if needed.
 const TX_COST_PCT = 0.0002;
+// Pessimistic-fill slippage: 0.03% per side (mirrors src/engine/simulateDay.js).
+// Applied only when pessimisticFills is true (default ON).
+const SLIPPAGE_PCT = 0.0003;
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 
 function parseArgs() {
@@ -68,6 +71,7 @@ function parseArgs() {
   // post-hoc attribution tools have a stable artifact to consume. Flip
   // with --no-save-trades for dry runs that don't want to touch the cache.
   let saveTrades = true;
+  let pessimisticFills = true; // default ON (realistic fills w/ slippage + straddle heuristic)
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -86,10 +90,12 @@ function parseArgs() {
     if (args[i] === '--margin') { margin = true; continue; }
     if (args[i] === '--no-save-trades') { saveTrades = false; continue; }
     if (args[i] === '--save-trades') { saveTrades = true; continue; }
+    if (args[i] === '--no-pessimistic-fills') { pessimisticFills = false; continue; }
+    if (args[i] === '--pessimistic-fills') { pessimisticFills = true; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills };
 }
 
 function parseChartJson(data) {
@@ -208,7 +214,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills }) {
   const trades = [];
   const openPositions = [];
   const tradedSymbols = new Set();
@@ -236,12 +242,38 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       let exitPrice = null;
       let exitReason = null;
 
+      // Intra-bar straddle heuristic: when a single bar touches both SL and
+      // target, bar direction (open→close) is a probabilistic proxy for
+      // which barrier was hit first. With pessimisticFills off we fall back
+      // to legacy SL-first-always behaviour.
       if (pos.direction === 'long') {
-        if (bar.l <= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-        else if (bar.h >= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
+        const slHit = bar.l <= pos.sl;
+        const tgtHit = bar.h >= pos.target;
+        if (slHit && tgtHit) {
+          if (pessimisticFills && bar.c >= bar.o) {
+            exitPrice = pos.target; exitReason = 'TARGET';
+          } else {
+            exitPrice = pos.sl; exitReason = 'SL';
+          }
+        } else if (slHit) {
+          exitPrice = pos.sl; exitReason = 'SL';
+        } else if (tgtHit) {
+          exitPrice = pos.target; exitReason = 'TARGET';
+        }
       } else {
-        if (bar.h >= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-        else if (bar.l <= pos.target) { exitPrice = pos.target; exitReason = 'TARGET'; }
+        const slHit = bar.h >= pos.sl;
+        const tgtHit = bar.l <= pos.target;
+        if (slHit && tgtHit) {
+          if (pessimisticFills && bar.c <= bar.o) {
+            exitPrice = pos.target; exitReason = 'TARGET';
+          } else {
+            exitPrice = pos.sl; exitReason = 'SL';
+          }
+        } else if (slHit) {
+          exitPrice = pos.sl; exitReason = 'SL';
+        } else if (tgtHit) {
+          exitPrice = pos.target; exitReason = 'TARGET';
+        }
       }
 
       if (!exitPrice && pos.maxHoldBars && (barIdx - pos.entryBar) >= pos.maxHoldBars) {
@@ -255,6 +287,12 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       }
 
       if (exitPrice) {
+        // Apply exit slippage: sell (long exit) goes lower; buy-to-cover (short exit) goes higher.
+        if (pessimisticFills) {
+          exitPrice = pos.direction === 'long'
+            ? exitPrice * (1 - SLIPPAGE_PCT)
+            : exitPrice * (1 + SLIPPAGE_PCT);
+        }
         const grossPnl = pos.direction === 'long'
           ? (exitPrice - pos.entry) * pos.shares
           : (pos.entry - exitPrice) * pos.shares;
@@ -429,12 +467,17 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
       }, { direction: c.risk.direction });
       const basePosition = POSITION_SIZE * sizeRes.mult;
       const effectivePositionSize = marginEnabled ? basePosition * MARGIN_MULTIPLIER : basePosition;
-      const shares = Math.floor(effectivePositionSize / c.risk.entry);
+      // Apply entry slippage: buy (long) goes higher; sell-short (short) goes lower.
+      const rawEntry = c.risk.entry;
+      const entryPrice = pessimisticFills
+        ? (c.risk.direction === 'long' ? rawEntry * (1 + SLIPPAGE_PCT) : rawEntry * (1 - SLIPPAGE_PCT))
+        : rawEntry;
+      const shares = Math.floor(effectivePositionSize / entryPrice);
       if (shares < 1) continue;
 
       openPositions.push({
         sym: c.sym, direction: c.risk.direction,
-        entry: c.risk.entry, sl: c.risk.sl, target: c.risk.target,
+        entry: entryPrice, sl: c.risk.sl, target: c.risk.target,
         entryBar: barIdx, shares,
         confidence: c.risk.confidence, action: c.risk.action,
         pattern: c.patterns[0]?.name || 'None',
@@ -569,7 +612,7 @@ function writeTradesJson(resolvedDate, runMeta, summary, trades) {
 }
 
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
@@ -589,6 +632,7 @@ async function main() {
   console.log(`Index: ${indexName} | Timeframe: ${timeframe} | Date: ${targetDate || 'latest'} | Engine: ${engine}`);
   console.log(`Capital: Rs.${CAPITAL.toLocaleString()} | Max concurrent: ${maxPositions} | Per trade: Rs.${positionSize.toLocaleString()} | Max trades: ${maxTotalTrades}`);
   console.log(`Min confidence: ${minConfidence} | Skip first ${skipFirstBars} bars | Volume: auto (25th pctile) | Margin: ${margin ? MARGIN_MULTIPLIER + 'x' : 'Off'}`);
+  console.log(`Pessimistic fills: ${pessimisticFills ? 'ON' : 'OFF'}`);
   console.log('');
 
   // 1. Fetch index constituents (with cache fallback)
@@ -817,7 +861,7 @@ async function main() {
     } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap };
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills };
 
   if (multiWindow) {
     // Multi-window mode: run 3 windows sequentially
@@ -867,7 +911,7 @@ async function main() {
         index: indexName, engine, confidence: minConfidence,
         positionSize, maxPositions, maxTrades: maxTotalTrades,
         timestamp: Math.floor(Date.now() / 1000),
-        margin, pessimisticFills: false, multiWindow: true,
+        margin, pessimisticFills, multiWindow: true,
         fromTime, toTime, timeframe,
       }, {
         totalPnl, wins, losses,
@@ -901,7 +945,7 @@ async function main() {
         index: indexName, engine, confidence: minConfidence,
         positionSize, maxPositions, maxTrades: maxTotalTrades,
         timestamp: Math.floor(Date.now() / 1000),
-        margin, pessimisticFills: false, multiWindow: false,
+        margin, pessimisticFills, multiWindow: false,
         fromTime, toTime, timeframe,
       }, {
         totalPnl, wins, losses,
