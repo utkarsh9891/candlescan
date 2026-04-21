@@ -10,6 +10,7 @@ import { resolveDhanSecurityId, hasCachedInstruments } from './dhanInstruments.j
 import { TokenExpiredError, consumeSimulatedExpiry, isTokenExpiredError } from './brokerErrors.js';
 import { createSemaphore, retryWithBackoff } from './rateLimit.js';
 import { getCachedChart, setCachedChart } from './chartCacheLocal.js';
+import { CF_WORKER_URL } from './transport.js';
 
 // Dhan enforces 10 req/sec, 250 req/min on the historical endpoint. Cap at
 // 5 concurrent as a 50% safety margin — matches the warm-chart-cache pattern
@@ -31,8 +32,6 @@ function shouldRetryDhan(err) {
   if (/HTTP 5\d\d\b/.test(msg)) return true;
   return false;
 }
-
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 /** Map user-facing timeframe labels to Dhan interval strings. */
 const DHAN_INTERVAL_MAP = {

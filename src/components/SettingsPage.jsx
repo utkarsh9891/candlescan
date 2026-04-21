@@ -8,13 +8,13 @@ import DhanSettings from './DhanSettings.jsx';
 import SingleTickerPicker from './SingleTickerPicker.jsx';
 import { getCategoriesUIForEngine } from '../data/signalCategories.js';
 import { summarizeIndexCache, clearAllIndexCaches } from '../engine/nseIndexCache.js';
+import { CF_WORKER_URL } from '../engine/transport.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
 const LS_ZERODHA_API_KEY = 'candlescan_zerodha_api_key';
 const LS_ZERODHA_API_SECRET = 'candlescan_zerodha_api_secret';
 const LS_DHAN_CLIENT_ID = 'candlescan_dhan_client_id';
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 function getDataSource() {
   try { return localStorage.getItem(LS_SOURCE_KEY) || 'yahoo'; } catch { return 'yahoo'; }

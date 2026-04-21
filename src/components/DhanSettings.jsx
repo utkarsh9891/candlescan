@@ -4,12 +4,12 @@ import { encryptToVault, getVaultBlob, hasVault, clearVault, getGatePublicKey } 
 import { encryptLocal, decryptLocal } from '../utils/localCipher.js';
 import { fetchDhanInstruments, clearDhanInstruments, getInstrumentsMeta, hasCachedInstruments } from '../engine/dhanInstruments.js';
 import PasteInput from './PasteInput.jsx';
+import { CF_WORKER_URL } from '../engine/transport.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_DHAN_CLIENT_ID = 'candlescan_dhan_client_id';
 const LS_DHAN_PIN_ENC = 'candlescan_dhan_pin_enc';
 const LS_DHAN_PIN_LEGACY = 'candlescan_dhan_pin';
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 
 export default function DhanSettings({ gateUnlocked, dataSource, apiKey, apiSecret, onClearZerodha }) {
   const [dhanClientId, setDhanClientId] = useState(() => {

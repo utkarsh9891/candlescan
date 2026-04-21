@@ -18,8 +18,14 @@ vi.mock('./fetcher.js', () => ({
     displaySymbol: symbol,
     companyName: `${symbol} Ltd`,
   })),
-  CF_WORKER_URL: 'https://mock.workers.dev',
   TIMEFRAME_MAP: { '5m': { interval: '5m', range: '5d' } },
+}));
+
+// Transport seam: keep the Worker URL stable so assertions on request URLs
+// don't depend on the real production value.
+vi.mock('./transport.js', () => ({
+  CF_WORKER_URL: 'https://mock.workers.dev',
+  cfUrl: (path) => `https://mock.workers.dev${path?.startsWith('/') ? path : '/' + (path || '')}`,
 }));
 
 // Default-mock the live Google News fetcher so the existing tests don't

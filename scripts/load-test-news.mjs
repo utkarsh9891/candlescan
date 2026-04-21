@@ -27,7 +27,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { performance } from 'perf_hooks';
 
-import { CF_WORKER_URL } from '../src/engine/fetcher.js';
+import { CF_WORKER_URL } from '../src/engine/transport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, '..');

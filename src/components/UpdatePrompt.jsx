@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { CF_WORKER_URL } from '../engine/transport.js';
 
 /**
  * Detects new versions via two mechanisms:
@@ -11,7 +12,6 @@ import { useEffect, useState, useRef, useCallback } from 'react';
  */
 
 const GITHUB_REPO = 'utkarsh9891/candlescan';
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
 const LS_LAST_CHECK = 'candlescan_last_update_check';
 const LS_LATEST_VER = 'candlescan_latest_version';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours

@@ -64,12 +64,6 @@ export const EXTENDED_LOOKBACKS = {
   '1d': ['6mo', '2y', '5y'],
 };
 
-/**
- * Cloudflare Worker URL — deploy worker/ directory, then paste the URL here.
- * Until deployed, leave blank and the app falls through to Jina/public proxies.
- */
-export const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
-
 function normalizeSymbol(raw) {
   const s = String(raw || '')
     .trim()

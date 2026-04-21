@@ -30,8 +30,7 @@
 
 import { vixRegime, classifyInstitutionalFlow, classifyNewsSentiment } from './marketContext.js';
 import { scoreText, extractSymbols } from './newsSentiment.js';
-
-const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
+import { CF_WORKER_URL } from './transport.js';
 
 /**
  * 10 minutes — matches the Worker's Moneycontrol KV TTL during market
