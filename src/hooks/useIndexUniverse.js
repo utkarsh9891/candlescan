@@ -26,6 +26,12 @@ import {
 } from '../config/nseIndices.js';
 import { fetchNseIndexWithNames } from '../engine/nseIndexFetch.js';
 import { isDynamicIndex } from '../data/dynamicIndices.js';
+import {
+  getCachedIndexSymbols,
+  setCachedIndexSymbols,
+  getStaleIndexSymbols,
+  BACKGROUND_REFRESH_AGE_MS,
+} from '../engine/nseIndexCache.js';
 
 const NSE_SYM_CACHE_PREFIX = 'candlescan_nse_syms_v1_';
 const NSE_SYM_CACHE_MS = 45 * 60 * 1000;
@@ -117,17 +123,55 @@ export function useIndexUniverse() {
     return () => { cancelled = true; };
   }, []);
 
-  // Fetch constituents whenever the selected index or refreshKey changes
+  // Fetch constituents whenever the selected index or refreshKey changes.
+  //
+  // Read precedence (static indices only — dynamic movers always hit network):
+  //   1. Session cache (45 min) — avoids re-fetch on view switches in the tab.
+  //   2. LocalStorage cache (7 days) — survives reloads and offline. If the
+  //      entry is still fresh but older than BACKGROUND_REFRESH_AGE_MS we
+  //      still use it immediately and kick off a silent refresh behind it.
+  //   3. Network (Worker proxy / fallbacks).
+  //   4. Stale localStorage fallback — if the network fetch fails we'd
+  //      rather show yesterday's (or last week's) symbols than an empty
+  //      scan. NSE index membership is very stable day-to-day.
   useEffect(() => {
     let cancelled = false;
+    const refreshInBackground = async () => {
+      try {
+        const result = await fetchNseIndexWithNames(nseIndex);
+        if (cancelled || !result.symbols.length) return;
+        setConstituents(result.symbols);
+        setCompanyMap(result.companyMap || {});
+        writeNseSymsCache(nseIndex, result.symbols, result.companyMap);
+        setCachedIndexSymbols(nseIndex, result.symbols);
+      } catch {
+        /* background refresh is best-effort — the cached data is still good */
+      }
+    };
+
     (async () => {
       if (!isDynamicIndex(nseIndex)) {
+        // 1) Session cache — hot path
         const cached = readNseSymsCache(nseIndex);
         if (cached?.syms?.length) {
           setConstituents(cached.syms);
           setCompanyMap(cached.companyMap || {});
           setConstituentsError('');
           setConstituentsLoading(false);
+          return;
+        }
+        // 2) LocalStorage cache (7d) — survives reloads
+        const ls = getCachedIndexSymbols(nseIndex);
+        if (ls?.symbols?.length) {
+          setConstituents(ls.symbols);
+          setCompanyMap({}); // LS cache is symbols-only; names load on next fresh fetch
+          setConstituentsError('');
+          setConstituentsLoading(false);
+          // Stale-within-TTL: use immediately, refresh silently
+          const age = Date.now() - ls.fetchedAt;
+          if (age > BACKGROUND_REFRESH_AGE_MS) {
+            refreshInBackground();
+          }
           return;
         }
       }
@@ -143,12 +187,30 @@ export function useIndexUniverse() {
           setConstituents(result.symbols);
           setCompanyMap(result.companyMap || {});
           writeNseSymsCache(nseIndex, result.symbols, result.companyMap);
+          if (!isDynamicIndex(nseIndex) && result.symbols.length) {
+            setCachedIndexSymbols(nseIndex, result.symbols);
+          }
         }
       } catch (e) {
-        if (!cancelled) {
-          setConstituentsError(e?.message || 'Could not load NSE index.');
-          setConstituents([]);
+        if (cancelled) return;
+        // Graceful degradation — try the expired localStorage entry before
+        // surfacing an empty view to the user. NSE's API flakes often; a
+        // day-old symbol list is almost always still correct.
+        if (!isDynamicIndex(nseIndex)) {
+          const stale = getStaleIndexSymbols(nseIndex);
+          if (stale?.symbols?.length) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[useIndexUniverse] NSE fetch for "${nseIndex}" failed; using stale cache from ${new Date(stale.fetchedAt).toISOString()}`,
+            );
+            setConstituents(stale.symbols);
+            setCompanyMap({});
+            setConstituentsError('');
+            return;
+          }
         }
+        setConstituentsError(e?.message || 'Could not load NSE index.');
+        setConstituents([]);
       } finally {
         if (!cancelled) setConstituentsLoading(false);
       }

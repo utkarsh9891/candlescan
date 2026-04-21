@@ -6,6 +6,7 @@ import ToggleSwitch from './ToggleSwitch.jsx';
 import CustomIndexInput from './CustomIndexInput.jsx';
 import DhanSettings from './DhanSettings.jsx';
 import { getCategoriesUIForEngine } from '../data/signalCategories.js';
+import { summarizeIndexCache, clearAllIndexCaches } from '../engine/nseIndexCache.js';
 
 const mono = "'SF Mono', Menlo, monospace";
 const LS_SOURCE_KEY = 'candlescan_data_source';
@@ -25,6 +26,16 @@ function getSavedApiKey() {
 }
 function getSavedApiSecret() {
   try { return localStorage.getItem(LS_ZERODHA_API_SECRET) || ''; } catch { return ''; }
+}
+
+/** Compact human age — "3h", "2d", "15m" — for the NSE cache summary. */
+function formatAge(ms) {
+  if (!ms || ms < 0) return '0m';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 export default function SettingsPage({
@@ -51,6 +62,16 @@ export default function SettingsPage({
 
   const [showPassphrase, setShowPassphrase] = useState(false);
   const passphraseRef = useRef(null);
+
+  // NSE index-cache summary (browser localStorage — Phase 2 rate-limit cache)
+  const [nseCacheSummary, setNseCacheSummary] = useState(() => summarizeIndexCache());
+  const refreshNseCacheSummary = useCallback(() => {
+    setNseCacheSummary(summarizeIndexCache());
+  }, []);
+  const handleClearNseCache = useCallback(() => {
+    clearAllIndexCaches();
+    refreshNseCacheSummary();
+  }, [refreshNseCacheSummary]);
 
   // Derived for backward compat in UI logic
   const vaultSaved = tokenStatus === 'valid' || tokenStatus === 'checking';
@@ -417,6 +438,22 @@ export default function SettingsPage({
           <CustomIndexInput onAdd={(id) => { onAddCustomIndex(id); }} />
         </div>
       )}
+
+      {/* NSE index cache — long-lived localStorage cache that hardens scans
+          against NSE's rate-limited index-constituents API. */}
+      <div style={card}>
+        <div style={sectionTitle}>NSE Index Cache</div>
+        <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 10, lineHeight: 1.5 }}>
+          {nseCacheSummary.count === 0
+            ? 'No indices cached yet. The first scan of each index populates a 7-day browser cache so NSE outages don\u2019t break subsequent scans.'
+            : `${nseCacheSummary.count} ${nseCacheSummary.count === 1 ? 'index' : 'indices'} cached, oldest ${formatAge(nseCacheSummary.oldestAgeMs)} ago.`}
+        </div>
+        <button type="button" onClick={handleClearNseCache}
+          disabled={nseCacheSummary.count === 0}
+          style={{ ...btnSecondary, opacity: nseCacheSummary.count === 0 ? 0.5 : 1 }}>
+          Clear NSE cache
+        </button>
+      </div>
 
       {/* Premium Gate */}
       <div style={card}>
