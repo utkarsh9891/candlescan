@@ -3,8 +3,17 @@ import {
   getCachedChart,
   setCachedChart,
   clearChartCache,
+  shouldCache,
   _internals,
 } from './chartCacheLocal.js';
+
+const IST_OFFSET_MS = 330 * 60_000;
+function todayIST() {
+  return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+function offsetIST(days) {
+  return new Date(Date.now() + IST_OFFSET_MS + days * 86_400_000).toISOString().slice(0, 10);
+}
 
 function mkCandles(n, start = 100) {
   return Array.from({ length: n }, (_, i) => ({
@@ -85,14 +94,15 @@ describe('chartCacheLocal TTL expiry', () => {
   it('returns null after ttlMs elapses and evicts both keys', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-10T10:00:00Z'));
-    setCachedChart('yahoo', 'HDFC', '5m', '2026-04-10', mkCandles(4), { ttlMs: 60_000 });
-    expect(getCachedChart('yahoo', 'HDFC', '5m', '2026-04-10')).not.toBeNull();
+    // Use 2026-04-09 so shouldCache() treats it as historical (< today IST).
+    setCachedChart('yahoo', 'HDFC', '5m', '2026-04-09', mkCandles(4), { ttlMs: 60_000 });
+    expect(getCachedChart('yahoo', 'HDFC', '5m', '2026-04-09')).not.toBeNull();
 
     vi.setSystemTime(new Date('2026-04-10T10:05:00Z'));
-    expect(getCachedChart('yahoo', 'HDFC', '5m', '2026-04-10')).toBeNull();
+    expect(getCachedChart('yahoo', 'HDFC', '5m', '2026-04-09')).toBeNull();
 
     // Both payload + meta should have been evicted on the stale read.
-    const payloadKey = _internals.buildKey('yahoo', 'HDFC', '5m', '2026-04-10');
+    const payloadKey = _internals.buildKey('yahoo', 'HDFC', '5m', '2026-04-09');
     expect(localStorage.getItem(payloadKey)).toBeNull();
     expect(localStorage.getItem(payloadKey + _internals.META_SUFFIX)).toBeNull();
   });
@@ -108,10 +118,11 @@ describe('chartCacheLocal LRU eviction', () => {
     vi.setSystemTime(new Date('2026-04-10T09:00:00Z'));
     // Each payload ~516KB (8000 candles). 10 of them = ~5.1MB, past the
     // 4MB trigger. Age them so eviction order is deterministic by fetchedAt.
+    // Use 2026-04-09 so shouldCache() treats it as historical (< today IST).
     const bigSeries = mkCandles(8000);
     for (let i = 0; i < 10; i++) {
       vi.setSystemTime(new Date(`2026-04-10T09:${String(i).padStart(2, '0')}:00Z`));
-      setCachedChart('yahoo', `SYM${i}`, '1m', '2026-04-10', bigSeries);
+      setCachedChart('yahoo', `SYM${i}`, '1m', '2026-04-09', bigSeries);
     }
 
     // Count surviving payload keys (excluding :meta sidecars).
@@ -126,7 +137,7 @@ describe('chartCacheLocal LRU eviction', () => {
     expect(surviving).toBeLessThan(10);
 
     // Oldest (SYM0) should have been evicted first.
-    expect(getCachedChart('yahoo', 'SYM0', '1m', '2026-04-10')).toBeNull();
+    expect(getCachedChart('yahoo', 'SYM0', '1m', '2026-04-09')).toBeNull();
     vi.useRealTimers();
   });
 });
@@ -178,5 +189,54 @@ describe('chartCacheLocal graceful fallback', () => {
     expect(getCachedChart('yahoo', 'X', '1m', '2026-04-10')).toBeNull();
     // setCachedChart should swallow the throw without propagating.
     expect(() => setCachedChart('yahoo', 'X', '1m', '2026-04-10', mkCandles(2))).not.toThrow();
+  });
+});
+
+describe('chartCacheLocal shouldCache (today-bypass correctness)', () => {
+  it('bypasses cache when date is today IST (bars still forming)', () => {
+    expect(shouldCache('yahoo', 'X', '1m', todayIST())).toBe(false);
+  });
+  it('allows cache for past IST dates', () => {
+    expect(shouldCache('yahoo', 'X', '1m', offsetIST(-1))).toBe(true);
+    expect(shouldCache('yahoo', 'X', '1m', offsetIST(-30))).toBe(true);
+  });
+  it('bypasses cache for future dates', () => {
+    expect(shouldCache('yahoo', 'X', '1m', offsetIST(1))).toBe(false);
+  });
+  it('bypasses cache for "latest" / missing date (range queries)', () => {
+    expect(shouldCache('yahoo', 'X', '1m', 'latest')).toBe(false);
+    expect(shouldCache('yahoo', 'X', '1m', undefined)).toBe(false);
+    expect(shouldCache('yahoo', 'X', '1m', null)).toBe(false);
+    expect(shouldCache('yahoo', 'X', '1m', '')).toBe(false);
+  });
+  it('bypasses cache for malformed date strings', () => {
+    expect(shouldCache('yahoo', 'X', '1m', 'yesterday')).toBe(false);
+    expect(shouldCache('yahoo', 'X', '1m', '2026-04')).toBe(false);
+    expect(shouldCache('yahoo', 'X', '1m', '26-04-2026')).toBe(false);
+  });
+});
+
+describe('chartCacheLocal: set/get honor shouldCache', () => {
+  beforeEach(() => { localStorage.clear(); });
+  it('setCachedChart on today is a no-op', () => {
+    const today = todayIST();
+    setCachedChart('yahoo', 'RELIANCE', '1m', today, mkCandles(5));
+    expect(getCachedChart('yahoo', 'RELIANCE', '1m', today)).toBeNull();
+  });
+  it('getCachedChart returns null for today even if a stale payload was manually written', () => {
+    const today = todayIST();
+    // Hand-write a payload at the exact key shape to simulate a poisoned entry.
+    localStorage.setItem(
+      `candlescan_chart:yahoo:RELIANCE:1m:${today}`,
+      JSON.stringify({ candles: mkCandles(3), fetchedAt: Date.now(), expiresAt: Date.now() + 60_000 })
+    );
+    expect(getCachedChart('yahoo', 'RELIANCE', '1m', today)).toBeNull();
+  });
+  it('historical dates still cache normally', () => {
+    const past = offsetIST(-2);
+    setCachedChart('yahoo', 'RELIANCE', '1m', past, mkCandles(4));
+    const hit = getCachedChart('yahoo', 'RELIANCE', '1m', past);
+    expect(hit).not.toBeNull();
+    expect(hit.candles.length).toBe(4);
   });
 });

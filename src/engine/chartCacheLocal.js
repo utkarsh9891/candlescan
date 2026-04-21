@@ -33,9 +33,41 @@
 
 const PREFIX = 'candlescan_chart:';
 const META_SUFFIX = ':meta';
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+// Historical intraday is immutable once the IST day closes; 30d TTL is
+// conservative for completed days and avoids churn on re-scans.
+const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30d
 const MAX_TOTAL_BYTES = 4 * 1024 * 1024; // 4MB opportunistic LRU trigger
 const EVICT_FRACTION = 0.1; // evict 10% oldest on overflow
+const IST_OFFSET_MIN = 330;
+
+/**
+ * Current IST calendar date as YYYY-MM-DD. Bars for this date are still
+ * forming intraday, so we never cache them — the chart must stay live.
+ */
+function getTodayIST() {
+  const shifted = new Date(Date.now() + IST_OFFSET_MIN * 60_000);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/**
+ * Date-partitioned caching rule:
+ *   - no explicit date (e.g. range queries)  → bypass (live portion unknown)
+ *   - date === 'latest'                      → bypass (always refers to today-ish)
+ *   - date >= today (IST)                    → bypass (bars still forming)
+ *   - date <  today (IST)                    → cache (historical, immutable)
+ *
+ * Exported so fetchers can skip the write altogether when ineligible
+ * — otherwise each scan repopulates today's dead entries every call.
+ */
+export function shouldCache(source, symbol, interval, date) {
+  if (!date) return false;
+  const dt = String(date).trim();
+  if (!dt || dt === 'latest') return false;
+  // ISO date shape only — anything else is opaque, bypass to be safe.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dt)) return false;
+  const todayIST = getTodayIST();
+  return dt < todayIST;
+}
 
 function hasStorage() {
   try {
@@ -59,6 +91,10 @@ function buildKey(source, symbol, interval, date) {
  */
 export function getCachedChart(source, symbol, interval, date) {
   if (!hasStorage()) return null;
+  // Today's bars are still forming — caller must always see live data.
+  // Range queries ('latest' or missing date) are also bypassed because we
+  // can't prove they don't straddle today.
+  if (!shouldCache(source, symbol, interval, date)) return null;
   const key = buildKey(source, symbol, interval, date);
   try {
     const raw = localStorage.getItem(key);
@@ -87,6 +123,9 @@ export function getCachedChart(source, symbol, interval, date) {
 export function setCachedChart(source, symbol, interval, date, candles, opts = {}) {
   if (!hasStorage()) return;
   if (!Array.isArray(candles) || candles.length === 0) return;
+  // Mirror the read-side guard so we don't poison the cache with live /
+  // partial bars that would then be surfaced on the next read.
+  if (!shouldCache(source, symbol, interval, date)) return;
 
   const ttlMs = Math.max(1000, Number(opts.ttlMs ?? DEFAULT_TTL_MS));
   const now = Date.now();
