@@ -40,6 +40,66 @@ export const RISK_SIGNAL_DEFINITIONS = [
 
 // atrLike lives in ./riskCommon.js
 
+// ─── Regime-aware SL/target constants (P2 #11 + Wave 2a tuning) ─────────
+// Named exports so test suites can assert the shipping values and grid
+// searches can inspect them. The HIGH/PANIC branches are kept for
+// documentation but are empirically unreachable via trades because the
+// HIGH-VIX veto in regimeGate rejects trades before reaching the risk
+// scorer (CLAUDE.md §4). NORMAL and LOW are the only live regimes.
+//
+// Env override hook: `REGIME_STOPS_CFG=NORMAL_SL,LOW_SL,RR,SL_FLOOR,SL_CAP`
+// lets the grid-search harness override these constants without rebuilding.
+// Unset → shipping defaults below. Order: numeric, comma-separated, no spaces.
+// Example: REGIME_STOPS_CFG=1.5,1.2,1.8,0.005,0.012 (config B).
+// Wave 2a tuning — grid search over 20+ configs on the Mar 12 – Apr 10 2026
+// window produced Config B as the clear winner:
+//   NORMAL=1.5, LOW=1.2, RR=1.8, slFloor=0.005, slCap=0.012
+// 17-day in-sample: Rs 37,530 (vs legacy Rs 28,537, +Rs 8,994).
+// Extended-to-04-21 OOS mean daily P&L: Rs 3,852 (vs legacy Rs 3,161), PF 12.57.
+//
+// The win comes from an emergent interaction: at RR=1.8 with floor-clamped
+// targets the effective rr computed post-clamp stays at exactly 2.0 only when
+// slPct clamps to the floor (atrPct * slMult <= slFloor). For higher-ATR
+// bars the trade fails the rr >= 2.0 gate downstream and is dropped — these
+// are exactly the wide-stop losers that were dragging regime-ON into the red.
+// NORMAL/LOW slMult values inside the "everything clamps to floor" plateau
+// all produce identical results; 1.5/1.2 were picked as sensibly scaled.
+// HIGH/PANIC constants are retained for documentation but are unreachable at
+// runtime — the HIGH-VIX veto in regimeGate drops those trades upstream.
+export const REGIME_STOPS_DEFAULTS = Object.freeze({
+  slMultHigh: 2.5,    // HIGH/PANIC — unreachable (veto); documentation only
+  slMultNormal: 1.5,
+  slMultLow: 1.2,
+  rrRatio: 1.8,       // <2: relies on rr gate filtering wide-ATR trades
+  slFloor: 0.005,     // 0.5% — legacy SL anchor; never tighten below this
+  slCap: 0.012,       // 1.2%
+  targetFloor: 0.010, // 1.0% — legacy target anchor
+  targetCap: 0.030,   // 3.0%
+});
+
+function parseEnvOverride() {
+  const raw = typeof process !== 'undefined' && process.env ? process.env.REGIME_STOPS_CFG : null;
+  if (!raw) return null;
+  const parts = raw.split(',').map((s) => Number(s.trim()));
+  if (parts.length < 5 || parts.some((n) => !Number.isFinite(n))) return null;
+  const [normalSl, lowSl, rr, slFloor, slCap] = parts;
+  return {
+    ...REGIME_STOPS_DEFAULTS,
+    slMultNormal: normalSl,
+    slMultLow: lowSl,
+    rrRatio: rr,
+    slFloor,
+    slCap,
+    // Keep target caps at 2× slCap so the rr>=2 gate isn't bounded by caps.
+    targetCap: Math.max(REGIME_STOPS_DEFAULTS.targetCap, slCap * Math.max(rr, 2)),
+    targetFloor: Math.max(REGIME_STOPS_DEFAULTS.targetFloor, slFloor * rr),
+  };
+}
+
+export function getRegimeStopsConfig() {
+  return parseEnvOverride() || REGIME_STOPS_DEFAULTS;
+}
+
 function detectContext(candles) {
   if (!candles || candles.length < 5) return 'mid_range';
   const cur = candles[candles.length - 1];
@@ -100,25 +160,17 @@ export function computeRiskScore({ candles, patterns, opts }) {
 
   if (regimeAwareStops && vixRegime && atrPct > 0) {
     // Calibration note: typical 1m smallcap ATR is 0.1-0.4% of price.
-    // slMult is sized so that NORMAL × median atrPct lands at the legacy
-    // 0.5% anchor; the floor ensures we never tighten BELOW legacy (a
-    // tighter stop would be hit more often and turn the change into a
-    // net-negative). HIGH widens beyond the floor; LOW uses a tighter
-    // target multiplier so the WR it relies on has a shorter path.
+    // Constants live in REGIME_STOPS_DEFAULTS (above) and are env-tunable
+    // via REGIME_STOPS_CFG for Wave 2a grid searches. HIGH/PANIC values are
+    // listed for completeness but unreachable at runtime because the
+    // HIGH-VIX veto in regimeGate rejects those trades upstream (CLAUDE.md §4).
+    const cfg = getRegimeStopsConfig();
     const slMult = (vixRegime === 'HIGH' || vixRegime === 'PANIC')
-      ? 2.5
-      : (vixRegime === 'LOW' ? 1.5 : 2.0);
-    const rrRatio = (vixRegime === 'HIGH' || vixRegime === 'PANIC')
-      ? 2.0
-      : (vixRegime === 'LOW' ? 2.0 : 2.0);
-    // Floor 0.5% = legacy SL. Never tighten below the empirically-tuned
-    // baseline — tighter stops on 1m smallcap get hit too often and
-    // actively regress the walk-forward P&L (observed in Phase A #11
-    // calibration sweep). Cap 1.5% so one trade can't eat the daily
-    // risk budget. Target cap 3.0% = 2× SL cap so the rr>=2 gate is
-    // never hit by the caps alone.
-    slPct = Math.max(0.005, Math.min(0.015, atrPct * slMult));
-    targetPct = Math.max(0.010, Math.min(0.030, slPct * rrRatio));
+      ? cfg.slMultHigh
+      : (vixRegime === 'LOW' ? cfg.slMultLow : cfg.slMultNormal);
+    const rrRatio = cfg.rrRatio;
+    slPct = Math.max(cfg.slFloor, Math.min(cfg.slCap, atrPct * slMult));
+    targetPct = Math.max(cfg.targetFloor, Math.min(cfg.targetCap, slPct * rrRatio));
     slDist = entry * slPct;
     targetDist = entry * targetPct;
     regimeAwareUsed = true;

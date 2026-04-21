@@ -76,10 +76,12 @@ function parseArgs() {
   // sizeMultiplier. Default ON so the sweep reflects the shipping
   // behavior; flip with --no-use-flow to A/B against legacy sizing.
   let useFlow = true;
-  // Regime-aware ATR-based SL/target (P2 #11). Default OFF — flip with
-  // --regime-stops so the walk-forward harness can A/B the two regimes.
-  // When OFF the legacy hardcoded 0.5%/1.0% path runs (regression-proof).
-  let regimeAwareStops = false;
+  // Regime-aware ATR-based SL/target (P2 #11 + Wave 2a tuning).
+  // Default ON — the Wave 2a constants (NORMAL=1.5, LOW=1.2, RR=1.8, cap 1.2%)
+  // beat the legacy 0.5%/1.0% path on the 17-day window (Rs 37,530 vs Rs
+  // 28,537 in-sample; OOS mean Rs 3,852 vs Rs 3,161). Flip with
+  // --no-regime-stops for A/B against legacy.
+  let regimeAwareStops = true;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
