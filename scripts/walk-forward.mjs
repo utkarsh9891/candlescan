@@ -74,6 +74,15 @@ export function parseArgs(argv) {
     // ON matches simulate-day.mjs — flip with --no-regime-stops to A/B
     // against the legacy 0.5%/1.0% hardcoded path.
     regimeAwareStops: true,
+    // Per-bar timeframe forwarded as the first positional arg to
+    // simulate-day.mjs. '1m' is the scalp default; intraday A/B uses
+    // '5m' or '15m'. Validated downstream by TIMEFRAME_MAP.
+    timeframe: '1m',
+    // Confidence-tiered base sizing string forwarded verbatim to
+    // --size-tiers in the worker. Parsed (and validated) by the worker
+    // via parseSizeTiers — failing fast there avoids duplicating
+    // validation logic in the harness.
+    sizeTiers: null,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -101,6 +110,8 @@ export function parseArgs(argv) {
       case '--no-pessimistic-fills': opts.pessimisticFills = false; break;
       case '--regime-stops': opts.regimeAwareStops = true; break;
       case '--no-regime-stops': opts.regimeAwareStops = false; break;
+      case '--timeframe': opts.timeframe = next(); break;
+      case '--size-tiers': opts.sizeTiers = next(); break;
       case '-h':
       case '--help':
         opts.help = true;
@@ -139,6 +150,10 @@ function printHelp() {
       '  --no-pessimistic-fills  disable',
       '  --regime-stops          enable regime-aware ATR-based SL/target (default ON)',
       '  --no-regime-stops       disable (use legacy 0.5%/1.0% hardcoded path)',
+      '  --timeframe TF          per-bar timeframe forwarded to simulate-day (default: 1m)',
+      '                          intraday A/B: pass 5m or 15m; delivery: 1d',
+      '  --size-tiers STR        confidence-tiered base sizing, e.g. "82:200000,75:100000"',
+      '                          omit to use flat --position-size for every trade',
       '',
     ].join('\n') + '\n',
   );
@@ -234,10 +249,10 @@ export function bucketResults(records) {
 // ---------------------------------------------------------------------------
 
 /** Build CLI argv for a single simulate-day worker. */
-function buildWorkerArgs(date, opts) {
+export function buildWorkerArgs(date, opts) {
   const a = [
     SIMULATE_SCRIPT,
-    '1m',
+    opts.timeframe || '1m',
     '--date', date,
     '--index', opts.index,
     '--engine', opts.engine,
@@ -254,6 +269,7 @@ function buildWorkerArgs(date, opts) {
   // was correct when the sim default was OFF; the default flipped to ON.)
   if (opts.regimeAwareStops) a.push('--regime-stops');
   else a.push('--no-regime-stops');
+  if (opts.sizeTiers) a.push('--size-tiers', opts.sizeTiers);
   return a;
 }
 
