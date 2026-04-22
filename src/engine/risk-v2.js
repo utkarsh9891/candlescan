@@ -17,6 +17,27 @@ import { sma, atrLike, vwapProxy } from './riskCommon.js';
  *  - Support/resistance at 15%/85% (was 20%/80%)
  */
 
+/**
+ * Intraday regime-stops config (PR-C). When the Intraday Momentum
+ * Runner pattern fires, the SL/target widens to capture the 5-20%
+ * peer-validated moves that the legacy ATR×3 ceiling caps off.
+ *
+ *   - slMultRunner: 2.5 (vs legacy 2.0) — runner setups need slightly
+ *     more breathing room because the entry is post-3% move; tight
+ *     ATR×2 stops get triggered by normal pullbacks.
+ *   - targetPctRunner: 0.08 (8% from entry) — captures the typical
+ *     first peer target. Higher than rr=2.5×slDist on most setups,
+ *     so the resulting RR clears the 1.5 min-rr gate cleanly.
+ *
+ * Non-runner V2 patterns (engulfing/piercing/etc) keep the legacy
+ * ATR×2 SL + resistance-or-ATR×3 target. This is intentional — those
+ * patterns are reversal setups with smaller expected moves.
+ */
+export const INTRADAY_REGIME_STOPS_DEFAULTS = Object.freeze({
+  slMultRunner: 2.5,
+  targetPctRunner: 0.08,
+});
+
 export const RISK_SIGNAL_DEFINITIONS = [
   { key: 'signalClarity', label: 'Signal clarity', max: 25, meaning: 'Pattern strength × volume factor × 25. Volume-confirmed patterns score higher.' },
   { key: 'lowNoise', label: 'Low noise (trend quality)', max: 20, meaning: 'ATR vs average body size; clean trends score higher.' },
@@ -90,22 +111,41 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const rawEntry = cur.c;
   const entry = direction === 'long' ? rawEntry * 1.001 : rawEntry * 0.999;
 
-  // SL: ATR-based, widened to 2.0x to avoid stop-hunting
-  const slDist = atrVal * 2.0;
+  // Momentum-runner setups (PR-C) deserve wider SL + much wider targets
+  // — the peer-validated reference trades had target ladders 5-20% above
+  // entry (MMFL +19.6%, SAILIFE +12-24%, ASHAPURMIN +10-42%). Capping at
+  // ATR×3 throws away most of the move. When the runner fires, anchor
+  // targets to the spec-driven Rs % cap and float SL just below VWAP /
+  // pullback structure.
+  const isRunner = top?.name === 'Intraday Momentum Runner';
+  const slMult = isRunner ? INTRADAY_REGIME_STOPS_DEFAULTS.slMultRunner : 2.0;
+  const slDist = atrVal * slMult;
   let sl, target, targetDist;
 
   if (direction === 'long') {
     sl = entry - slDist;
     const resistance = Math.max(...candles.slice(-20).map(c => c.h));
     const resistanceDist = resistance - entry;
-    // FIX: use resistance if valid, otherwise ATR fallback (no median hack)
-    targetDist = resistanceDist > slDist * 0.5 ? resistanceDist : atrVal * 3.0;
+    if (isRunner) {
+      // Anchor target to the 8% spec ceiling for momentum runners — well
+      // below MMFL/ASHAPURMIN actual EOD moves but high enough to capture
+      // the typical first target the peer-validated trades aim for. The
+      // 8% cap also keeps min-rr above 2 for the volume-confirmed entries.
+      targetDist = Math.max(resistanceDist, entry * INTRADAY_REGIME_STOPS_DEFAULTS.targetPctRunner);
+    } else {
+      // Legacy V2: resistance if valid, otherwise ATR×3 fallback
+      targetDist = resistanceDist > slDist * 0.5 ? resistanceDist : atrVal * 3.0;
+    }
     target = entry + targetDist;
   } else {
     sl = entry + slDist;
     const support = Math.min(...candles.slice(-20).map(c => c.l));
     const supportDist = entry - support;
-    targetDist = supportDist > slDist * 0.5 ? supportDist : atrVal * 3.0;
+    if (isRunner) {
+      targetDist = Math.max(supportDist, entry * INTRADAY_REGIME_STOPS_DEFAULTS.targetPctRunner);
+    } else {
+      targetDist = supportDist > slDist * 0.5 ? supportDist : atrVal * 3.0;
+    }
     target = entry - targetDist;
   }
 

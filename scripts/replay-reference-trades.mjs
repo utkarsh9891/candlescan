@@ -173,7 +173,12 @@ async function replayOne(trade, engineName, timeframe) {
   const orbHigh = orbBars.length >= 5 ? Math.max(...orbBars.map(c => c.h)) : null;
   const orbLow = orbBars.length >= 5 ? Math.min(...orbBars.map(c => c.l)) : null;
 
-  let best = null;  // highest-confidence signal across the day
+  // Track BOTH the best-overall signal and the best-aligned (peer's
+  // direction) signal. Reporting the aligned one answers the actually-
+  // useful question: "would the engine have surfaced THIS peer trade?"
+  // — not "did the engine fire something at any point?"
+  let bestOverall = null;
+  let bestAligned = null;
   for (let barIdx = 5; barIdx < dayCandles.length; barIdx++) {
     const candlesSoFar = dayCandles.slice(0, barIdx + 1);
     const patterns = eng.detectPatterns(candlesSoFar, {
@@ -189,27 +194,31 @@ async function replayOne(trade, engineName, timeframe) {
       opts: { barIndex: barIdx, prevDayHigh, prevDayLow, orbHigh, orbLow, sym: trade.symbol },
     });
     if (!risk || !risk.confidence) continue;
-    if (!best || risk.confidence > best.confidence) {
-      best = {
-        confidence: risk.confidence,
-        action: risk.action,
-        direction: risk.direction,
-        entry: risk.entry,
-        sl: risk.sl,
-        target: risk.target,
-        rr: risk.rr,
-        pattern: patterns[0]?.name,
-        barIdx,
-        barTime: new Date(candlesSoFar[candlesSoFar.length - 1].t * 1000).toISOString(),
-      };
+    const snap = {
+      confidence: risk.confidence,
+      action: risk.action,
+      direction: risk.direction,
+      entry: risk.entry,
+      sl: risk.sl,
+      target: risk.target,
+      rr: risk.rr,
+      pattern: patterns[0]?.name,
+      barIdx,
+      barTime: new Date(candlesSoFar[candlesSoFar.length - 1].t * 1000).toISOString(),
+    };
+    if (!bestOverall || snap.confidence > bestOverall.confidence) bestOverall = snap;
+    if (snap.direction === trade.direction && (!bestAligned || snap.confidence > bestAligned.confidence)) {
+      bestAligned = snap;
     }
   }
 
-  if (!best) {
+  if (!bestOverall) {
     return { status: 'no-signal', diagnostic: `no pattern fired across ${dayCandles.length} bars` };
   }
 
-  // Diagnose vs peer's expected setup
+  // Prefer aligned signal for the diagnostic; fall back to best-overall
+  // (which will be wrong-direction) only if no aligned signal at all.
+  const best = bestAligned || bestOverall;
   const directionMatch = best.direction === trade.direction;
   const entryDelta = trade.entry ? ((best.entry - trade.entry) / trade.entry) * 100 : null;
   const passesConfGate = best.confidence >= 75;
@@ -217,7 +226,7 @@ async function replayOne(trade, engineName, timeframe) {
   let status, diagnostic;
   if (!directionMatch) {
     status = 'wrong-direction';
-    diagnostic = `engine fired ${best.direction} but peer was ${trade.direction}`;
+    diagnostic = `no signal in peer's direction; best-overall was ${best.direction} conf ${best.confidence}`;
   } else if (!passesConfGate) {
     status = 'sub-threshold';
     diagnostic = `fired ${best.direction} but conf ${best.confidence} < 75 (action="${best.action}")`;
