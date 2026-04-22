@@ -249,3 +249,63 @@ export function sizeMultiplier(ctx, candidate, opts) {
 
   return { mult, reasons };
 }
+
+/* ── Phase 4 helper: confidence-tier base sizing ──────────────────── */
+
+/**
+ * Confidence-tier base sizing (Wave 3 architecture).
+ *
+ * Picks a base position size from a confidence score. Tiers are an
+ * ordered desc list of {conf, size}. The first tier with
+ * `confidence >= conf` wins; falls back to `fallback` if nothing
+ * matches (caller passes 0 to skip the trade entirely, or the legacy
+ * fixed --position-size to preserve baseline behavior).
+ *
+ * Rationale: the user's Wave 3 spec promotes high-confidence setups
+ * to Rs 2L (10L exposure at 5x) and demotes lower-confidence to Rs 1L,
+ * concentrating capital where the per-trade WR is empirically highest.
+ * Multiplicative with sizeMultiplier — final position is
+ *   `sizingTier(conf, tiers, fallback) * sizeMultiplier(...)`.
+ */
+export function sizingTier(confidence, tiers, fallback = 0) {
+  if (!Array.isArray(tiers) || tiers.length === 0) return fallback;
+  for (const t of tiers) {
+    if (typeof t?.conf === 'number' && typeof t?.size === 'number' && confidence >= t.conf) {
+      return t.size;
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Default tiers per the strategy iteration plan: Rs 2L for confidence
+ * ≥82, Rs 1L for confidence 75-81, fallback decided by caller.
+ *
+ * Order matters — entries must be sorted desc by `conf` for sizingTier
+ * to pick the highest-confidence matching tier first.
+ */
+export const DEFAULT_SIZE_TIERS = Object.freeze([
+  Object.freeze({ conf: 82, size: 200000 }),
+  Object.freeze({ conf: 75, size: 100000 }),
+]);
+
+/**
+ * Parse a CLI flag like `--size-tiers '82:200000,75:100000'` into the
+ * `[{conf, size}]` array sizingTier expects. Throws on malformed
+ * input so the simulator fails loudly instead of silently using the
+ * fallback for every trade.
+ */
+export function parseSizeTiers(str) {
+  if (!str) return null;
+  const parts = String(str).split(',').map(s => s.trim()).filter(Boolean);
+  const tiers = parts.map((p) => {
+    const [c, s] = p.split(':').map(x => Number(x));
+    if (!Number.isFinite(c) || !Number.isFinite(s) || c <= 0 || s <= 0) {
+      throw new Error(`Invalid --size-tiers entry: "${p}". Expected "<confidence>:<size>" with positive numbers.`);
+    }
+    return { conf: c, size: s };
+  });
+  // Caller depends on desc-by-conf order; sort defensively.
+  tiers.sort((a, b) => b.conf - a.conf);
+  return tiers;
+}

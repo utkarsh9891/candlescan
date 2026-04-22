@@ -5,6 +5,7 @@ import {
   aggregateWindow,
   bucketResults,
   parseArgs,
+  buildWorkerArgs,
 } from '../../scripts/walk-forward.mjs';
 
 // 15-day fixture (consecutive weekdays ignored — dates here are just labels).
@@ -182,5 +183,68 @@ describe('parseArgs', () => {
     expect(opts.testDays).toBe(2);
     expect(opts.concurrency).toBe(3);
     expect(opts.pessimisticFills).toBe(false);
+  });
+
+  it('parses --timeframe (default 1m, override accepted verbatim)', () => {
+    const def = parseArgs(['node', 'walk-forward.mjs']);
+    expect(def.timeframe).toBe('1m');
+    const ov = parseArgs(['node', 'walk-forward.mjs', '--timeframe', '15m']);
+    expect(ov.timeframe).toBe('15m');
+  });
+
+  it('parses --size-tiers as a verbatim string forwarded to the worker', () => {
+    const def = parseArgs(['node', 'walk-forward.mjs']);
+    expect(def.sizeTiers).toBe(null);
+    const ov = parseArgs(['node', 'walk-forward.mjs', '--size-tiers', '82:200000,75:100000']);
+    expect(ov.sizeTiers).toBe('82:200000,75:100000');
+  });
+
+  it('normalizes legacy v2/v1/classic engine codes', () => {
+    expect(parseArgs(['node', 'walk-forward.mjs', '--engine', 'v2']).engine).toBe('intraday');
+    expect(parseArgs(['node', 'walk-forward.mjs', '--engine', 'v1']).engine).toBe('delivery');
+    expect(parseArgs(['node', 'walk-forward.mjs', '--engine', 'classic']).engine).toBe('delivery');
+    expect(parseArgs(['node', 'walk-forward.mjs', '--engine', 'intraday']).engine).toBe('intraday');
+  });
+});
+
+describe('buildWorkerArgs', () => {
+  const baseOpts = {
+    timeframe: '1m', index: 'NIFTY SMALLCAP 100', engine: 'scalp',
+    confidence: 75, maxPositions: 1, positionSize: 300000, maxTrades: 5,
+    pessimisticFills: true, regimeAwareStops: true, sizeTiers: null,
+  };
+
+  it('includes the timeframe as the first positional arg', () => {
+    const args = buildWorkerArgs('2026-04-22', baseOpts);
+    // index 0 is SIMULATE_SCRIPT path; index 1 is the timeframe arg
+    expect(args[1]).toBe('1m');
+  });
+
+  it('forwards a non-default --timeframe', () => {
+    const args = buildWorkerArgs('2026-04-22', { ...baseOpts, timeframe: '15m' });
+    expect(args[1]).toBe('15m');
+  });
+
+  it('forwards --size-tiers when set, omits when null', () => {
+    const off = buildWorkerArgs('2026-04-22', baseOpts);
+    expect(off).not.toContain('--size-tiers');
+
+    const on = buildWorkerArgs('2026-04-22', { ...baseOpts, sizeTiers: '82:200000,75:100000' });
+    const idx = on.indexOf('--size-tiers');
+    expect(idx).toBeGreaterThan(0);
+    expect(on[idx + 1]).toBe('82:200000,75:100000');
+  });
+
+  it('always includes --regime-stops or --no-regime-stops (no silent fallback)', () => {
+    const on = buildWorkerArgs('2026-04-22', { ...baseOpts, regimeAwareStops: true });
+    expect(on).toContain('--regime-stops');
+    const off = buildWorkerArgs('2026-04-22', { ...baseOpts, regimeAwareStops: false });
+    expect(off).toContain('--no-regime-stops');
+  });
+
+  it('forwards canonical engine names', () => {
+    const a = buildWorkerArgs('2026-04-22', { ...baseOpts, engine: 'intraday' });
+    const idx = a.indexOf('--engine');
+    expect(a[idx + 1]).toBe('intraday');
   });
 });

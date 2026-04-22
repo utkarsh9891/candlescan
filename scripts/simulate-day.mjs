@@ -33,7 +33,7 @@ import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
 import { fetchMarginMapNode, MARGIN_MULTIPLIER } from '../src/data/marginData.js';
 import { SECTOR_INDEX_SYMBOLS, getSector } from '../src/engine/sectorMap.js';
 import { vixRegime, classifyGap, liquidityTier, classifyInstitutionalFlow, classifyNewsSentiment } from '../src/engine/marketContext.js';
-import { filterStock, regimeGate, rankScore, sizeMultiplier } from '../src/engine/tradeDecision.js';
+import { filterStock, regimeGate, rankScore, sizeMultiplier, sizingTier, parseSizeTiers } from '../src/engine/tradeDecision.js';
 
 const TIMEFRAME_MAP = {
   '1m': { interval: '1m' },
@@ -82,6 +82,11 @@ function parseArgs() {
   // 28,537 in-sample; OOS mean Rs 3,852 vs Rs 3,161). Flip with
   // --no-regime-stops for A/B against legacy.
   let regimeAwareStops = true;
+  // Confidence-tiered base sizing (Wave 3): when set, the per-trade
+  // base size is picked from this tier table rather than the flat
+  // --position-size. Tiers must be sorted desc by conf; parseSizeTiers
+  // does the sort + validation. Null preserves Wave 2a behavior.
+  let sizeTiers = null;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -113,10 +118,11 @@ function parseArgs() {
     if (args[i] === '--use-flow') { useFlow = true; continue; }
     if (args[i] === '--regime-stops') { regimeAwareStops = true; continue; }
     if (args[i] === '--no-regime-stops') { regimeAwareStops = false; continue; }
+    if (args[i] === '--size-tiers' && args[i + 1]) { sizeTiers = parseSizeTiers(args[++i]); continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops, sizeTiers };
 }
 
 function parseChartJson(data) {
@@ -235,7 +241,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops, sizeTiers }) {
   const trades = [];
   const openPositions = [];
   const tradedSymbols = new Set();
@@ -486,7 +492,11 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         flow: flowClass,
         consecutiveLosses,
       }, { direction: c.risk.direction }, { useFlow });
-      const basePosition = POSITION_SIZE * sizeRes.mult;
+      // Tier sizing (Wave 3): pick base from confidence tiers when set;
+      // fall back to flat POSITION_SIZE for legacy/Wave 2a behavior.
+      // Multiplicative with sizeMultiplier (loss-streak / flow / VIX).
+      const tierBase = sizeTiers ? sizingTier(c.risk.confidence, sizeTiers, POSITION_SIZE) : POSITION_SIZE;
+      const basePosition = tierBase * sizeRes.mult;
       const effectivePositionSize = marginEnabled ? basePosition * MARGIN_MULTIPLIER : basePosition;
       // Apply entry slippage: buy (long) goes higher; sell-short (short) goes lower.
       const rawEntry = c.risk.entry;
@@ -633,7 +643,7 @@ function writeTradesJson(resolvedDate, runMeta, summary, trades) {
 }
 
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops, sizeTiers } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
@@ -888,7 +898,11 @@ async function main() {
     } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops };
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops, sizeTiers };
+  if (sizeTiers) {
+    const tierStr = sizeTiers.map(t => `≥${t.conf}:Rs.${(t.size/1000).toFixed(0)}k`).join(', ');
+    console.log(`Size tiers: ${tierStr} (fallback Rs.${(positionSize/1000).toFixed(0)}k)`);
+  }
 
   if (multiWindow) {
     // Multi-window mode: run 3 windows sequentially

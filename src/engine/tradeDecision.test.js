@@ -12,7 +12,7 @@
  * for the documented envelope.
  */
 import { describe, it, expect } from 'vitest';
-import { sizeMultiplier } from './tradeDecision.js';
+import { sizeMultiplier, sizingTier, parseSizeTiers, DEFAULT_SIZE_TIERS } from './tradeDecision.js';
 
 describe('sizeMultiplier — flow wiring (P1 #6)', () => {
   const LONG = { direction: 'long' };
@@ -99,5 +99,83 @@ describe('sizeMultiplier — flow wiring (P1 #6)', () => {
   it('no longer logs "(no-op)" for flow — the no-op marker must disappear', () => {
     const r = sizeMultiplier({ flow: 'STRONG_BUY' }, LONG);
     expect(r.reasons.some((s) => s.includes('flow:') && s.includes('no-op'))).toBe(false);
+  });
+});
+
+describe('sizingTier — confidence-tier base sizing (Wave 3)', () => {
+  const TIERS = DEFAULT_SIZE_TIERS;  // [{conf:82,size:200000},{conf:75,size:100000}]
+
+  it('returns Rs 2L for confidence ≥ 82', () => {
+    expect(sizingTier(82, TIERS, 0)).toBe(200000);
+    expect(sizingTier(85, TIERS, 0)).toBe(200000);
+    expect(sizingTier(100, TIERS, 0)).toBe(200000);
+  });
+
+  it('returns Rs 1L for confidence in [75, 81]', () => {
+    expect(sizingTier(75, TIERS, 0)).toBe(100000);
+    expect(sizingTier(81, TIERS, 0)).toBe(100000);
+  });
+
+  it('returns fallback for confidence < 75', () => {
+    expect(sizingTier(74, TIERS, 0)).toBe(0);
+    expect(sizingTier(0, TIERS, 50000)).toBe(50000);
+  });
+
+  it('returns fallback when tiers list is empty / null / undefined', () => {
+    expect(sizingTier(99, [], 12345)).toBe(12345);
+    expect(sizingTier(99, null, 12345)).toBe(12345);
+    expect(sizingTier(99, undefined, 12345)).toBe(12345);
+  });
+
+  it('honors caller-supplied tier order (desc by conf is the contract)', () => {
+    const custom = [{ conf: 90, size: 300000 }, { conf: 70, size: 50000 }];
+    expect(sizingTier(91, custom, 0)).toBe(300000);
+    expect(sizingTier(70, custom, 0)).toBe(50000);
+    expect(sizingTier(69, custom, 999)).toBe(999);
+  });
+
+  it('skips malformed tier entries instead of throwing', () => {
+    const tiers = [{ conf: 'bad', size: 999 }, { conf: 75, size: 100000 }];
+    expect(sizingTier(80, tiers, 0)).toBe(100000);
+  });
+});
+
+describe('parseSizeTiers — CLI flag parsing', () => {
+  it('parses a well-formed string into desc-sorted tiers', () => {
+    const t = parseSizeTiers('75:100000,82:200000');
+    expect(t).toEqual([{ conf: 82, size: 200000 }, { conf: 75, size: 100000 }]);
+  });
+
+  it('returns null on null / empty input (legacy fallback)', () => {
+    expect(parseSizeTiers(null)).toBe(null);
+    expect(parseSizeTiers('')).toBe(null);
+    expect(parseSizeTiers(undefined)).toBe(null);
+  });
+
+  it('throws on malformed entries — fail loud rather than silently fall back', () => {
+    expect(() => parseSizeTiers('82:abc')).toThrow(/Invalid --size-tiers/);
+    expect(() => parseSizeTiers('xyz:100')).toThrow(/Invalid --size-tiers/);
+    expect(() => parseSizeTiers('-5:100')).toThrow(/Invalid --size-tiers/);
+    expect(() => parseSizeTiers('80:-100')).toThrow(/Invalid --size-tiers/);
+  });
+
+  it('round-trips with sizingTier — Rs 2L tier wins for conf ≥ 82', () => {
+    const tiers = parseSizeTiers('82:200000,75:100000');
+    expect(sizingTier(85, tiers, 0)).toBe(200000);
+    expect(sizingTier(78, tiers, 0)).toBe(100000);
+    expect(sizingTier(70, tiers, 0)).toBe(0);
+  });
+});
+
+describe('DEFAULT_SIZE_TIERS', () => {
+  it('matches the strategy-iteration spec — Rs 2L @ ≥82, Rs 1L @ ≥75', () => {
+    expect(DEFAULT_SIZE_TIERS).toHaveLength(2);
+    expect(DEFAULT_SIZE_TIERS[0]).toEqual({ conf: 82, size: 200000 });
+    expect(DEFAULT_SIZE_TIERS[1]).toEqual({ conf: 75, size: 100000 });
+  });
+
+  it('is frozen so callers cannot mutate the canonical default', () => {
+    expect(Object.isFrozen(DEFAULT_SIZE_TIERS)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_SIZE_TIERS[0])).toBe(true);
   });
 });
