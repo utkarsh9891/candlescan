@@ -39,8 +39,137 @@ function volFactor(candles, n) {
 }
 
 /**
+ * Day-session VWAP proxy — typical price weighted by volume across the
+ * passed candles. Used by the momentum-runner trigger to confirm that
+ * price is holding above (or below) the institutional volume anchor.
+ */
+function vwapAcross(candles) {
+  if (!candles?.length) return null;
+  let pv = 0, v = 0;
+  for (const c of candles) {
+    const tp = (c.h + c.l + c.c) / 3;
+    pv += tp * (c.v || 0);
+    v += (c.v || 0);
+  }
+  return v > 0 ? pv / v : null;
+}
+
+/**
+ * Intraday Momentum Runner trigger (PR-C). Fires on stocks that are
+ * already up ≥3% (or down ≥3%) from session open with volume ≥2× the
+ * trailing 10-bar average and price holding the right side of VWAP.
+ *
+ * The peer-validated reference trades (MMFL +19.6%, SAILIFE +12%,
+ * ASHAPURMIN +10%, REFEX +1.9-5.4%, RRKABEL +6.2%, GRAPHITE +1.3-2.6%,
+ * SYRMA +2.4-6%) all share this shape: smallcap that gaps + sustains
+ * a strong morning move on heavy volume. The existing reversal-pattern
+ * suite (engulfing/piercing/hammer) misreads these as exhaustion tops
+ * and fires SHORT — the replay script (PR-A2) showed 5/8 wrong-direction
+ * fires on intraday timeframes.
+ *
+ * Strict gates so this isn't a noise pump:
+ *   - barIndex in [3, 50] (skip first 15 min, cap at ~4 hours on 5m)
+ *   - stockIntraPct ≥ 3% from session open (mirror ≤ -3% for short)
+ *   - volFactor ≥ 2.0 (institutional confirmation)
+ *   - cur.c > vwap (long) / cur.c < vwap (short)
+ *   - cur is bullish (long) / bearish (short) — no exhaustion bar
+ *   - if indexDirection.intradayPct available: stock_pct - index_pct ≥ 2% (relative strength)
+ *   - no recent failed breakout: in last 6 bars no failed-high (high > prior 5-bar high but close < that high)
+ *
+ * Strength 0.88-0.95 so it dominates the reversal patterns (which max
+ * out at ~0.85). Caller's risk scorer will then apply the multi-factor
+ * confluence + R:R scoring.
+ */
+function detectMomentumRunner(candles, opts) {
+  const n = candles.length;
+  if (n < 12) return null;
+  const barIndex = opts?.barIndex ?? n;
+  if (barIndex < 3 || barIndex > 50) return null;
+
+  // Session open: prefer caller-provided (simulator passes stockDayOpen);
+  // fall back to candles[0].o (replay-script case where candles == today's bars only).
+  const dayOpen = opts?.stockDayOpen ?? candles[0]?.o;
+  if (!dayOpen || dayOpen <= 0) return null;
+
+  const cur = candles[n - 1];
+  const stockIntraPct = (cur.c - dayOpen) / dayOpen;
+
+  // Volume gate: 2x trailing 10-bar avg
+  const volSlice = candles.slice(Math.max(0, n - 11), n - 1).map(c => c.v || 0);
+  const avgVol = volSlice.length ? volSlice.reduce((a, b) => a + b, 0) / volSlice.length : 0;
+  if (avgVol <= 0) return null;
+  const vf = (cur.v || 0) / avgVol;
+  if (vf < 2.0) return null;
+
+  // VWAP confirmation across the window the caller showed us.
+  const vwap = vwapAcross(candles);
+  if (vwap == null) return null;
+
+  // Failed-breakout filter: in the last 6 bars, was there a bar where
+  // high pierced a prior 5-bar high but close fell back below it? That
+  // indicates supply zones still active above — this is NOT a clean runner.
+  const failedRangeStart = Math.max(5, n - 6);
+  for (let i = failedRangeStart; i < n - 1; i++) {  // exclude cur from check
+    const lookback = candles.slice(Math.max(0, i - 5), i);
+    if (lookback.length < 3) continue;
+    const priorHigh = Math.max(...lookback.map(c => c.h));
+    const priorLow = Math.min(...lookback.map(c => c.l));
+    const bar = candles[i];
+    if (bar.h > priorHigh && bar.c < priorHigh) return null;  // failed long breakout
+    if (bar.l < priorLow && bar.c > priorLow) return null;    // failed short breakdown
+  }
+
+  const indexPct = opts?.indexDirection?.intradayPct ?? null;
+
+  // LONG runner
+  if (stockIntraPct >= 0.03 && isBull(cur) && cur.c > vwap) {
+    if (indexPct != null && (stockIntraPct - indexPct) < 0.02) return null;  // RS gate
+    // Strength scales with magnitude + volume + RS bonus, capped at 0.95.
+    let strength = 0.88 + Math.min(0.05, (stockIntraPct - 0.03) * 0.5);
+    strength += Math.min(0.02, (vf - 2.0) * 0.01);
+    strength = Math.min(0.95, strength);
+    return {
+      name: 'Intraday Momentum Runner',
+      direction: 'bullish',
+      strength,
+      category: 'momentum',
+      emoji: '🚀',
+      tip: `Stock +${(stockIntraPct * 100).toFixed(1)}% with ${vf.toFixed(1)}× volume above VWAP — ride the trend`,
+      description: 'Strong morning move (≥3%) holding above VWAP on heavy volume. Continuation setup.',
+      // Reliability 0.72 (peer-validated trades shape — see PR-A2 replay).
+      // Higher than first-pullback (0.55) because the explicit volume +
+      // VWAP + RS gates rule out most false positives.
+      reliability: 0.72,
+      candleIndices: [n - 1],
+    };
+  }
+  // SHORT runner (mirror)
+  if (stockIntraPct <= -0.03 && !isBull(cur) && cur.c < vwap) {
+    if (indexPct != null && (indexPct - stockIntraPct) < 0.02) return null;
+    let strength = 0.88 + Math.min(0.05, (-stockIntraPct - 0.03) * 0.5);
+    strength += Math.min(0.02, (vf - 2.0) * 0.01);
+    strength = Math.min(0.95, strength);
+    return {
+      name: 'Intraday Momentum Runner',
+      direction: 'bearish',
+      strength,
+      category: 'momentum',
+      emoji: '⬇️',
+      tip: `Stock ${(stockIntraPct * 100).toFixed(1)}% with ${vf.toFixed(1)}× volume below VWAP — ride the trend`,
+      description: 'Strong morning move (≤-3%) holding below VWAP on heavy volume. Continuation setup.',
+      reliability: 0.72,
+      candleIndices: [n - 1],
+    };
+  }
+  return null;
+}
+
+/**
  * @param {Candle[]} candles
- * @param {{ barIndex?: number }} [opts] — barIndex = position in session (0-based). Used to suppress early-session momentum.
+ * @param {{ barIndex?: number, stockDayOpen?: number, indexDirection?: object }} [opts]
+ *   - barIndex: 0-based position in session (suppresses early-session momentum)
+ *   - stockDayOpen: today's session open price (enables Intraday Momentum Runner)
+ *   - indexDirection: { intradayPct } for relative-strength filter
  */
 export function detectPatterns(candles, opts) {
   if (!candles?.length || candles.length < 5) return [];
@@ -213,6 +342,16 @@ export function detectPatterns(candles, opts) {
       reliability: 0.52, terminationRisk, candleIndices: [n - 1],
     });
   }
+
+  /* --- Intraday Momentum Runner (PR-C, primary intraday P&L lever) --- */
+  // Strict gates inside detectMomentumRunner (3%+ from open, 2× volume,
+  // VWAP confirmation, RS check, no failed breakouts). When it fires the
+  // strength (0.88-0.95) sorts it above the reversal patterns, so the
+  // V2 risk scorer picks it as `top` and downstream confluence/RR scoring
+  // applies. Replay validation (PR-A2) showed 5/8 reference trades had
+  // no momentum-friendly pattern in the engine; this fixes that.
+  const runner = detectMomentumRunner(candles, opts);
+  if (runner) patterns.push(runner);
 
   patterns.sort((a, b) => b.strength - a.strength);
   return patterns;
