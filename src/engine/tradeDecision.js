@@ -110,6 +110,23 @@ export function regimeGate(direction, ctx) {
     }
   }
 
+  // Index counter-trend veto (Wave 3 iter 1): when the index is
+  // dropping ≥0.5% intraday and a candidate wants LONG, the stock is
+  // fighting the tide. Mirror for SHORT when the index is rallying
+  // ≥0.5%. Walk-forward (Mar 12 - Apr 22, intraday 5m): this veto
+  // contributed +Rs 8k to the sum P&L (Apr 21 went from -Rs 2k to
+  // +Rs 5k). Tightening to ±1.0% loses that recovery; loosening to
+  // ±0.3% over-vetos winners.
+  const indexPct = ctx?.indexDirection?.intradayPct;
+  if (typeof indexPct === 'number') {
+    if (direction === 'long' && indexPct <= -0.005) {
+      return { ok: false, reason: `index-counter-trend(${(indexPct * 100).toFixed(2)}%)` };
+    }
+    if (direction === 'short' && indexPct >= 0.005) {
+      return { ok: false, reason: `index-counter-trend(${(indexPct * 100).toFixed(2)}%)` };
+    }
+  }
+
   // Future gates that could live here without changing architecture:
   //   - circuit-breaker-hit stocks
   //   - earnings-day counter-trend block

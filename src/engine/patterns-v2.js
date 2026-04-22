@@ -124,6 +124,12 @@ function detectMomentumRunner(candles, opts) {
   // LONG runner
   if (stockIntraPct >= 0.03 && isBull(cur) && cur.c > vwap) {
     if (indexPct != null && (stockIntraPct - indexPct) < 0.02) return null;  // RS gate
+    // Index-direction veto (Wave 3 iter 1): never long a runner when the
+    // index is materially down. Choppy / counter-trend rallies on bad
+    // market days produced the Apr 8 -Rs 48k drawdown from 0W/4L all-loss
+    // momentum-runner cluster. Threshold -0.5%: small index pullbacks OK,
+    // crashes vetoed.
+    if (indexPct != null && indexPct <= -0.005) return null;
     // Strength scales with magnitude + volume + RS bonus, capped at 0.95.
     let strength = 0.88 + Math.min(0.05, (stockIntraPct - 0.03) * 0.5);
     strength += Math.min(0.02, (vf - 2.0) * 0.01);
@@ -146,6 +152,9 @@ function detectMomentumRunner(candles, opts) {
   // SHORT runner (mirror)
   if (stockIntraPct <= -0.03 && !isBull(cur) && cur.c < vwap) {
     if (indexPct != null && (indexPct - stockIntraPct) < 0.02) return null;
+    // Index-direction veto (mirror): don't short a runner when the index
+    // is rallying strongly — counter-trend shorts get squeezed.
+    if (indexPct != null && indexPct >= 0.005) return null;
     let strength = 0.88 + Math.min(0.05, (-stockIntraPct - 0.03) * 0.5);
     strength += Math.min(0.02, (vf - 2.0) * 0.01);
     strength = Math.min(0.95, strength);
