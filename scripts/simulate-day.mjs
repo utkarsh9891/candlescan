@@ -87,6 +87,13 @@ function parseArgs() {
   // --position-size. Tiers must be sorted desc by conf; parseSizeTiers
   // does the sort + validation. Null preserves Wave 2a behavior.
   let sizeTiers = null;
+  // Daily consecutive-loss kill-switch. After N consecutive losing
+  // trades on the same day, halt new entries until EOD. Wave 3
+  // observation: choppy / counter-trend days produce 4+ losing
+  // momentum-runner trades that compound losses (Apr 8 -Rs 48k from
+  // 0W/4L). Default 2 — preserves the win-then-loss-then-win pattern
+  // while killing the all-loss death spirals. Set to 0 to disable.
+  let maxConsecLosses = 2;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
@@ -119,10 +126,11 @@ function parseArgs() {
     if (args[i] === '--regime-stops') { regimeAwareStops = true; continue; }
     if (args[i] === '--no-regime-stops') { regimeAwareStops = false; continue; }
     if (args[i] === '--size-tiers' && args[i + 1]) { sizeTiers = parseSizeTiers(args[++i]); continue; }
+    if (args[i] === '--max-consec-losses' && args[i + 1]) { maxConsecLosses = +args[++i]; continue; }
     if (TIMEFRAME_MAP[args[i]]) timeframe = args[i];
   }
   const capital = positionSize * maxPositions;
-  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops, sizeTiers };
+  return { timeframe, indexName, date, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops, sizeTiers, maxConsecLosses };
 }
 
 function parseChartJson(data) {
@@ -241,7 +249,7 @@ function filterByTimeWindow(candles, startTime = '09:30', endTime = '11:00') {
 }
 
 /** Run a single-window bar-by-bar simulation and return results. */
-function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops, sizeTiers }) {
+function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE, MAX_POSITIONS, POSITION_SIZE, CAPITAL, SKIP_FIRST_BARS, MAX_TOTAL_TRADES, indexDirection, marginEnabled, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops, sizeTiers, maxConsecLosses }) {
   const trades = [];
   const openPositions = [];
   const tradedSymbols = new Set();
@@ -259,12 +267,31 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
   const maxBars = Math.max(...Object.values(stockDataForWindow).map(d => d.windowCandles.length));
 
   for (let barIdx = 0; barIdx < maxBars; barIdx++) {
-    // --- Check existing positions for SL/target hit (hard SL, no trailing) ---
+    // --- Check existing positions for SL/target hit (with profit-trail to breakeven) ---
     for (let p = openPositions.length - 1; p >= 0; p--) {
       const pos = openPositions[p];
       const sd = stockDataForWindow[pos.sym];
       if (barIdx >= sd.windowCandles.length) continue;
       const bar = sd.windowCandles[barIdx];
+
+      // Profit-trail to breakeven (Wave 3 iter 1): once unrealized profit
+      // reaches +1.5% of entry, ratchet SL to entry+0.2% (long) / entry-0.2%
+      // (short). Apr 8 / Apr 17 / Mar 18 all featured momentum-runner trades
+      // that ran +1-3% then reversed to a full SL hit. Locking breakeven on
+      // the way up converts those would-be losers into tiny wins / scratches
+      // while leaving the upside open. Threshold +1.5% chosen to be inside
+      // the typical first-leg of a true runner (peer trades reach +5-15%).
+      if (pos.direction === 'long') {
+        if (bar.h >= pos.entry * 1.015) {
+          const breakeven = pos.entry * 1.002;
+          if (pos.sl < breakeven) pos.sl = breakeven;
+        }
+      } else {
+        if (bar.l <= pos.entry * 0.985) {
+          const breakeven = pos.entry * 0.998;
+          if (pos.sl > breakeven) pos.sl = breakeven;
+        }
+      }
 
       let exitPrice = null;
       let exitReason = null;
@@ -416,6 +443,10 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
         liquidity: liqTier,
         flow: flowClass || null,
         sentiment: newsSentClass,
+        // Index intraday move at this bar — consumed by regimeGate's
+        // index-counter-trend veto. No lookahead: indexAtBar was computed
+        // above using only the NIFTY bar at-or-before cur.t.
+        indexDirection: indexAtBar,
       };
 
       // ── Sector strength at this bar (no lookahead) ──
@@ -480,6 +511,12 @@ function runWindow(stockDataForWindow, { detectPatterns, detectLiquidityBox, com
 
     // ── PHASE 3b: sort by rank score, pick top N ──
     candidates.sort((a, b) => b.score - a.score);
+    // Daily kill-switch: after N consecutive losses, halt new entries
+    // for the rest of the session. The momentum-runner can stack 4-5
+    // counter-trend losses on choppy days (Apr 8 was -Rs 48k from 0W/4L)
+    // and the flat sizeMultiplier shrink isn't enough to prevent that.
+    // 0 = disabled.
+    if (maxConsecLosses > 0 && consecutiveLosses >= maxConsecLosses) continue;
     for (const c of candidates) {
       if (openPositions.length >= MAX_POSITIONS) break;
       if (totalTradesOpened >= MAX_TOTAL_TRADES) break;
@@ -643,7 +680,7 @@ function writeTradesJson(resolvedDate, runMeta, summary, trades) {
 }
 
 async function main() {
-  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops, sizeTiers } = parseArgs();
+  const { timeframe, indexName, date: targetDate, engine, minConfidence, maxPositions, maxTotalTrades, positionSize, skipFirstBars, capital, fromTime, toTime, multiWindow, margin, saveTrades, pessimisticFills, useFlow, regimeAwareStops, sizeTiers, maxConsecLosses } = parseArgs();
 
   let detectPatterns, detectLiquidityBox, computeRiskScore;
   if (engine === 'scalp') {
@@ -793,37 +830,45 @@ async function main() {
   // candle array on indexDirection so pattern/risk engines can look up
   // the index intraday % at any given timestamp.
   let indexDirection = { direction: 'neutral', strength: 0, candles: null, dayOpen: null };
-  if (engine === 'scalp') {
+  // Load NIFTY candles for ALL engines — Wave 3 added an index-counter-trend
+  // veto in regimeGate (tradeDecision.js) that consumes indexDirection.candles
+  // and dayOpen to compute intradayPct at each bar. Scalp adds a pre-window
+  // direction tag on top; intraday/delivery just use the bar lookup.
+  {
     const niftySym = INDEX_SYMBOL_MAP[indexName] || '^NSEI';
     const niftyJson = readCachedChartJson(niftySym, tf.interval, resolvedDate);
     if (niftyJson) {
       const niftyParsed = parseChartJson(niftyJson);
       if (niftyParsed?.candles?.length >= 15) {
-        const [fromH, fromM] = fromTime.split(':').map(Number);
-        const fromMins = fromH * 60 + fromM;
-        const IST_OFFSET = 19800;
         const niftyCandles = niftyParsed.candles;
-        // Pre-window direction — established before trading starts
-        const candlesUpToStart = niftyCandles.filter(c => {
-          const d = new Date((c.t + IST_OFFSET) * 1000);
-          return d.getUTCHours() * 60 + d.getUTCMinutes() < fromMins;
-        });
-        if (candlesUpToStart.length >= 5) {
-          const first = candlesUpToStart[0];
-          const last = candlesUpToStart[candlesUpToStart.length - 1];
-          const move = (last.c - first.o) / first.o;
-          const absMove = Math.abs(move);
-          indexDirection = {
-            direction: move > 0.0015 ? 'bullish' : move < -0.0015 ? 'bearish' : 'neutral',
-            strength: Math.min(1, absMove * 100),
-            candles: niftyCandles,        // full day — pattern engine filters by ts
-            dayOpen: first.o,             // the index's session open price
-            preWindowMove: move,          // net % move during the pre-window
-          };
-          console.log(`Index direction: ${indexDirection.direction} (pre-window move: ${(move * 100).toFixed(2)}%)`);
+        const dayOpen = niftyCandles[0]?.o || null;
+        indexDirection = {
+          direction: 'neutral', strength: 0,
+          candles: niftyCandles,
+          dayOpen,
+        };
+        if (engine === 'scalp') {
+          const [fromH, fromM] = fromTime.split(':').map(Number);
+          const fromMins = fromH * 60 + fromM;
+          const IST_OFFSET = 19800;
+          const candlesUpToStart = niftyCandles.filter(c => {
+            const d = new Date((c.t + IST_OFFSET) * 1000);
+            return d.getUTCHours() * 60 + d.getUTCMinutes() < fromMins;
+          });
+          if (candlesUpToStart.length >= 5) {
+            const first = candlesUpToStart[0];
+            const last = candlesUpToStart[candlesUpToStart.length - 1];
+            const move = (last.c - first.o) / first.o;
+            const absMove = Math.abs(move);
+            indexDirection.direction = move > 0.0015 ? 'bullish' : move < -0.0015 ? 'bearish' : 'neutral';
+            indexDirection.strength = Math.min(1, absMove * 100);
+            indexDirection.dayOpen = first.o;
+            indexDirection.preWindowMove = move;
+            console.log(`Index direction: ${indexDirection.direction} (pre-window move: ${(move * 100).toFixed(2)}%)`);
+          }
         }
       }
-    } else {
+    } else if (engine === 'scalp') {
       console.log('Warning: NIFTY cache not found — index direction filter disabled');
     }
   }
@@ -898,7 +943,8 @@ async function main() {
     } catch { console.log('Warning: Could not fetch margin data — margin penalty disabled'); }
   }
 
-  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops, sizeTiers };
+  const simParams = { detectPatterns, detectLiquidityBox, computeRiskScore, MIN_CONFIDENCE: minConfidence, MAX_POSITIONS: maxPositions, POSITION_SIZE: positionSize, CAPITAL, SKIP_FIRST_BARS: skipFirstBars, MAX_TOTAL_TRADES: maxTotalTrades, indexDirection, marginEnabled: margin, marginMap, sectorData, vixReg, flowClass, newsMap, pessimisticFills, useFlow, regimeAwareStops, sizeTiers, maxConsecLosses };
+  if (maxConsecLosses > 0) console.log(`Daily kill-switch: halt after ${maxConsecLosses} consecutive losses`);
   if (sizeTiers) {
     const tierStr = sizeTiers.map(t => `≥${t.conf}:Rs.${(t.size/1000).toFixed(0)}k`).join(', ');
     console.log(`Size tiers: ${tierStr} (fallback Rs.${(positionSize/1000).toFixed(0)}k)`);
