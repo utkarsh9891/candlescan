@@ -248,7 +248,7 @@ export function useStockScan({
         detectPat = detectPatternsScalp;
         detectBox = detectLiquidityBoxScalp;
         scoreRisk = computeRiskScoreScalp;
-      } else if (engineVersion === 'v1') {
+      } else if (engineVersion === 'delivery') {
         detectPat = detectPatternsClassic; detectBox = detectLiquidityBoxClassic; scoreRisk = computeRiskScoreClassic;
       } else {
         detectPat = detectPatternsV2; detectBox = detectLiquidityBoxV2; scoreRisk = computeRiskScoreV2;

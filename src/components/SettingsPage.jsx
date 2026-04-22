@@ -532,8 +532,8 @@ export default function SettingsPage({
           <div style={{ display: 'flex', gap: 4 }}>
             {[
               { key: 'scalp', label: 'Scalp', color: '#d97706' },
-              { key: 'v2', label: 'Intraday', color: '#2563eb' },
-              { key: 'v1', label: 'Classic', color: '#16a34a' },
+              { key: 'intraday', label: 'Intraday', color: '#2563eb' },
+              { key: 'delivery', label: 'Delivery', color: '#16a34a' },
             ].map((v) => (
               <button key={v.key} type="button" onClick={() => onEngineVersionChange(v.key)}
                 style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '10px 0', border: engineVersion === v.key ? 'none' : '1px solid #e2e5eb', borderRadius: 8, cursor: 'pointer', background: engineVersion === v.key ? v.color : '#fff', color: engineVersion === v.key ? '#fff' : '#4a5068' }}>

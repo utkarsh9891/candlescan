@@ -269,7 +269,7 @@ function getEngineFns(engineVersion) {
     computeRiskScore: computeRiskScoreScalp,
     detectProximity, // so near-threshold rows get proximityInfo for the schedule button
   };
-  if (engineVersion === 'v1') return { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
+  if (engineVersion === 'delivery') return { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 

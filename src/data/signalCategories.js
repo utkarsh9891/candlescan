@@ -34,10 +34,31 @@ export const CLASSIC_CATEGORIES = [
   'gap',
 ];
 
+/**
+ * Canonical engine codes (v0.17+):
+ *   - 'scalp'    → 1m, ≤20-min holds
+ *   - 'intraday' → 5m or 15m, full-session same-day (was 'v2')
+ *   - 'delivery' → daily, multi-day positions (was 'v1' / 'classic')
+ *
+ * Legacy 'v1', 'v2', 'classic' codes are accepted as input (back-compat
+ * for stored localStorage values + CLI flags) and normalized. All
+ * engine === '<x>' conditionals must use canonical names — pass any
+ * external value through normalizeEngine() at the boundary.
+ */
+export const ENGINE_LIST = ['scalp', 'intraday', 'delivery'];
+
+export function normalizeEngine(v) {
+  if (v === 'v2') return 'intraday';
+  if (v === 'v1' || v === 'classic') return 'delivery';
+  if (ENGINE_LIST.includes(v)) return v;
+  return 'scalp';
+}
+
 /** Get categories for a given engine version. */
 export function getCategoriesForEngine(engineVersion) {
-  if (engineVersion === 'scalp') return SCALP_CATEGORIES;
-  if (engineVersion === 'v1') return CLASSIC_CATEGORIES;
+  const e = normalizeEngine(engineVersion);
+  if (e === 'scalp') return SCALP_CATEGORIES;
+  if (e === 'delivery') return CLASSIC_CATEGORIES;
   return SIGNAL_CATEGORIES;
 }
 
@@ -74,8 +95,9 @@ const CLASSIC_CATEGORIES_UI = [
 ];
 
 export function getCategoriesUIForEngine(engineVersion) {
-  if (engineVersion === 'scalp') return SCALP_CATEGORIES_UI;
-  if (engineVersion === 'v1') return CLASSIC_CATEGORIES_UI;
+  const e = normalizeEngine(engineVersion);
+  if (e === 'scalp') return SCALP_CATEGORIES_UI;
+  if (e === 'delivery') return CLASSIC_CATEGORIES_UI;
   return INTRADAY_CATEGORIES_UI;
 }
 
@@ -85,7 +107,8 @@ export const APPROX_SCALP_RULES = 14;
 export const APPROX_CLASSIC_RULES = 14;
 
 export function getRuleCountForEngine(engineVersion) {
-  if (engineVersion === 'scalp') return APPROX_SCALP_RULES;
-  if (engineVersion === 'v1') return APPROX_CLASSIC_RULES;
+  const e = normalizeEngine(engineVersion);
+  if (e === 'scalp') return APPROX_SCALP_RULES;
+  if (e === 'delivery') return APPROX_CLASSIC_RULES;
   return APPROX_PATTERN_RULES;
 }

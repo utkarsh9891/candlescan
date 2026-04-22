@@ -82,7 +82,13 @@ export function parseArgs(argv) {
       case '--from': opts.from = next(); break;
       case '--to': opts.to = next(); break;
       case '--index': opts.index = next(); break;
-      case '--engine': opts.engine = next(); break;
+      case '--engine': {
+        const raw = next();
+        if (raw === 'v2') opts.engine = 'intraday';
+        else if (raw === 'v1' || raw === 'classic') opts.engine = 'delivery';
+        else opts.engine = raw;
+        break;
+      }
       case '--confidence': opts.confidence = +next(); break;
       case '--max-positions': opts.maxPositions = +next(); break;
       case '--position-size': opts.positionSize = +next(); break;
@@ -119,7 +125,8 @@ function printHelp() {
       '  --from YYYY-MM-DD       start of sweep window (default: 2026-03-12)',
       '  --to YYYY-MM-DD         end of sweep window (default: today IST)',
       '  --index "NAME"          NSE index (default: "NIFTY SMALLCAP 100")',
-      '  --engine scalp|v2       engine selector (default: scalp)',
+      '  --engine NAME           engine selector: scalp | intraday | delivery (default: scalp)',
+      '                          legacy aliases: v2→intraday, v1/classic→delivery',
       '  --confidence N          min confidence (default: 75)',
       '  --max-positions N       parallel positions (default: 1)',
       '  --position-size RS      per-position capital (default: 300000)',

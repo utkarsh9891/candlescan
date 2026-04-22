@@ -82,9 +82,9 @@ function TradeCard({ t, onTap }) {
 
 // Engine-specific defaults
 const ENGINE_PRESETS = {
-  scalp:  { from: '09:30', to: '11:00', maxOpen: 1, maxTrades: 5 },
-  v2:     { from: '09:15', to: '14:30', maxOpen: 2, maxTrades: 3 },
-  v1:     { from: '09:15', to: '15:30', maxOpen: 3, maxTrades: 2 },
+  scalp:    { from: '09:30', to: '11:00', maxOpen: 1, maxTrades: 5 },
+  intraday: { from: '09:15', to: '14:30', maxOpen: 2, maxTrades: 3 },
+  delivery: { from: '09:15', to: '15:30', maxOpen: 3, maxTrades: 2 },
 };
 
 export default function SimulationPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode }) {
@@ -143,7 +143,7 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, onIndexChan
         detectLiquidityBox: detectLiquidityBoxScalp,
         computeRiskScore: computeRiskScoreScalp,
       };
-    } else if (localEngine === 'v2') {
+    } else if (localEngine === 'intraday') {
       engineFns = { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
     } else {
       engineFns = { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
@@ -265,8 +265,8 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, onIndexChan
         <div style={{ display: 'flex', gap: 4 }}>
           {[
             { k: 'scalp', l: 'Scalp', color: '#d97706' },
-            { k: 'v2', l: 'Intraday', color: '#2563eb' },
-            { k: 'v1', l: 'Classic', color: '#16a34a' },
+            { k: 'intraday', l: 'Intraday', color: '#2563eb' },
+            { k: 'delivery', l: 'Delivery', color: '#16a34a' },
           ].map(v => (
             <button key={v.k} type="button" disabled={running} onClick={() => handleEngineChange(v.k)}
               style={{
