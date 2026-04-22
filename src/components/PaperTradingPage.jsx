@@ -43,7 +43,7 @@ function getEngineFns(engine) {
     detectLiquidityBox: detectLiquidityBoxScalp,
     computeRiskScore: computeRiskScoreScalp,
   };
-  if (engine === 'v2') return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
+  if (engine === 'intraday') return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
   return { detectPatterns: detectPatternsClassic, detectLiquidityBox: detectLiquidityBoxClassic, computeRiskScore: computeRiskScoreClassic };
 }
 

@@ -85,7 +85,14 @@ function parseArgs() {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--index' && args[i + 1]) { indexName = args[++i]; continue; }
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
-    if (args[i] === '--engine' && args[i + 1]) { engine = args[++i]; continue; }
+    if (args[i] === '--engine' && args[i + 1]) {
+      const raw = args[++i];
+      // Canonical: scalp / intraday / delivery. Legacy aliases: v2 / v1 / classic.
+      if (raw === 'v2') engine = 'intraday';
+      else if (raw === 'v1' || raw === 'classic') engine = 'delivery';
+      else engine = raw;
+      continue;
+    }
     // --variant is accepted but ignored (single scalp engine, no variants)
     if (args[i] === '--variant' && args[i + 1]) { i++; continue; }
     if (args[i] === '--confidence' && args[i + 1]) { minConfidence = +args[++i]; continue; }
@@ -633,10 +640,16 @@ async function main() {
     detectPatterns = detectPatternsScalp;
     detectLiquidityBox = detectLiquidityBoxScalp;
     computeRiskScore = computeRiskScoreScalp;
-  } else {
+  } else if (engine === 'intraday') {
     detectPatterns = detectPatternsV2;
     detectLiquidityBox = detectLiquidityBoxV2;
     computeRiskScore = computeRiskScoreV2;
+  } else if (engine === 'delivery') {
+    console.error('Delivery engine not wired into simulate-day.mjs yet (Phase 0 of strategy iteration). Use --engine scalp or --engine intraday.');
+    process.exit(2);
+  } else {
+    console.error(`Unknown engine: ${engine}. Valid: scalp, intraday, delivery.`);
+    process.exit(2);
   }
   const CAPITAL = capital;
   const tf = TIMEFRAME_MAP[timeframe];

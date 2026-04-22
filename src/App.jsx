@@ -24,7 +24,7 @@ import UpdatePrompt from './components/UpdatePrompt.jsx';
 import SingleTickerWidget from './components/SingleTickerWidget.jsx';
 import { readSavedTickerSymbol, writeTickerSymbol } from './components/SingleTickerPicker.jsx';
 import { getMarketStatus } from './utils/marketHours.js';
-import { getCategoriesForEngine, getRuleCountForEngine } from './data/signalCategories.js';
+import { getCategoriesForEngine, getRuleCountForEngine, normalizeEngine } from './data/signalCategories.js';
 import { isDynamicIndex } from './data/dynamicIndices.js';
 
 function DataDelayDisclaimer({ candles, simulated, dataSource, lastScan, fromCache }) {
@@ -68,7 +68,12 @@ const shell = {
 
 export default function App() {
   const [engineVersion, setEngineVersion] = useState(() => {
-    try { return localStorage.getItem('candlescan_engine') || 'scalp'; } catch { return 'scalp'; }
+    try {
+      const raw = localStorage.getItem('candlescan_engine');
+      const v = normalizeEngine(raw);
+      if (v !== raw) { try { localStorage.setItem('candlescan_engine', v); } catch { /* quota */ } }
+      return v;
+    } catch { return 'scalp'; }
   });
 
   // Novice Mode: global master switch. When ON, the hamburger's
@@ -94,12 +99,12 @@ export default function App() {
     setActiveFilters(new Set(getCategoriesForEngine(engineVersion)));
     // Auto-set timeframe per engine
     if (engineVersion === 'scalp') setTimeframe('1m');
-    else if (engineVersion === 'v2') setTimeframe('5m');
-    // Classic: no auto-set (user picks, typically 1d)
+    else if (engineVersion === 'intraday') setTimeframe('5m');
+    // Delivery: no auto-set (user picks, typically 1d)
   }, [engineVersion]);
   const [timeframe, setTimeframe] = useState(() => {
     try {
-      const eng = localStorage.getItem('candlescan_engine') || 'scalp';
+      const eng = normalizeEngine(localStorage.getItem('candlescan_engine'));
       return eng === 'scalp' ? '1m' : '5m';
     } catch { return '5m'; }
   });
