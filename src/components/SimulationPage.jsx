@@ -339,13 +339,17 @@ export default function SimulationPage({ onSelectSymbol, savedIndex, onIndexChan
       </div>
 
       {/* Margin + Broker Premium toggles */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <ToggleSwitch checked={margin} onChange={setMargin} label="5× Margin (MIS)" compact disabled={running} />
-        {margin && <span style={{ fontSize: 11, color: '#6b7280' }}>
-          Buying power: {((capital * MARGIN_MULTIPLIER) / 100000).toFixed(1)}L
-        </span>}
-        <ToggleSwitch checked={premiumCharges} onChange={(v) => { setPremiumCharges(v); try { localStorage.setItem(BROKER_PREMIUM_STORAGE_KEY, String(v)); } catch {} }} label="Broker Premium" compact disabled={running} />
-        <span style={{ fontSize: 10, color: '#8892a8' }}>(lower exchange fees)</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          <ToggleSwitch checked={margin} onChange={setMargin} label="5× Margin" compact disabled={running} />
+          {margin && <span style={{ fontSize: 10, color: '#6b7280' }}>
+            ({((capital * MARGIN_MULTIPLIER) / 100000).toFixed(1)}L)
+          </span>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          <ToggleSwitch checked={premiumCharges} onChange={(v) => { setPremiumCharges(v); try { localStorage.setItem(BROKER_PREMIUM_STORAGE_KEY, String(v)); } catch {} }} label="Broker Premium" compact disabled={running} />
+          <span style={{ fontSize: 10, color: '#8892a8' }}>(low fees)</span>
+        </div>
       </div>
 
       {/* Run button */}

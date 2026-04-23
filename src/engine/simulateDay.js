@@ -8,7 +8,7 @@ import { fetchOHLCV } from './fetcher.js';
 import { fetchNseIndexSymbolList } from './nseIndexFetch.js';
 import { MARGIN_MULTIPLIER } from '../data/marginData.js';
 import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
-import { classifyGap, liquidityTier } from './marketContext.js';
+import { classifyGap, liquidityTier, vixRegime as classifyVixRegime } from './marketContext.js';
 
 const IST_OFFSET = 19800; // +5:30 in seconds
 const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
@@ -208,6 +208,29 @@ export async function runSimulation({
   }
   const stockCount2 = Object.keys(stockData).length;
 
+  // Phase 2c: Fetch INDIA VIX for the simulation date. Classify regime
+  // (LOW/NORMAL/HIGH/PANIC) and pass it into the regime gate at every
+  // bar. Browser previously ran with vixRegime=null — the HIGH-VIX
+  // veto (walk-forward validated: PF 1.01 vs 2.46) could never fire.
+  // Wave 3 iter 2: closes the browser-vs-CLI strategy divergence.
+  let vixRegimeClass = null;
+  try {
+    const doFetch = fetchFn || fetchOHLCV;
+    const vixRes = await doFetch('^INDIAVIX', '1d', { gateToken: gateToken || batchToken, date });
+    const vixBars = vixRes?.candles || [];
+    // Pick the latest VIX bar at or before the simulation date (no lookahead).
+    let vixClose = null;
+    for (let i = vixBars.length - 1; i >= 0; i--) {
+      if (istDate(vixBars[i].t) <= date) { vixClose = vixBars[i].c; break; }
+    }
+    // Sanity guard: valid VIX values are in ~[5, 60]. Out-of-range
+    // closes mean the fetch returned something that isn't really VIX
+    // (e.g. a test stub, or a wrong symbol response). Treat as unknown.
+    if (typeof vixClose === 'number' && vixClose >= 5 && vixClose <= 60) {
+      vixRegimeClass = classifyVixRegime(vixClose);
+    }
+  } catch { /* VIX fetch failed — fall back to null, regime gate degrades gracefully */ }
+
   // Phase 3: Bar-by-bar simulation
   const trades = [];
   const openPositions = [];
@@ -393,11 +416,17 @@ export async function runSimulation({
       const gapClass = classifyGap(prevClose, stockDayOpen);
       const liqTier = liquidityTier(sd.avgVol);
       const marketCtx = {
-        vixRegime: null,     // UNKNOWN: browser has no VIX feed
+        // Wave 3 iter 2: VIX + indexDirection now wired in-browser.
+        // Previously both were hardcoded to null/missing so the HIGH-VIX
+        // veto and the index-counter-trend veto silently never fired in
+        // the UI. Closes a browser-vs-CLI divergence that was eating
+        // ~Rs 50k+ on some days (Apr 22 browser -18k vs CLI +38k).
+        vixRegime: vixRegimeClass,
         gap: gapClass,
         liquidity: liqTier,
         flow: null,          // UNKNOWN: browser can't fetch FII/DII live
         sentiment: null,     // UNKNOWN: per-stock news not wired here yet
+        indexDirection: indexAtBar,
       };
       const gateRes = regimeGate(risk.direction, marketCtx);
       if (!gateRes.ok) continue;
