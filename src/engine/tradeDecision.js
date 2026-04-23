@@ -116,7 +116,9 @@ export function regimeGate(direction, ctx) {
   // ≥0.5%. Walk-forward (Mar 12 - Apr 22, intraday 5m): this veto
   // contributed +Rs 8k to the sum P&L (Apr 21 went from -Rs 2k to
   // +Rs 5k). Tightening to ±1.0% loses that recovery; loosening to
-  // ±0.3% over-vetos winners.
+  // ±0.3% over-vetos winners (Wave 3 iter 2 trial: combined with an
+  // early-session + RS filter it regressed walk-forward by -Rs 12k
+  // aggregate via candidate-substitution — see PR #161 failure mode).
   const indexPct = ctx?.indexDirection?.intradayPct;
   if (typeof indexPct === 'number') {
     if (direction === 'long' && indexPct <= -0.005) {

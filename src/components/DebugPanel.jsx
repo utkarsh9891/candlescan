@@ -161,29 +161,32 @@ export default function DebugPanel({ open, onClose }) {
       borderTop: '2px solid #2563eb', overflow: 'auto',
       fontFamily: mono, fontSize: 11,
     }}>
-      {/* Header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
-        background: '#1a1d26', position: 'sticky', top: 0, borderBottom: '1px solid #333', zIndex: 1,
-      }}>
+      {/* Header — tap anywhere (except buttons) to collapse */}
+      <div
+        onClick={() => setCollapsed(true)}
+        title="Tap to collapse to bottom bar"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+          background: '#1a1d26', position: 'sticky', top: 0, borderBottom: '1px solid #333', zIndex: 1,
+          cursor: 'pointer', userSelect: 'none',
+        }}
+      >
         <span style={{ fontWeight: 700, color: '#2563eb' }}>Debug</span>
         <span style={{ color: '#8892a8' }}>{logs.length} requests</span>
+        <span style={{ color: '#555', fontSize: 10 }}>(tap bar to collapse)</span>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={() => {
+        <button type="button" onClick={(e) => {
+          e.stopPropagation();
           const all = logs.map(formatEntryForCopy).join('\n\n═══════════════\n\n');
           copyToClipboard(all);
         }} style={btnStyle}>
           Copy All
         </button>
-        <button type="button" onClick={() => { setLogs([]); setExpandedId(null); }} style={btnStyle}>
+        <button type="button" onClick={(e) => { e.stopPropagation(); setLogs([]); setExpandedId(null); }} style={btnStyle}>
           Clear
         </button>
-        <button type="button" onClick={() => setCollapsed(true)}
-          style={{ fontSize: 12, color: '#8892a8', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}
-          title="Collapse to bottom bar">
-          ▾
-        </button>
-        <button type="button" onClick={onClose}
+        <span style={{ fontSize: 12, color: '#8892a8', padding: '0 4px' }}>▾</span>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onClose(); }}
           style={{ fontSize: 14, color: '#8892a8', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}>
           ×
         </button>
