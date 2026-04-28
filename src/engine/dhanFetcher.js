@@ -170,15 +170,21 @@ export async function fetchDhanOHLCV(symbol, timeframe, { vault, gateToken }) {
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           // Token-expiry detection. Dhan surfaces expired / invalid tokens as
-          // HTTP 401 (and occasionally 403). The Worker forwards Dhan's
-          // original status + error body verbatim, so we also match on
-          // broker-specific markers in the message: `DH-901` (invalid
-          // token — empirically the most common), `DH-904` (kill-switch),
-          // and textual fallbacks ("Invalid_Authentication", "token expired",
-          // "unauthorized"). Widened on purpose so a future Dhan code change
-          // doesn't silently regress this banner to "empty scan".
+          // HTTP 401 (canonical) and occasionally HTTP 403 with a body marker.
+          // The Worker forwards Dhan's status + error body verbatim, and the
+          // Worker uses HTTP 403 for its own gate-auth failures — so a 401
+          // here is unambiguously a Dhan upstream rejection of the token.
+          // Body markers: `DH-901` (invalid token), `DH-904` (kill-switch),
+          // "Invalid_Authentication", "token expired", "unauthorized".
+          //
+          // The status gate matters: Dhan's 429 rate-limit body can contain
+          // the word "unauthorized" (CF gateway boilerplate or Dhan's own
+          // text), and a status-agnostic regex match was misclassifying
+          // 429s as token expiry — which then triggered the dataSourceFetch
+          // self-heal and silently nuked the user's vault on a transient
+          // rate limit. Always require an auth-related status code.
           const tokenMarkerRe = /DH-90[14]|Invalid_Authentication|token[\s_-]*(?:expired|invalid)|unauthori[sz]ed/i;
-          if (res.status === 401 || (res.status === 403 && tokenMarkerRe.test(text)) || tokenMarkerRe.test(text)) {
+          if (res.status === 401 || (res.status === 403 && tokenMarkerRe.test(text))) {
             throw new TokenExpiredError('dhan');
           }
           const err = new Error(`HTTP ${res.status}${text ? ': ' + text : ''}`);
