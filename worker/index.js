@@ -36,6 +36,9 @@ import {
   googleNewsKey,
   GOOGLE_NEWS_TTL_MS,
   GOOGLE_NEWS_STALE_MAX_MS,
+  yahooNewsKey,
+  YAHOO_NEWS_TTL_MS,
+  YAHOO_NEWS_STALE_MAX_MS,
 } from './cache.js';
 
 const ALLOWED_ORIGINS = [
@@ -574,7 +577,10 @@ async function fetchMoneycontrolUpstream() {
         let description = '';
         const d = raw.match(/<description>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/description>/i);
         if (d) description = (d[1] || d[2] || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        if (title) items.push({ title, description });
+        let link = '';
+        const lk = raw.match(/<link>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/link>/i);
+        if (lk) link = (lk[1] || lk[2] || '').trim();
+        if (title) items.push({ title, description, link });
       }
     } catch (err) {
       lastErr = err;
@@ -657,7 +663,10 @@ async function fetchGoogleNewsUpstream(symbol) {
     let pubDate = '';
     const pd = raw.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
     if (pd) pubDate = pd[1].trim();
-    if (title) items.push({ title, description, pubDate });
+    let link = '';
+    const lk = raw.match(/<link>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/link>/i);
+    if (lk) link = (lk[1] || lk[2] || '').trim();
+    if (title) items.push({ title, description, pubDate, link });
   }
   return { symbol, items, count: items.length, fetchedAt: new Date().toISOString() };
 }
@@ -724,6 +733,105 @@ async function handleGoogleNewsForSymbol(request, env, origin) {
     });
   } catch (err) {
     return new Response(JSON.stringify({ error: `Google News fetch failed: ${err?.message || err}` }), {
+      status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+/**
+ * Fetch + parse Yahoo Finance news for a given NSE symbol via the
+ * search endpoint. Yahoo returns structured JSON (not RSS) with
+ * provider-published timestamps and direct article URLs — much cleaner
+ * than the Google News RSS path. Throws on upstream 5xx/429/network so
+ * `kvCacheFlow` can route to stale or the unavailable sentinel.
+ */
+async function fetchYahooNewsUpstream(symbol) {
+  const q = encodeURIComponent(`${symbol}.NS`);
+  const apiUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${q}&newsCount=10&quotesCount=0&enableEnhancedTrivialQuery=true`;
+  const resp = await fetch(apiUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (candlescan-proxy)',
+      Accept: 'application/json',
+    },
+  });
+  if (!resp.ok) {
+    const err = new Error(`Yahoo Search HTTP ${resp.status}`);
+    err.upstreamStatus = resp.status;
+    throw err;
+  }
+  const data = await resp.json().catch(() => ({}));
+  const rawNews = Array.isArray(data?.news) ? data.news : [];
+  const items = rawNews
+    .filter((n) => n && (n.title || n.headline))
+    .map((n) => ({
+      title: String(n.title || n.headline || '').trim(),
+      description: '', // Yahoo's search response carries no summary; clients tolerate empty
+      pubDate: n.providerPublishTime
+        ? new Date(n.providerPublishTime * 1000).toISOString()
+        : '',
+      link: String(n.link || n.url || '').trim(),
+      publisher: String(n.publisher || '').trim(),
+    }))
+    .filter((it) => it.title);
+  return { symbol, items, count: items.length, fetchedAt: new Date().toISOString() };
+}
+
+/**
+ * Handle /news/yahoo — per-symbol Yahoo Finance News proxy.
+ * Mirrors the /news/google contract (same response shape, same
+ * X-Cache headers, same kvCacheFlow + unavailable sentinel) so the
+ * client tier chain treats them interchangeably. Yahoo gives us
+ * native article URLs and publisher names — Google RSS does not —
+ * so this is the preferred per-symbol tier when both succeed.
+ *
+ * Cache: `yahoo_news:${symbol}:${YYYY-MM-DD}`, 4h fresh / 24h stale.
+ */
+async function handleYahooNewsForSymbol(request, env, origin) {
+  const url = new URL(request.url);
+  const rawSym = url.searchParams.get('symbol') || '';
+  const symbol = rawSym.replace(/[^A-Za-z0-9&-]/g, '').slice(0, 24);
+  if (!symbol) {
+    return new Response(JSON.stringify({ error: 'Missing or invalid symbol parameter' }), {
+      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+
+  const nowMs = Date.now();
+  const key = yahooNewsKey(symbol, nowMs);
+
+  try {
+    const result = await kvCacheFlow({
+      kv: env.CANDLESCAN_KV,
+      key,
+      ttlMs: YAHOO_NEWS_TTL_MS,
+      staleMaxMs: YAHOO_NEWS_STALE_MAX_MS,
+      fetchFresh: () => fetchYahooNewsUpstream(symbol),
+      unavailablePayload: () => ({
+        symbol,
+        items: [],
+        headlines: [],
+        score: null,
+        count: 0,
+        fetchedAt: new Date().toISOString(),
+        source: 'unavailable',
+      }),
+    });
+    if (result.warnMessage) console.warn(result.warnMessage);
+    const sourceTag = result.status === 'HIT' ? 'fresh'
+      : result.status === 'MISS' ? 'miss'
+      : result.status === 'STALE' ? 'stale'
+      : 'unavailable';
+    return new Response(JSON.stringify(result.payload), {
+      status: 200,
+      headers: {
+        ...corsHeaders(origin),
+        ...cacheHeaders({ status: result.status, key: result.key, ageMs: result.ageMs ?? 0, cacheSource: sourceTag }),
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=600',
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: `Yahoo News fetch failed: ${err?.message || err}` }), {
       status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
     });
   }
@@ -1199,6 +1307,14 @@ export default {
     // Takes ?symbol=RELIANCE (sanitized to alphanumeric + -).
     if (path === '/news/google') {
       return handleGoogleNewsForSymbol(request, env, origin);
+    }
+
+    // Yahoo Finance News per-symbol proxy — preferred per-symbol tier
+    // because the response carries native article URLs and publisher
+    // names (Google RSS strips both). Same contract as /news/google so
+    // the client tier chain treats them interchangeably.
+    if (path === '/news/yahoo') {
+      return handleYahooNewsForSymbol(request, env, origin);
     }
 
     // India VIX live fetch — browser calls this at scan start to get
