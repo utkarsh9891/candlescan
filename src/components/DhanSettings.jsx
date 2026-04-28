@@ -227,6 +227,9 @@ export default function DhanSettings({ gateUnlocked, dataSource, apiKey, apiSecr
       localStorage.removeItem(LS_DHAN_PIN_LEGACY);
     } catch { /* ok */ }
     setDhanClientId('');
+    setDhanPin('');
+    setDhanTotp('');
+    setDhanPastedToken('');
     setDhanStatus('none');
     setDhanMsg('Credentials cleared. Note: Dhan allows token generation once every 2 minutes.');
     setDhanMsgColor('#d97706');
