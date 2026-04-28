@@ -343,31 +343,46 @@ export default function DhanSettings({ gateUnlocked, dataSource, apiKey, apiSecr
       })()}
 
       {/* Actions based on state */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        {(dhanStatus === 'valid' || dhanStatus === 'checking') && (
-          <>
-            <button type="button" onClick={handleValidateDhan}
-              disabled={dhanStatus === 'checking'}
-              style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
-              {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
-            </button>
-            <button type="button" onClick={handleRefreshInstruments}
-              disabled={refreshingInstruments}
-              title="Fetch the latest NSE scrip master from Dhan. Use this if a new listing is missing from the symbol list."
-              style={{ ...btnSecondary, opacity: refreshingInstruments ? 0.5 : 1 }}>
-              {refreshingInstruments ? 'Refreshing…' : 'Refresh instrument list'}
-            </button>
-            {!dhanShowAuth && (
-              <button type="button" onClick={handleReconnectDhan} style={btnSecondary}>
-                Reconnect
+      {/* `hasAnyDhanState` is the force-remove escape hatch: any partial config
+          (saved client_id, vault blob, or encrypted PIN) keeps the danger button
+          visible so the user can clear stale credentials even when the token
+          can't validate (no longer gated on dhanStatus === 'valid'). */}
+      {(() => {
+        const hasAnyDhanState = Boolean(dhanClientId) || hasVault() || (() => {
+          try { return Boolean(localStorage.getItem(LS_DHAN_PIN_ENC) || localStorage.getItem(LS_DHAN_PIN_LEGACY)); } catch { return false; }
+        })();
+        const isLive = dhanStatus === 'valid' || dhanStatus === 'checking';
+        return (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {isLive && (
+              <>
+                <button type="button" onClick={handleValidateDhan}
+                  disabled={dhanStatus === 'checking'}
+                  style={{ ...btnSecondary, opacity: dhanStatus === 'checking' ? 0.5 : 1 }}>
+                  {dhanStatus === 'checking' ? 'Validating...' : 'Validate Token'}
+                </button>
+                <button type="button" onClick={handleRefreshInstruments}
+                  disabled={refreshingInstruments}
+                  title="Fetch the latest NSE scrip master from Dhan. Use this if a new listing is missing from the symbol list."
+                  style={{ ...btnSecondary, opacity: refreshingInstruments ? 0.5 : 1 }}>
+                  {refreshingInstruments ? 'Refreshing…' : 'Refresh instrument list'}
+                </button>
+                {!dhanShowAuth && (
+                  <button type="button" onClick={handleReconnectDhan} style={btnSecondary}>
+                    Reconnect
+                  </button>
+                )}
+              </>
+            )}
+            {hasAnyDhanState && (
+              <button type="button" onClick={handleClearDhan} style={btnDanger}
+                title="Force-remove all locally saved Dhan credentials (client ID, PIN, encrypted token).">
+                Clear Credentials
               </button>
             )}
-            <button type="button" onClick={handleClearDhan} style={btnDanger}>
-              Clear Credentials
-            </button>
-          </>
-        )}
-      </div>
+          </div>
+        );
+      })()}
 
       {/* Step 2: PIN + TOTP (shown only when needed) */}
       {dhanNeedsAuth && (

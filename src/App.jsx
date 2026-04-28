@@ -151,21 +151,29 @@ export default function App() {
     backFromSettings,
   } = useAppView();
 
-  // Re-sync dataSource from localStorage when returning from Settings or on page reload
+  // Re-sync dataSource from localStorage on every view change AND whenever the
+  // fetcher emits `candlescan:data-source-changed` (broker token expiry auto-
+  // heals to Yahoo). Previously this only fired on `view === 'main'`, which
+  // left stale `dataSource` props in BatchScan / Simulation tabs after the
+  // user switched providers in Settings or after a 401 self-heal.
   useEffect(() => {
-    if (view === 'main') {
+    const resync = () => {
       try {
         const stored = localStorage.getItem('candlescan_data_source') || 'yahoo';
         setDataSourceState(stored);
-        // Auto-correct timeframe if not available for the new source
         const available = SOURCE_TIMEFRAMES[stored] || SOURCE_TIMEFRAMES.yahoo;
         if (!available.includes(timeframe)) {
-          // Pick nearest: if 30m not in dhan, use 15m; if 25m not in yahoo, use 30m
           const fallback = available.includes('5m') ? '5m' : available[0];
           setTimeframe(fallback);
         }
       } catch { /* ok */ }
+    };
+    resync();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('candlescan:data-source-changed', resync);
+      return () => window.removeEventListener('candlescan:data-source-changed', resync);
     }
+    return undefined;
   }, [view]);
 
   // When the stock scan discovers a new symbol, grow the broad

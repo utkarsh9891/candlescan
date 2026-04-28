@@ -213,6 +213,12 @@ export default function SettingsPage({
   const handleSourceChange = useCallback((src) => {
     setDataSourceState(src);
     setDataSource(src);
+    // Notify App.jsx (and any other listeners) so the active dataSource prop
+    // re-syncs immediately — without this, BatchScan / Simulation tabs keep
+    // their stale prop until the user navigates back through 'main'.
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      try { window.dispatchEvent(new CustomEvent('candlescan:data-source-changed', { detail: { reason: 'user', source: src } })); } catch { /* ok */ }
+    }
   }, []);
 
   const handleSaveApiKeys = useCallback(() => {
@@ -477,6 +483,11 @@ export default function SettingsPage({
           {vaultMsg && <div style={{ fontSize: 12, color: vaultMsgColor, marginBottom: 6 }}>{vaultMsg}</div>}
 
           {/* Actions */}
+          {/* Force-remove escape hatch: as long as ANY Zerodha state is on disk
+              (vault blob, API key, or API secret) the red Clear button stays
+              visible — even if the token can't validate. Previously gated on
+              tokenStatus === 'valid', which left users with expired tokens
+              unable to remove their stale credentials from the UI. */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
             {hasVault() && (
               <button type="button" onClick={handleValidateToken}
@@ -485,8 +496,9 @@ export default function SettingsPage({
                 {tokenStatus === 'checking' ? 'Validating...' : 'Validate Token'}
               </button>
             )}
-            {(tokenStatus === 'valid' || tokenStatus === 'checking') && (
-              <button type="button" onClick={handleClearVault} style={btnDanger}>
+            {(hasVault() || apiKey || apiSecret) && (
+              <button type="button" onClick={handleClearVault} style={btnDanger}
+                title="Force-remove all locally saved Zerodha credentials (API key, secret, encrypted token).">
                 Clear Credentials
               </button>
             )}
