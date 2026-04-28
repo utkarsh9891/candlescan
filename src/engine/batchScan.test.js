@@ -28,10 +28,12 @@ vi.mock('./transport.js', () => ({
   cfUrl: (path) => `https://mock.workers.dev${path?.startsWith('/') ? path : '/' + (path || '')}`,
 }));
 
-// Default-mock the live Google News fetcher so the existing tests don't
-// hit the network. Individual tests override this with `newsFetchFn`.
+// Default-mock the live Google + Yahoo News fetchers so the existing tests
+// don't hit the network. Individual tests override via `newsFetchFn` /
+// `yahooNewsFetchFn`.
 vi.mock('./marketContextLive.js', () => ({
   fetchLiveGoogleNewsDetailForSymbol: vi.fn(async () => ({ score: null, headlines: [] })),
+  fetchLiveYahooNewsForSymbol: vi.fn(async () => ({ score: null, headlines: [] })),
 }));
 
 // Silence the FII/DII console.warn that our scan emits when the Worker

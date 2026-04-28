@@ -300,6 +300,10 @@ export const MONEYCONTROL_STALE_MAX_MS = 4 * 60 * 60 * 1000;
 export const GOOGLE_NEWS_TTL_MS = 4 * 60 * 60 * 1000;
 export const GOOGLE_NEWS_STALE_MAX_MS = 24 * 60 * 60 * 1000;
 
+// Yahoo Finance News — same window as Google so the two tiers age in lockstep.
+export const YAHOO_NEWS_TTL_MS = 4 * 60 * 60 * 1000;
+export const YAHOO_NEWS_STALE_MAX_MS = 24 * 60 * 60 * 1000;
+
 // ───────────────────────────────────────────────────────────
 // Key builders
 // ───────────────────────────────────────────────────────────
@@ -317,4 +321,7 @@ export function moneycontrolKey(nowMs = Date.now()) {
 }
 export function googleNewsKey(symbol, nowMs = Date.now()) {
   return `google_news:${symbol}:${istDateString(nowMs)}`;
+}
+export function yahooNewsKey(symbol, nowMs = Date.now()) {
+  return `yahoo_news:${symbol}:${istDateString(nowMs)}`;
 }

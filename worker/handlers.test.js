@@ -311,6 +311,97 @@ describe('handleGoogleNewsForSymbol', () => {
     expect(expose).toContain('X-Cache-Key');
     expect(expose).toContain('X-Cache-Source');
   });
+
+  it('extracts <link> from Google RSS items', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      '<rss><channel><item><title>HDFC up 3%</title><description>Rally</description><link>https://news.google.com/rss/articles/abc123</link></item></channel></rss>',
+      { status: 200 },
+    ));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/google?symbol=HDFC'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    expect(body.items[0].link).toBe('https://news.google.com/rss/articles/abc123');
+  });
+});
+
+describe('handleMoneycontrolNews — link extraction', () => {
+  it('extracts <link> from Moneycontrol RSS items', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      '<rss><channel><item><title>RELIANCE up</title><description>Q4 strong</description><link>https://www.moneycontrol.com/news/business/reliance-q4-12345.html</link></item></channel></rss>',
+      { status: 200 },
+    ));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/moneycontrol'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    expect(body.items[0].link).toBe('https://www.moneycontrol.com/news/business/reliance-q4-12345.html');
+  });
+});
+
+describe('handleYahooNewsForSymbol', () => {
+  it('400 on missing symbol', async () => {
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/yahoo'), { CANDLESCAN_KV: kv });
+    expect(resp.status).toBe(400);
+  });
+
+  it('MISS → upstream fetch → normalized items with link + publisher', async () => {
+    globalThis.fetch = vi.fn(async () => jsonResp({
+      news: [
+        {
+          title: 'RELIANCE Q4 beats',
+          publisher: 'Reuters',
+          link: 'https://finance.yahoo.com/news/reliance-q4-beats-123.html',
+          providerPublishTime: 1714123456,
+        },
+      ],
+    }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=RELIANCE'), { CANDLESCAN_KV: kv });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get('X-Cache')).toBe('MISS');
+    const body = await resp.json();
+    expect(body.count).toBe(1);
+    expect(body.items[0].title).toBe('RELIANCE Q4 beats');
+    expect(body.items[0].link).toContain('finance.yahoo.com');
+    expect(body.items[0].publisher).toBe('Reuters');
+    expect(body.items[0].pubDate).toMatch(/^\d{4}-\d{2}-\d{2}T/); // ISO from epoch
+  });
+
+  it('HIT on second call uses cache', async () => {
+    const fetchMock = vi.fn(async () => jsonResp({ news: [{ title: 'TCS up' }] }));
+    globalThis.fetch = fetchMock;
+    const kv = makeKvStub();
+    await worker.fetch(makeRequest('/news/yahoo?symbol=TCS'), { CANDLESCAN_KV: kv });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const resp2 = await worker.fetch(makeRequest('/news/yahoo?symbol=TCS'), { CANDLESCAN_KV: kv });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(resp2.headers.get('X-Cache')).toBe('HIT');
+  });
+
+  it('UNAVAILABLE sentinel when upstream 502s + no cache', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=NONEXIST'), { CANDLESCAN_KV: kv });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get('X-Cache')).toBe('UNAVAILABLE');
+    const body = await resp.json();
+    expect(body.source).toBe('unavailable');
+    expect(body.items).toEqual([]);
+  });
+
+  it('drops items without a title', async () => {
+    globalThis.fetch = vi.fn(async () => jsonResp({
+      news: [
+        { title: '', link: 'x' },
+        { title: 'Real headline', link: 'https://y.com/a' },
+      ],
+    }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=INFY'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    expect(body.count).toBe(1);
+    expect(body.items[0].title).toBe('Real headline');
+  });
 });
 
 // ───────────────────────────────────────────────────────────

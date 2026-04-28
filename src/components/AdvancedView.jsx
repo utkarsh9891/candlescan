@@ -95,17 +95,29 @@ function NewsHeadlinesCard({ stockNews, stockNewsLoading, sym }) {
               lineHeight: 1.5,
             }}
           >
-            <div style={{ color: '#1a1d26' }}>{h.title}</div>
-            {typeof h.score === 'number' && h.score !== 0 && (
-              <div style={{
-                fontSize: 10,
-                fontFamily: mono,
-                marginTop: 2,
-                color: h.score > 0 ? '#16a34a' : '#dc2626',
-              }}>
-                {h.score > 0 ? '+' : ''}{h.score.toFixed(2)}
-              </div>
+            {h.url ? (
+              <a href={h.url} target="_blank" rel="noopener noreferrer"
+                style={{ color: '#1a1d26', textDecoration: 'underline' }}
+                title={h.publisher ? `Open at ${h.publisher}` : 'Open article'}>
+                {h.title}
+              </a>
+            ) : (
+              <div style={{ color: '#1a1d26' }}>{h.title}</div>
             )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 2 }}>
+              {typeof h.score === 'number' && h.score !== 0 && (
+                <span style={{
+                  fontSize: 10,
+                  fontFamily: mono,
+                  color: h.score > 0 ? '#16a34a' : '#dc2626',
+                }}>
+                  {h.score > 0 ? '+' : ''}{h.score.toFixed(2)}
+                </span>
+              )}
+              {h.publisher && (
+                <span style={{ fontSize: 10, color: '#8892a8' }}>{h.publisher}</span>
+              )}
+            </div>
           </div>
         ))
       ) : (

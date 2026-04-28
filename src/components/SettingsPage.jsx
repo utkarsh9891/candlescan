@@ -45,6 +45,7 @@ export default function SettingsPage({
   activeFilters, onFiltersChange,
   customIndices, onAddCustomIndex, onRemoveCustomIndex,
   tickerSymbol, onTickerSymbolChange,
+  newsEnrichEnabled, onNewsEnrichEnabledChange,
 }) {
   const [gateUnlocked, setGateUnlocked] = useState(hasGateToken());
   const [passphrase, setPassphrase] = useState('');
@@ -533,6 +534,41 @@ export default function SettingsPage({
               </div>
             </div>
             <ToggleSwitch checked={noviceMode} onChange={onNoviceModeChange} label="" compact />
+          </div>
+        </div>
+      )}
+
+      {/* News enrichment — premium-gated. Below the gate, the toggle is
+          forced off + disabled; the scan still gets the index-wide
+          Moneycontrol baseline (free, no auth) but skips per-symbol
+          Worker calls to Google + Yahoo. Above the gate, toggling off
+          lets the user opt out of news enrichment for speed/quota. */}
+      {onNewsEnrichEnabledChange && (
+        <div style={card}>
+          <div style={sectionTitle}>News Enrichment</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: gateUnlocked ? '#1a1d26' : '#8892a8' }}>
+                Per-symbol news lookup
+                {!gateUnlocked && (
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#2563eb', marginLeft: 6, background: '#eff6ff', borderRadius: 4, padding: '2px 6px' }}>Premium</span>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, lineHeight: 1.4 }}>
+                {gateUnlocked
+                  ? (newsEnrichEnabled
+                    ? 'ON — top candidates get per-symbol Google + Yahoo News (4-tier fallback). Adds ~2 sec/scan.'
+                    : 'OFF — only the index-wide Moneycontrol baseline is used. Faster scans, less news depth.')
+                  : 'Without premium, only the Moneycontrol index-wide baseline is used. Unlock to enable per-symbol Google + Yahoo News.'}
+              </div>
+            </div>
+            <ToggleSwitch
+              checked={!!newsEnrichEnabled && gateUnlocked}
+              onChange={onNewsEnrichEnabledChange}
+              disabled={!gateUnlocked}
+              label=""
+              compact
+            />
           </div>
         </div>
       )}

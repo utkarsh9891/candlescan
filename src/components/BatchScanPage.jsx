@@ -238,7 +238,16 @@ function ResultCard({ r, onTap, scheduledChecks }) {
               }}>
                 {h.score > 0 ? '+' : ''}{h.score.toFixed(2)}
               </span>
-              <span>{h.title}</span>
+              {h.url ? (
+                <a href={h.url} target="_blank" rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ color: '#334155', textDecoration: 'underline' }}
+                  title={h.publisher ? `Open at ${h.publisher}` : 'Open article'}>
+                  {h.title}
+                </a>
+              ) : (
+                <span>{h.title}</span>
+              )}
             </div>
           ))}
         </div>
@@ -273,7 +282,7 @@ function getEngineFns(engineVersion) {
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks, onOpenSettings }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks, onOpenSettings, newsEnrichEnabled = true }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const nseIndex = savedIndex || DEFAULT_NSE_INDEX_ID;
   const [timeframe, setTimeframe] = useState('5m');
@@ -377,6 +386,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
         },
         signal: controller.signal,
         fetchFn: createFetchFn(dataSource || 'yahoo'),
+        newsEnrichEnabled,
       });
       // Capture telemetry attached as a non-enumerable property on the result array
       if (scanResults && scanResults.telemetry) {

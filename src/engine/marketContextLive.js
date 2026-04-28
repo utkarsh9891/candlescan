@@ -177,6 +177,7 @@ export async function fetchLiveNews(symbolUniverse) {
         description: (item.description || '').slice(0, 200),
         score: Math.round(score * 100) / 100,
         source: 'moneycontrol',
+        url: item.link || '',
       });
     }
   }
@@ -304,11 +305,77 @@ export async function fetchLiveGoogleNewsDetailForSymbol(symbol) {
         description: (item.description || '').slice(0, 200),
         score: Math.round(s * 100) / 100,
         source: 'google',
+        url: item.link || '',
       });
     }
     if (!scored.length) return { score: null, headlines: [], cacheStatus, cacheSource };
     const avg = scored.reduce((a, b) => a + b.score, 0) / scored.length;
     // Sort by most impactful first, cap to top 5 (matches batch UI behaviour)
+    const headlines = scored
+      .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+      .slice(0, 5);
+    return {
+      score: Math.max(-1, Math.min(1, avg)),
+      headlines,
+      cacheStatus,
+      cacheSource,
+    };
+  } catch {
+    return { score: null, headlines: [], cacheStatus: null };
+  }
+}
+
+/**
+ * Per-symbol Yahoo Finance news. Same contract as
+ * fetchLiveGoogleNewsDetailForSymbol — returns `{score, headlines,
+ * cacheStatus, cacheSource}` with the same headline shape — so the
+ * batchScan tier chain can swap them in/out without branching on
+ * source. Yahoo's response carries native article URLs and
+ * publisher names, which we surface so the UI can render clickable
+ * source-attributed headlines.
+ *
+ * Used as the per-symbol news tier 3.5 — sits between Google
+ * (tier 3) and Moneycontrol-by-string-match (tier 4 dropped).
+ */
+export async function fetchLiveYahooNewsForSymbol(symbol) {
+  if (!symbol) return { score: null, headlines: [], cacheStatus: null };
+  const clean = String(symbol).toUpperCase().replace(/\.NS$/, '');
+  try {
+    const res = await fetch(`${CF_WORKER_URL}/news/yahoo?symbol=${encodeURIComponent(clean)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const cacheStatus = typeof res?.headers?.get === 'function'
+      ? (res.headers.get('X-Cache') || null)
+      : null;
+    const cacheSource = typeof res?.headers?.get === 'function'
+      ? (res.headers.get('X-Cache-Source') || null)
+      : null;
+    if (!res.ok) {
+      return { score: null, headlines: [], cacheStatus, cacheSource };
+    }
+    const data = await res.json();
+    const items = data.items || [];
+    if (!items.length) return { score: null, headlines: [], cacheStatus, cacheSource };
+    const cutoff = Date.now() - 5 * 24 * 3600 * 1000;
+    const scored = [];
+    for (const item of items) {
+      if (item.pubDate) {
+        const t = Date.parse(item.pubDate);
+        if (!isNaN(t) && t < cutoff) continue;
+      }
+      const text = `${item.title || ''} ${item.description || ''}`;
+      const s = scoreText(text);
+      scored.push({
+        title: item.title || '',
+        description: (item.description || '').slice(0, 200),
+        score: Math.round(s * 100) / 100,
+        source: 'yahoo',
+        url: item.link || '',
+        publisher: item.publisher || '',
+      });
+    }
+    if (!scored.length) return { score: null, headlines: [], cacheStatus, cacheSource };
+    const avg = scored.reduce((a, b) => a + b.score, 0) / scored.length;
     const headlines = scored
       .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
       .slice(0, 5);
