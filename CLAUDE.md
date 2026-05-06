@@ -51,7 +51,8 @@ npm start            # dev server at 127.0.0.1:5173/candlescan/
 npm test             # 561 unit tests (vitest)
 npm run build        # production build → dist/
 npm run simulate     # CLI simulation: node scripts/simulate-day.mjs
-npm run cache:charts # warm local chart cache
+npm run cache:charts # warm local chart cache (writes to sibling candlescan-cache repo)
+npm run cache:sync   # warm + auto-commit + push to candlescan-cache
 ```
 
 CLI simulation is the primary tool for backtesting strategy changes. Wave 3 default — 3 parallel positions, confidence-tiered sizing, all canonical engine names accepted:

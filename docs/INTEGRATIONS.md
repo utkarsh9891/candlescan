@@ -35,7 +35,7 @@ Complete inventory of every external data source and API the app talks to. Each 
 
 ### Cached?
 
-- **Yes, in dev**: `vite-plugin-chart-cache.mjs` writes all chart responses to `cache/charts/<SYMBOL>/<INTERVAL>/<DATE>.json`. Subsequent fetches serve from disk.
+- **Yes, in dev**: `vite-plugin-chart-cache.mjs` writes all chart responses to `<CACHE_ROOT>/charts/<SYMBOL>/<INTERVAL>/<DATE>.json`. Subsequent fetches serve from disk. `CACHE_ROOT` resolves via [`scripts/lib/cache-root.mjs`](../scripts/lib/cache-root.mjs) — defaults to the sibling [candlescan-cache](https://github.com/utkarsh9891/candlescan-cache) repo.
 - **No, in production**: PWA does not cache chart data (always-fresh intraday quotes).
 - **Dev cache can be disabled**: `CANDLESCAN_CHART_CACHE=0 npm start`
 

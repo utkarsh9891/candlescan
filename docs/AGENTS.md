@@ -33,8 +33,9 @@ npm install          # Install dependencies
 npm start            # Dev server at http://127.0.0.1:5173/candlescan/
 npm run build        # Production build → dist/
 npm run preview      # Serve built files locally (no dev proxy)
-npm run test:batch   # CLI batch scan using cache/charts/
-npm run cache:charts # Pre-warm chart cache from Yahoo
+npm run test:batch   # CLI batch scan using <CACHE_ROOT>/charts/ (sibling candlescan-cache repo by default)
+npm run cache:charts # Pre-warm chart cache from Yahoo (writes to <CACHE_ROOT>/charts/)
+npm run cache:sync   # Warm + auto-commit + push the new chart data to candlescan-cache
 ```
 
 ## Dev server with simulated data (no network needed)
@@ -112,7 +113,7 @@ Three engines represent fundamentally different trading models — NOT tunable v
 - **Simulation**: `src/components/SimulationPage.jsx` + `src/engine/simulateDay.js` — historical bar-by-bar replay
 - **Paper Trading**: `src/components/PaperTradingPage.jsx` — live price polling with signal detection
 - **Index constituents**: NSE `equity-stockIndices` at runtime; dev uses Vite proxy; prod uses CF Worker
-- **Local chart cache**: `cache/charts/` (gitignored) — `vite-plugin-chart-cache.mjs` serves from disk in dev
+- **Local chart cache**: `<CACHE_ROOT>/charts/` — `vite-plugin-chart-cache.mjs` serves from disk in dev. `CACHE_ROOT` resolves via [`scripts/lib/cache-root.mjs`](../scripts/lib/cache-root.mjs); defaults to the sibling [candlescan-cache](https://github.com/utkarsh9891/candlescan-cache) repo, falls back to in-repo `./cache/`
 
 ---
 
@@ -148,7 +149,7 @@ Three engines represent fundamentally different trading models — NOT tunable v
 | `src/config/nseIndices.js` | `NSE_INDEX_OPTIONS` array (NIFTY 50 through NIFTY SMALLCAP 250), `DEFAULT_NSE_INDEX_ID` = 'NIFTY 200' |
 | `src/data/signalCategories.js` | Category labels + `APPROX_PATTERN_RULES` count |
 | `vite.config.js` | Base `/candlescan/`, dev proxies (`__candlescan-yahoo`, `__candlescan-nse`), VitePWA plugin config |
-| `vite-plugin-chart-cache.mjs` | Vite middleware: intercepts chart requests, serves from/writes to `cache/charts/` |
+| `vite-plugin-chart-cache.mjs` | Vite middleware: intercepts chart requests, serves from/writes to `<CACHE_ROOT>/charts/` (sibling candlescan-cache repo by default) |
 | `worker/index.js` | Cloudflare Worker: CORS proxy (Yahoo + NSE), `X-Gate-Token` SHA-256 validation, IP rate limiting via KV |
 | `worker/wrangler.toml` | Worker config + `RATE_LIMIT` KV namespace binding |
 | `docs/WORKER_OPS.md` | Operations guide: passphrase reset, deploy, troubleshooting |
@@ -260,7 +261,7 @@ Navigation via shared GlobalMenu:
 
 | Layer | Storage | TTL | Scope |
 |-------|---------|-----|-------|
-| Chart cache | Disk (`cache/charts/`) | 7 days | Dev only (Vite plugin) |
+| Chart cache | Disk (`<CACHE_ROOT>/charts/`, sibling candlescan-cache repo) | 7 days | Dev only (Vite plugin) |
 | NSE symbols | sessionStorage | 45 min | Browser tab |
 | Mode + history | localStorage | Permanent | Browser |
 | Gate token | localStorage | Permanent | Browser |
