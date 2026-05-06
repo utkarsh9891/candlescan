@@ -215,8 +215,8 @@ candlescan/
 │       └── nse-http.mjs         # NSE HTTP helpers for Node
 ├── docs/
 │   └── ZERODHA_SETUP.md         # Zerodha integration setup guide
-├── cache/
-│   └── charts/                  # Local chart JSON cache (gitignored)
+├── cache/                       # Misc gitignored caches (trades, news, walk-forward, ...)
+│                                # Note: charts/ now lives in the sibling candlescan-cache repo
 └── .github/
     └── workflows/deploy.yml     # Auto-deploy to Pages on push to main
 ```
@@ -260,7 +260,7 @@ User selects index + timeframe → Scan All
 |---------|-------------------|-------------------|
 | Yahoo data | Vite proxy (same-origin) | CF Worker + fallback chain |
 | NSE data | Vite proxy | CF Worker + allorigins |
-| Chart cache | Local disk (`cache/charts/`) | None (network only) |
+| Chart cache | Sibling repo (`../candlescan-cache/charts/`) | None (network only) |
 | Demo data | `?simulate=1` available | Disabled |
 | Service worker | Registered | Auto-update on deploy |
 | CORS | No issues | Proxied via CF Worker |
@@ -289,7 +289,20 @@ npx wrangler deploy
 
 ## Local Chart Cache
 
-Dev-only disk cache at `cache/charts/`. See [cache/charts/README.md](cache/charts/README.md).
+Dev-only disk cache. The chart archive lives in the sibling [candlescan-cache](https://github.com/utkarsh9891/candlescan-cache) repo so that historical Yahoo bars (which expire after ~30–60 days) survive across machines and `git clean`. Schema and tooling are documented in that repo's README.
+
+The cache root is resolved via [`scripts/lib/cache-root.mjs`](scripts/lib/cache-root.mjs):
+1. `$CANDLESCAN_CACHE_DIR` if set
+2. `../candlescan-cache/` (sibling clone, default)
+3. `./cache/` (legacy in-repo fallback)
+
+Clone both repos as siblings for the zero-config setup:
+
+```
+~/projects_personal/
+├── candlescan/
+└── candlescan-cache/
+```
 
 - Auto-populated on first fetch in dev
 - 7-day TTL (configurable via `CANDLESCAN_CHART_CACHE_MAX_AGE_MS`)
