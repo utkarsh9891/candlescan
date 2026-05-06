@@ -1,16 +1,16 @@
 /**
  * Date-partitioned Yahoo v8 chart JSON on disk — dev / batch / validation.
  *
- * Structure: cache/charts/{SYMBOL}/{interval}/{YYYY-MM-DD}.json
+ * Structure: <CACHE_ROOT>/charts/{SYMBOL}/{interval}/{YYYY-MM-DD}.json
  * Each file contains one trading day's OHLCV for one symbol at one interval.
+ *
+ * CACHE_ROOT defaults to the sibling candlescan-cache repo. See cache-root.mjs.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { CACHE_ROOT } from './cache-root.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '../..');
-export const CHART_CACHE_DIR = path.join(REPO_ROOT, 'cache', 'charts');
+export const CHART_CACHE_DIR = path.join(CACHE_ROOT, 'charts');
 
 const IST_OFFSET = 19800; // +5:30 in seconds
 
