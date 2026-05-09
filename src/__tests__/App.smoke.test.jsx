@@ -143,7 +143,10 @@ describe('App smoke tests', () => {
   it('renders the empty state on initial load', async () => {
     const App = (await import('../App.jsx')).default;
     render(<App />);
-    const emptyTexts = screen.getAllByText(/enter a symbol/i);
+    // Empty state copy invites the user to pick a symbol — exact wording
+    // is a UX detail and may evolve, but a "type/enter a symbol" prompt
+    // should always anchor the empty view.
+    const emptyTexts = screen.getAllByText(/type a symbol|enter a symbol/i);
     expect(emptyTexts.length).toBeGreaterThanOrEqual(1);
   });
 

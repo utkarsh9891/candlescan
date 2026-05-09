@@ -558,9 +558,12 @@ export default function App() {
       ) : null}
 
       {!sym ? (
-        <EmptyState />
+        <EmptyState
+          variant="pick"
+          onOpenNovice={!noviceMode ? () => { setNoviceMode(true); setView('batch'); } : null}
+        />
       ) : scanError ? null : !risk ? (
-        <EmptyState />
+        <EmptyState variant="loading" />
       ) : (
         <>
           {/* Row 1: Timeframe pills */}
