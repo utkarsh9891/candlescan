@@ -11,13 +11,20 @@
  *              → Moneycontrol index map fallback
  *
  * Key shape:
- *   candlescan_news:{SYMBOL}:{YYYY-MM-DD}
- *   candlescan_news:{SYMBOL}:{YYYY-MM-DD}:meta
+ *   candlescan_news_v2:{SYMBOL}:{YYYY-MM-DD}
+ *   candlescan_news_v2:{SYMBOL}:{YYYY-MM-DD}:meta
  *
  *   SYMBOL = uppercase NSE symbol (no .NS)
  *   date   = IST calendar day when the fetch was stored; news *does*
  *            change intraday, so the date key only namespaces entries —
  *            freshness is enforced by `expiresAt`, not by the key.
+ *
+ * The `_v2` prefix exists to invalidate every device's cache after the
+ * Worker started filtering Yahoo's generic-feed garbage by relatedTickers.
+ * Pre-v2 entries persisted Yahoo's irrelevant US headlines (Southern
+ * Copper, Dutch Bros, etc.) under Indian-stock keys; bumping the prefix
+ * is the cheapest way to force a clean refetch on every device. Old
+ * `candlescan_news:` entries are swept on module load below.
  *
  * TTL: 4h during market hours, 12h off-hours. Rationale:
  *   - During market hours news sentiment can flip a position mid-session
@@ -36,8 +43,34 @@
  * null (get); never throws.
  */
 
-const PREFIX = 'candlescan_news:';
+const PREFIX = 'candlescan_news_v2:';
+const LEGACY_PREFIX = 'candlescan_news:'; // pre-v2 — swept on module load
 const META_SUFFIX = ':meta';
+
+/**
+ * One-shot cleanup of legacy (pre-v2) cache entries. Runs at module
+ * load time; cheap on devices that never had the legacy prefix because
+ * the loop short-circuits when no key matches. v2 keys (which start
+ * with `candlescan_news_v2:`) don't collide with the legacy prefix
+ * (`candlescan_news:`) because position 15 differs ('_' vs ':'), so
+ * the simple startsWith check is safe.
+ */
+function purgeLegacyEntries() {
+  if (!hasStorage()) return;
+  let n = 0;
+  try { n = localStorage.length; } catch { return; }
+  const stale = [];
+  for (let i = 0; i < n; i++) {
+    let k;
+    try { k = localStorage.key(i); } catch { continue; }
+    if (k && k.startsWith(LEGACY_PREFIX) && !k.startsWith(PREFIX)) {
+      stale.push(k);
+    }
+  }
+  for (const k of stale) {
+    try { localStorage.removeItem(k); } catch { /* noop */ }
+  }
+}
 
 // TTL split — market hours vs off-hours. Callers can still override via
 // `opts.ttlMs` on setCachedNews for tests.
@@ -279,6 +312,7 @@ export function clearNewsCache(symbol) {
 /** Exported for tests. */
 export const _internals = {
   PREFIX,
+  LEGACY_PREFIX,
   META_SUFFIX,
   TTL_MARKET_MS,
   TTL_OFFHOURS_MS,
@@ -288,4 +322,9 @@ export const _internals = {
   defaultTtlMs,
   isMarketHoursIST,
   listNewsEntries,
+  purgeLegacyEntries,
 };
+
+// One-shot at module load — wipe pre-v2 entries left over from before
+// the Worker-side relatedTickers filter shipped.
+purgeLegacyEntries();
