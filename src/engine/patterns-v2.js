@@ -174,11 +174,192 @@ function detectMomentumRunner(candles, opts) {
 }
 
 /**
+ * Trend Continuation Pullback (v11 — peer-validated independent backtest).
+ *
+ * Ports the `h3_trend_continuation` strategy from
+ * `cache/independent-analysis/strategies_v5.py` — the proven winner across
+ * the 5-disjoint-run validation that hit 70-78% trade-WR with morning-only
+ * entries. The pattern fires when:
+ *
+ *   - First-hour move (bars 0-11 on 5m = 9:15-10:15 IST) ≥ 0.7% in one
+ *     direction and ≥ 1.5× the opposite tail. Defines the day's bias.
+ *   - 30m and 60m bars aligned with that bias (close > open for LONG).
+ *   - Current bar's low touches within 0.2% of session VWAP (LONG); mirror
+ *     for SHORT.
+ *   - Current bar is a bouncing bar in trend direction (close > open and
+ *     close > VWAP for LONG) with volume ≥ 2× prior 6-bar avg.
+ *   - Liquidity gate: first 30 min turnover ≥ Rs 1cr (sum of close*vol).
+ *   - barIndex ≥ 13 (post-first-hour) and ≤ 50 (no late-day chop).
+ *   - Optional morning-only filter: opts.morningOnly !== false will reject
+ *     entries after 10:30 IST. Default ON when the simulator/scan supplies
+ *     a stockDayOpen + barIndex.
+ *
+ * Why a separate pattern from Momentum Runner:
+ *   - Runner fires on +3% breakouts mid-rally — different setup, different
+ *     SL/target shape. Pullback fires on +0.7% trends after a return to
+ *     VWAP, which is structurally a higher-probability mean-reversion
+ *     entry within an established intraday trend.
+ *   - Risk side: pullback wants tight 0.4% target with structure-based SL
+ *     (min(low, vwap)*0.998) — that maps to 3-tranche partial exits in
+ *     the simulator; runner wants the 8% target ladder.
+ *
+ * Strength 0.80-0.86 — sits below the runner (0.88-0.95) but above the
+ * reversal patterns (0.55-0.75) so the v2 risk scorer's `top` selection
+ * favors a runner if both fire on the same bar (they rarely do — runner
+ * needs price > VWAP +3%, pullback needs price ≈ VWAP).
+ */
+function detectTrendContPullback(candles, opts) {
+  const n = candles.length;
+  // Need first hour (12 bars) + at least 1 post-hour bar for the trigger.
+  if (n < 13) return null;
+  const barIndex = opts?.barIndex ?? n;
+  // Need first hour established (bars 0-11) plus at least 1 post-window bar.
+  if (barIndex < 13 || barIndex > 50) return null;
+
+  const dayOpen = opts?.stockDayOpen ?? candles[0]?.o;
+  if (!dayOpen || dayOpen <= 0) return null;
+
+  // Liquidity gate: first 6 bars (30 min) turnover ≥ Rs 1cr.
+  let firstWindowTurnover = 0;
+  const firstSlice = candles.slice(0, Math.min(6, candles.length));
+  for (const c of firstSlice) firstWindowTurnover += (c.c || 0) * (c.v || 0);
+  if (firstWindowTurnover < 1_00_00_000) return null;
+
+  // Morning-only filter (default ON): skip entries after 10:30 IST.
+  // Caller can override via opts.morningOnly === false.
+  const morningOnly = opts?.morningOnly !== false;
+  if (morningOnly) {
+    const cur = candles[n - 1];
+    if (cur.t) {
+      const istSec = cur.t + 19800; // +5:30
+      const minsOfDay = Math.floor((istSec % 86400) / 60);
+      // 10:30 IST = 630 minutes past midnight UTC+5:30
+      if (minsOfDay > 630) return null;
+    }
+  }
+
+  // First-hour move: bars 0..11 (12 bars × 5m = 60 min on 5m timeframe).
+  const firstHourBars = candles.slice(0, Math.min(12, candles.length));
+  if (firstHourBars.length < 12) return null;
+  const fhHigh = Math.max(...firstHourBars.map(c => c.h));
+  const fhLow = Math.min(...firstHourBars.map(c => c.l));
+  const moveUp = (fhHigh - dayOpen) / dayOpen;
+  const moveDn = (dayOpen - fhLow) / dayOpen;
+  let direction = null;
+  if (moveUp >= 0.007 && moveUp > moveDn * 1.5) direction = 'bullish';
+  else if (moveDn >= 0.007 && moveDn > moveUp * 1.5) direction = 'bearish';
+  if (!direction) return null;
+
+  // 30m / 60m alignment with first-hour direction. Build aggregates from the
+  // bars we have so far (pre-window included).
+  const build = (n, k) => {
+    const out = [];
+    for (let i = 0; i + k <= n.length; i += k) {
+      const ch = n.slice(i, i + k);
+      out.push({
+        o: ch[0].o,
+        h: Math.max(...ch.map(b => b.h)),
+        l: Math.min(...ch.map(b => b.l)),
+        c: ch[ch.length - 1].c,
+      });
+    }
+    return out;
+  };
+  const bars30 = build(candles.slice(0, n), 6);
+  const bars60 = build(candles.slice(0, n), 12);
+  if (!bars30.length || !bars60.length) return null;
+  const lastB30 = bars30[bars30.length - 1];
+  const lastB60 = bars60[bars60.length - 1];
+  const bull30 = lastB30.c > lastB30.o;
+  const bull60 = lastB60.c > lastB60.o;
+  if (direction === 'bullish' && !(bull30 && bull60)) return null;
+  if (direction === 'bearish' && (bull30 || bull60)) return null;
+
+  // Session VWAP up to and including the current bar.
+  const vwap = vwapAcross(candles);
+  if (vwap == null) return null;
+
+  // Volume gate: cur ≥ 2× prior 6-bar avg.
+  const cur = candles[n - 1];
+  const priorVols = candles.slice(Math.max(0, n - 7), n - 1).map(c => c.v || 0);
+  const priorVAvg = priorVols.length
+    ? priorVols.reduce((a, b) => a + b, 0) / priorVols.length
+    : 0;
+  if (priorVAvg <= 0 || (cur.v || 0) < 2.0 * priorVAvg) return null;
+
+  if (direction === 'bullish') {
+    // Pulled to within 0.2% of VWAP from above.
+    const pulled = Math.abs(cur.l - vwap) / vwap < 0.002;
+    // Bouncing: bullish bar that closes back above VWAP.
+    const bouncing = cur.c > cur.o && cur.c > vwap;
+    if (!pulled || !bouncing) return null;
+    // Stop sanity: structure SL must be within 0.25%-0.8% from close.
+    const slPx = Math.min(cur.l, vwap) * 0.998;
+    const slDistPct = (cur.c - slPx) / cur.c;
+    if (slDistPct < 0.0025 || slDistPct > 0.008) return null;
+
+    // Strength scales with first-hour magnitude + volume burst, capped 0.86.
+    const volRatio = (cur.v || 0) / priorVAvg;
+    let strength = 0.80 + Math.min(0.04, (moveUp - 0.007) * 4);
+    strength += Math.min(0.02, (volRatio - 2.0) * 0.005);
+    strength = Math.min(0.86, strength);
+
+    return {
+      name: 'Trend Continuation Pullback',
+      direction: 'bullish',
+      strength,
+      category: 'pullback',
+      emoji: '↗️',
+      tip: `1h up +${(moveUp * 100).toFixed(2)}%, pulled to VWAP, vol ${volRatio.toFixed(1)}× — ride trend`,
+      description: 'Strong morning trend with VWAP pullback + volume bounce. Continuation entry.',
+      // Reliability 0.70 — peer-validated by independent 5-run backtest
+      // (70-78% trade-WR mean across disjoint stock universes, Mar-May
+      // 2026; see cache/independent-analysis/REFERENCE.md).
+      reliability: 0.70,
+      candleIndices: [n - 1],
+      // Hint for the v2 risk scorer: structure-based SL + tight target.
+      _structureSL: slPx,
+      _firstHourMove: moveUp,
+    };
+  }
+
+  // SHORT mirror.
+  const pulled = Math.abs(cur.h - vwap) / vwap < 0.002;
+  const bouncing = cur.c < cur.o && cur.c < vwap;
+  if (!pulled || !bouncing) return null;
+  const slPx = Math.max(cur.h, vwap) * 1.002;
+  const slDistPct = (slPx - cur.c) / cur.c;
+  if (slDistPct < 0.0025 || slDistPct > 0.008) return null;
+
+  const volRatio = (cur.v || 0) / priorVAvg;
+  let strength = 0.80 + Math.min(0.04, (moveDn - 0.007) * 4);
+  strength += Math.min(0.02, (volRatio - 2.0) * 0.005);
+  strength = Math.min(0.86, strength);
+
+  return {
+    name: 'Trend Continuation Pullback',
+    direction: 'bearish',
+    strength,
+    category: 'pullback',
+    emoji: '↘️',
+    tip: `1h down -${(moveDn * 100).toFixed(2)}%, pulled to VWAP, vol ${volRatio.toFixed(1)}× — ride trend`,
+    description: 'Strong morning down-trend with VWAP pullback + volume rejection. Continuation entry.',
+    reliability: 0.70,
+    candleIndices: [n - 1],
+    _structureSL: slPx,
+    _firstHourMove: moveDn,
+  };
+}
+
+/**
  * @param {Candle[]} candles
- * @param {{ barIndex?: number, stockDayOpen?: number, indexDirection?: object }} [opts]
+ * @param {{ barIndex?: number, stockDayOpen?: number, indexDirection?: object, morningOnly?: boolean }} [opts]
  *   - barIndex: 0-based position in session (suppresses early-session momentum)
- *   - stockDayOpen: today's session open price (enables Intraday Momentum Runner)
+ *   - stockDayOpen: today's session open price (enables Intraday Momentum Runner +
+ *     Trend Continuation Pullback)
  *   - indexDirection: { intradayPct } for relative-strength filter
+ *   - morningOnly: if true (default), Trend Continuation Pullback only fires
+ *     ≤ 10:30 IST. Pass `false` to allow all-day pullback entries.
  */
 export function detectPatterns(candles, opts) {
   if (!candles?.length || candles.length < 5) return [];
@@ -361,6 +542,14 @@ export function detectPatterns(candles, opts) {
   // no momentum-friendly pattern in the engine; this fixes that.
   const runner = detectMomentumRunner(candles, opts);
   if (runner) patterns.push(runner);
+
+  /* --- Trend Continuation Pullback (v11 morning-only, peer-validated) --- */
+  // Independent 5-run disjoint backtest (mid+smallcap NIFTY 500, Mar-May
+  // 2026) hit 70-78% trade-WR with morning-only entries + 3-tranche
+  // partial exits. Risk scorer reads `_structureSL` to anchor the stop
+  // just below VWAP/pullback low instead of ATR×2.
+  const pullback = detectTrendContPullback(candles, opts);
+  if (pullback) patterns.push(pullback);
 
   patterns.sort((a, b) => b.strength - a.strength);
   return patterns;

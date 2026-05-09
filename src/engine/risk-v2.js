@@ -38,6 +38,34 @@ export const INTRADAY_REGIME_STOPS_DEFAULTS = Object.freeze({
   targetPctRunner: 0.08,
 });
 
+/**
+ * Trend Continuation Pullback risk config (v11 — peer-validated).
+ *
+ *   - targetPct: 0.004 (0.4% from entry) — matches strategies_v5.h3 and
+ *     the peer-validated 5-disjoint backtest (70-78% trade-WR).
+ *   - tranches: 3-tranche partial-exit ladder. T1 hits ~75% of the time
+ *     and banks small profit even when T2/T3 stop. The `pct` is fraction
+ *     of position size; `targetPct` is +% from entry (LONG; mirrored for
+ *     SHORT). T3 reaches the full single-target entry × 1.004.
+ *   - minRR: 0.5 — pullback setups use a structure-anchored SL (≤0.8%)
+ *     against a 0.4% T3 target, so single-target RR is sub-1. The
+ *     winning math comes from T1@+0.2% hitting ~75% of the time and
+ *     banking small profit on 50% of the position. The default 1.5
+ *     floor would reject the entire winning class. Validated via the
+ *     5-run disjoint Python backtest in cache/independent-analysis/.
+ *   - holdToEod: true — partial exits otherwise auto-close at session
+ *     end (15:15 IST) since broker manages the rest of the day.
+ */
+export const TREND_CONT_PULLBACK_DEFAULTS = Object.freeze({
+  targetPct: 0.004,
+  minRR: 0.5,
+  tranches: Object.freeze([
+    Object.freeze({ name: 'T1', pct: 0.5, targetPct: 0.002 }),
+    Object.freeze({ name: 'T2', pct: 0.3, targetPct: 0.004 }),
+    Object.freeze({ name: 'T3', pct: 0.2, targetPct: 0.004 }),
+  ]),
+});
+
 export const RISK_SIGNAL_DEFINITIONS = [
   { key: 'signalClarity', label: 'Signal clarity', max: 25, meaning: 'Pattern strength × volume factor × 25. Volume-confirmed patterns score higher.' },
   { key: 'lowNoise', label: 'Low noise (trend quality)', max: 20, meaning: 'ATR vs average body size; clean trends score higher.' },
@@ -118,9 +146,17 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   // targets to the spec-driven Rs % cap and float SL just below VWAP /
   // pullback structure.
   const isRunner = top?.name === 'Intraday Momentum Runner';
+  // Trend Continuation Pullback (v11) uses structure-based SL + tight
+  // 0.4% target + 1:1 RR. The pattern's _structureSL is the
+  // min(low, vwap)*0.998 anchor produced during detection — better than
+  // ATR×2 because it pins the stop to the bounce structure rather than
+  // a generic volatility band. Tranches are populated below so the
+  // simulator can run 3-leg partial exits.
+  const isPullback = top?.name === 'Trend Continuation Pullback';
   const slMult = isRunner ? INTRADAY_REGIME_STOPS_DEFAULTS.slMultRunner : 2.0;
   const slDist = atrVal * slMult;
   let sl, target, targetDist;
+  let tranches = null;
 
   if (direction === 'long') {
     sl = entry - slDist;
@@ -132,6 +168,13 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
       // the typical first target the peer-validated trades aim for. The
       // 8% cap also keeps min-rr above 2 for the volume-confirmed entries.
       targetDist = Math.max(resistanceDist, entry * INTRADAY_REGIME_STOPS_DEFAULTS.targetPctRunner);
+    } else if (isPullback && top?._structureSL != null) {
+      sl = top._structureSL;
+      targetDist = entry * TREND_CONT_PULLBACK_DEFAULTS.targetPct;
+      tranches = TREND_CONT_PULLBACK_DEFAULTS.tranches.map(t => ({
+        name: t.name, pct: t.pct,
+        target: entry * (1 + t.targetPct),
+      }));
     } else {
       // Legacy V2: resistance if valid, otherwise ATR×3 fallback
       targetDist = resistanceDist > slDist * 0.5 ? resistanceDist : atrVal * 3.0;
@@ -143,13 +186,28 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     const supportDist = entry - support;
     if (isRunner) {
       targetDist = Math.max(supportDist, entry * INTRADAY_REGIME_STOPS_DEFAULTS.targetPctRunner);
+    } else if (isPullback && top?._structureSL != null) {
+      sl = top._structureSL;
+      targetDist = entry * TREND_CONT_PULLBACK_DEFAULTS.targetPct;
+      tranches = TREND_CONT_PULLBACK_DEFAULTS.tranches.map(t => ({
+        name: t.name, pct: t.pct,
+        target: entry * (1 - t.targetPct),
+      }));
     } else {
       targetDist = supportDist > slDist * 0.5 ? supportDist : atrVal * 3.0;
     }
     target = entry - targetDist;
   }
 
-  const rr = targetDist / Math.max(slDist, 1e-9);
+  // RR uses the original ATR-based slDist for non-pullback patterns —
+  // changing the denominator to `entry - sl` would introduce floating-
+  // point drift that breaks borderline rr=1.5 cases (Momentum Candle
+  // entries that previously cleared the floor exactly). Pullback alone
+  // uses the structure-anchored SL via top._structureSL.
+  const effSlDist = isPullback
+    ? (direction === 'long' ? entry - sl : sl - entry)
+    : slDist;
+  const rr = targetDist / Math.max(effSlDist, 1e-9);
   const rrClamped = Math.min(5, Math.max(0.3, rr));
 
   // FIX: continuous exponential scoring (no more discrete buckets)
@@ -160,8 +218,12 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
     return noTrade(cur, candles, box);
   }
 
-  // Minimum R:R filter — don't take trades below 1.5:1
-  if (rr < 1.5) {
+  // Minimum R:R filter. Pullback uses 1:1 by design — peer-validated 5-run
+  // disjoint backtest hit 70-78% trade-WR with this RR, so the default 1.5
+  // floor would reject the entire winning class. All other V2 patterns
+  // keep the 1.5 floor.
+  const minRR = isPullback ? TREND_CONT_PULLBACK_DEFAULTS.minRR : 1.5;
+  if (rr < minRR) {
     return noTrade(cur, candles, box);
   }
 
@@ -264,7 +326,18 @@ export function computeRiskScore({ candles, patterns, box, opts }) {
   const signalBarTs = cur.t || null;
   const validTillTs = signalBarTs ? signalBarTs + 10 * 60 : null;
 
-  return { total: rawClamped, confidence, breakdown, level, action, entry, sl, target, rr: rrClamped, direction, context, signalBarTs, validTillTs };
+  // Hold-to-EOD hint (Trend Continuation Pullback v11): partial exits
+  // expect the position to live until session close so the broker-side
+  // T1/T2/T3 brackets can fire. The simulator falls back to its default
+  // bar-based maxHoldBars when this is null.
+  const holdToEod = isPullback ? true : false;
+
+  return {
+    total: rawClamped, confidence, breakdown, level, action,
+    entry, sl, target, rr: rrClamped, direction, context,
+    signalBarTs, validTillTs,
+    tranches, holdToEod,
+  };
 }
 
 /** Helper: returns a NO TRADE result with context info */

@@ -582,15 +582,22 @@ export async function batchScan({
           if (!filterRes.ok) return { filterRejected: filterRes.reason, symbol: displaySymbol };
 
           // ── PHASE 2a: pattern detection + risk ──
+          // stockDayOpen + barIndex (relative to today's session) feed the
+          // Intraday Momentum Runner and Trend Continuation Pullback gates
+          // — they need today's session-open price and bar position rather
+          // than the multi-day-window's first bar / total length.
+          const stockDayOpen = todayCandles[0]?.o ?? null;
+          const todayBarIndex = todayCandles.length;
           const patterns = detectPatterns(candles, {
-            barIndex: candles.length,
+            barIndex: todayBarIndex,
             orbHigh, orbLow, prevDayHigh, prevDayLow,
             indexDirection: indexDirection || null,
+            stockDayOpen,
           });
           const box = detectLiquidityBox(candles);
           const risk = computeRiskScore({
             candles, patterns, box,
-            opts: { barIndex: candles.length, indexDirection: indexDirection || null, sym: cleanSym },
+            opts: { barIndex: todayBarIndex, indexDirection: indexDirection || null, sym: cleanSym, stockDayOpen },
           });
 
           // ── PHASE 2a.5: per-symbol news enrichment (candidates only) ──
