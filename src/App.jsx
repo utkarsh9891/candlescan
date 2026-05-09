@@ -15,7 +15,6 @@ import ToggleSwitch from './components/ToggleSwitch.jsx';
 import DrawingToolbar from './components/DrawingToolbar.jsx';
 import IndexConstituentsSidebar from './components/IndexConstituentsSidebar.jsx';
 import BatchScanPage from './components/BatchScanPage.jsx';
-import SimulationPage from './components/SimulationPage.jsx';
 import PaperTradingPage from './components/PaperTradingPage.jsx';
 import NoviceModePage from './components/NoviceModePage.jsx';
 import SettingsPage from './components/SettingsPage.jsx';
@@ -160,14 +159,13 @@ export default function App() {
   const {
     view, setView,
     cameFromBatch, setCameFromBatch,
-    cameFromSimulation, setCameFromSimulation,
     backFromSettings,
   } = useAppView();
 
   // Re-sync dataSource from localStorage on every view change AND whenever the
   // fetcher emits `candlescan:data-source-changed` (broker token expiry auto-
   // heals to Yahoo). Previously this only fired on `view === 'main'`, which
-  // left stale `dataSource` props in BatchScan / Simulation tabs after the
+  // left stale `dataSource` props in BatchScan / Paper tabs after the
   // user switched providers in Settings or after a 401 self-heal.
   useEffect(() => {
     const resync = () => {
@@ -243,7 +241,7 @@ export default function App() {
     runScan(t);
   };
 
-  const onScanClick = (sym) => { setCameFromBatch(false); setCameFromSimulation(false); runScan(sym || inputVal); };
+  const onScanClick = (sym) => { setCameFromBatch(false); runScan(sym || inputVal); };
 
   const changePct =
     candles.length >= 2
@@ -377,24 +375,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Simulation page — always mounted, hidden when not active */}
-      <div style={{ display: view === 'simulate' ? 'block' : 'none' }}>
-        <SimulationPage
-          onSelectSymbol={(s) => {
-            setInputVal(s);
-            onQuick(s);
-            setView('main');
-            setCameFromSimulation(true);
-          }}
-          savedIndex={nseIndex}
-          onIndexChange={setNseIndex}
-          indexOptions={allIndexOptions}
-          engineVersion={engineVersion}
-          dataSource={dataSource}
-          debugMode={debugMode}
-        />
-      </div>
-
       {/* Paper trading page — always mounted, hidden when not active */}
       <div style={{ display: view === 'paper' ? 'block' : 'none' }}>
         <PaperTradingPage
@@ -415,9 +395,9 @@ export default function App() {
           noviceMode={noviceMode}
           onNoviceModeChange={(v) => {
             setNoviceMode(v);
-            // When Simple Mode turns ON while on an expert-only view,
-            // navigate to the scan view (those tabs disappear).
-            if (v && (view === 'simulate' || view === 'paper')) {
+            // When Simple Mode turns ON while on the expert-only Paper
+            // tab, navigate to the scan view (that tab disappears).
+            if (v && view === 'paper') {
               setView('batch');
             }
           }}
@@ -449,20 +429,6 @@ export default function App() {
           }}
         >
           ← Back to scan results
-        </button>
-      )}
-      {cameFromSimulation && (
-        <button
-          type="button"
-          onClick={() => { setView('simulate'); setCameFromSimulation(false); }}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, width: '100%',
-            padding: '8px 12px', marginBottom: 10, borderRadius: 8,
-            border: '1px solid #e2e5eb', background: '#eff6ff',
-            color: '#2563eb', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-          }}
-        >
-          ← Back to simulation results
         </button>
       )}
       <SearchBar

@@ -20,7 +20,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
 
 const SIM_FILES = [
-  'src/engine/simulateDay.js',
   'scripts/simulate-day.mjs',
 ];
 

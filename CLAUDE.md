@@ -97,7 +97,7 @@ Any strategy change must be validated on the rolling window before shipping. **R
 **Recent baselines:**
 - **Scalp** (Wave 2a, regime-aware stops ON): +Rs 37,530 over 17 days (Mar 12 - Apr 10), ~Rs 2,200/day, PF 3.11, win rate ~42.8%. Floor: don't regress below +Rs 19,000 / 17-day net P&L.
 - **Intraday** (PR #211 — Intraday Momentum Runner shipped): replay shows 7/8 reference trades fire correctly (was 4/8 pre-PR). Full walk-forward baseline pending; legacy V2 had no walk-forward.
-- **Delivery**: simulator path not yet wired (PR-D); only browser path exists.
+- **Delivery**: simulator path not yet wired (PR-D); only the live scanner shows delivery signals.
 
 The Wave 2a scalp tuning ships `REGIME_STOPS_DEFAULTS` in [`src/engine/risk-scalp.js`](src/engine/risk-scalp.js) as `NORMAL=1.5, LOW=1.2, RR=1.8, slFloor=0.005, slCap=0.012, targetCap=0.030`. Wave 3 intraday ships `INTRADAY_REGIME_STOPS_DEFAULTS` in [`src/engine/risk-v2.js`](src/engine/risk-v2.js) as `slMultRunner=2.5, targetPctRunner=0.08` (only applied when the Intraday Momentum Runner pattern fires).
 
@@ -136,14 +136,15 @@ src/engine/marketContext.js         Multi-factor layer classifiers + composer
 src/engine/sectorMap.js             NSE sector mapping (208 stocks)
 src/engine/indexDirection.js        NIFTY pre-window direction calc
 src/engine/batchScan.js             Throttled multi-stock scanner + telemetry
-src/engine/simulateDay.js           Bar-by-bar browser simulation
 src/engine/proximity-scalp.js       Forming-signal classifier (Novice Mode tiers)
 src/data/signalCategories.js        Engine-aware category resolvers + normalizeEngine()
-scripts/simulate-day.mjs            CLI simulation (primary backtest tool)
+scripts/simulate-day.mjs            CLI simulation (the only simulation path — see docs/SIMULATE.md)
 scripts/walk-forward.mjs            Parallel walk-forward harness (--timeframe, --size-tiers)
 scripts/replay-reference-trades.mjs Phase 0.5 gate — replay 8 peer trades (≥6/8 must fire)
+scripts/warm-cache.mjs              Bulk-warm chart cache for a date range
 worker/index.js                     Cloudflare Worker proxy
 docs/AGENTS.md                      Deep architecture guide (the AI agent spec)
+docs/SIMULATE.md                    How to run local CLI simulations
 docs/INTEGRATIONS.md                All external integrations inventory
 docs/GIT_WORKFLOW.md                Branching / merge / tag / release rules
 docs/WORKER_OPS.md                  Worker deploy / rotate / troubleshooting
