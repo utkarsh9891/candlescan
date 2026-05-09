@@ -761,8 +761,21 @@ async function fetchYahooNewsUpstream(symbol) {
   }
   const data = await resp.json().catch(() => ({}));
   const rawNews = Array.isArray(data?.news) ? data.news : [];
+  // Drop items whose `relatedTickers` doesn't include the queried Indian
+  // symbol. When Yahoo has no targeted news for an NSE symbol the search
+  // endpoint falls back to generic global feed (Southern Copper / Dutch
+  // Bros / 401k articles) — those carry US tickers in relatedTickers and
+  // are useless for an Indian midcap scan, but their bullish keyword hits
+  // were polluting the news-sentiment layer (the only layer with positive
+  // rank bonuses per CLAUDE.md rule #4).
+  const sym = String(symbol).toUpperCase();
+  const allowedTickers = new Set([sym, `${sym}.NS`, `${sym}.BO`]);
   const items = rawNews
     .filter((n) => n && (n.title || n.headline))
+    .filter((n) => {
+      const tickers = Array.isArray(n.relatedTickers) ? n.relatedTickers : [];
+      return tickers.some((t) => allowedTickers.has(String(t).toUpperCase()));
+    })
     .map((n) => ({
       title: String(n.title || n.headline || '').trim(),
       description: '', // Yahoo's search response carries no summary; clients tolerate empty
