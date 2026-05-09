@@ -260,6 +260,103 @@ export async function runSimulation({
       if (barIdx >= sd.windowCandles.length) continue;
       const bar = sd.windowCandles[barIdx];
 
+      // ── Tranche-aware exits (Trend Continuation Pullback v11) ──
+      // Mirrors the CLI simulator: when the position carries a tranche
+      // ladder, each leg processes its own target px against the shared
+      // SL + EOD fallback. One trade row is recorded per position once
+      // every tranche has resolved.
+      if (pos.tranches && pos.tranches.length) {
+        const isLastBar = barIdx === sd.windowCandles.length - 1;
+        for (const t of pos.tranches) {
+          if (t.state !== 'open') continue;
+          if (pos.direction === 'long') {
+            const slHit = bar.l <= pos.sl;
+            const tgtHit = bar.h >= t.target;
+            if (slHit && tgtHit) {
+              if (pessimisticFills && bar.c >= bar.o) { t.state = 'target'; t.exitPx = t.target; }
+              else { t.state = 'sl'; t.exitPx = pos.sl; }
+            } else if (slHit) { t.state = 'sl'; t.exitPx = pos.sl; }
+            else if (tgtHit) { t.state = 'target'; t.exitPx = t.target; }
+          } else {
+            const slHit = bar.h >= pos.sl;
+            const tgtHit = bar.l <= t.target;
+            if (slHit && tgtHit) {
+              if (pessimisticFills && bar.c <= bar.o) { t.state = 'target'; t.exitPx = t.target; }
+              else { t.state = 'sl'; t.exitPx = pos.sl; }
+            } else if (slHit) { t.state = 'sl'; t.exitPx = pos.sl; }
+            else if (tgtHit) { t.state = 'target'; t.exitPx = t.target; }
+          }
+          if (t.state === 'open' && isLastBar) {
+            t.state = 'eod'; t.exitPx = bar.c;
+          }
+          if (t.state !== 'open') t.exitTime = istTime(bar.t);
+        }
+        const allClosed = pos.tranches.every(t => t.state !== 'open');
+        if (allClosed) {
+          let grossPnl = 0;
+          let totalShares = 0;
+          let weightedExit = 0;
+          let entryNotional = 0;
+          let exitNotional = 0;
+          for (const t of pos.tranches) {
+            const trShares = Math.floor(pos.shares * t.pct);
+            if (trShares < 1) continue;
+            let exitPx = t.exitPx;
+            if (pessimisticFills) {
+              exitPx = pos.direction === 'long'
+                ? exitPx * (1 - SLIPPAGE_PCT)
+                : exitPx * (1 + SLIPPAGE_PCT);
+            }
+            const pnl = pos.direction === 'long'
+              ? (exitPx - pos.entry) * trShares
+              : (pos.entry - exitPx) * trShares;
+            grossPnl += pnl;
+            totalShares += trShares;
+            weightedExit += exitPx * trShares;
+            entryNotional += pos.entry * trShares;
+            exitNotional += exitPx * trShares;
+          }
+          const avgExit = totalShares > 0 ? weightedExit / totalShares : pos.entry;
+          const txCost = (entryNotional + exitNotional) * txCostPct;
+          const netPnl = grossPnl - txCost;
+
+          currentCapital += netPnl;
+          peakCapital = Math.max(peakCapital, currentCapital);
+          maxDrawdown = Math.max(maxDrawdown, peakCapital - currentCapital);
+
+          const reasonStr = pos.tranches
+            .map(t => `${t.name}:${t.state.slice(0, 3)}`).join('|');
+          const lastExitTime = pos.tranches
+            .map(t => t.exitTime).filter(Boolean).pop() || istTime(bar.t);
+
+          trades.push({
+            sym: pos.sym, direction: pos.direction,
+            entry: pos.entry, exit: avgExit, shares: totalShares,
+            grossPnl, txCost, netPnl, reason: reasonStr,
+            entryTime: istTime(sd.windowCandles[pos.entryBar].t),
+            exitTime: lastExitTime,
+            confidence: pos.confidence, action: pos.action, pattern: pos.pattern,
+            maxHoldBars: pos.maxHoldBars || null,
+            sizeMult: pos.sizeMult ?? null,
+            tranches: pos.tranches.map(t => ({
+              name: t.name, pct: t.pct, target: t.target,
+              exitPx: t.exitPx, state: t.state,
+            })),
+            features: pos.features || null,
+            contextSnapshot: pos.contextSnapshot || {
+              vixRegime: null, gap: null, liquidity: null, flow: null,
+              sentiment: null, sizeMult: pos.sizeMult ?? null,
+              consecutiveLosses: null,
+            },
+          });
+          if (netPnl > 0) consecutiveLosses = 0;
+          else consecutiveLosses++;
+          openPositions.splice(p, 1);
+          tradedSymbols.add(pos.sym);
+        }
+        continue;
+      }
+
       let exitPrice = null;
       let exitReason = null;
 
@@ -462,6 +559,18 @@ export async function runSimulation({
       const shares = Math.floor(effectivePositionSize / entryPrice);
       if (shares < 1) continue;
 
+      // Tranche-aware entry (Trend Continuation Pullback v11). Reanchor
+      // each tranche target to the post-slippage entry so the +0.2%/+0.4%
+      // ladder still maps to the actual fill price.
+      let tranchesForPos = null;
+      if (c.risk.tranches && c.risk.tranches.length) {
+        tranchesForPos = c.risk.tranches.map(t => {
+          const targetPct = (t.target - c.risk.entry) / c.risk.entry;
+          const target = entryPrice * (1 + targetPct);
+          return { name: t.name, pct: t.pct, target, state: 'open', exitPx: null, exitTime: null };
+        });
+      }
+
       openPositions.push({
         sym: c.sym, direction: c.risk.direction,
         entry: entryPrice, sl: c.risk.sl, target: c.risk.target,
@@ -470,6 +579,7 @@ export async function runSimulation({
         pattern: c.patterns[0]?.name || 'None',
         maxHoldBars: c.risk.maxHoldBars || null,
         sizeMult: sizeRes.mult,
+        tranches: tranchesForPos,
         // Gate-level attribution payload — persisted from entry to exit
         // so the emitted trade record can be joined back to the signal's
         // raw features and the day's market context at entry time.
