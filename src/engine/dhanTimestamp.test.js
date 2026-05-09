@@ -18,7 +18,6 @@ const REPO_ROOT = join(__dirname, '..', '..');
 
 const FILES_TO_SCAN = [
   'src/engine/dhanFetcher.js',
-  'src/engine/simulateDay.js',
   'src/engine/batchScan.js',
   'src/engine/indexDirection.js',
   'scripts/simulate-day.mjs',

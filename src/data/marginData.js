@@ -20,9 +20,8 @@ export const MARGIN_MULTIPLIER = 5;
 export const MARGIN_PENALTY = -30;
 
 // ── Broker charge models ────────────────────────────────────────
-// Used by PaperTradingPage (itemized P&L) and SimulationPage
-// (flat txCostPct). Shared here so both views stay in sync when
-// the user toggles "Broker Premium".
+// Used by PaperTradingPage's itemized P&L. Toggling "Broker Premium"
+// flips between the two charge sets.
 
 /** Standard retail plan charges. */
 export const CHARGES_REGULAR = {
@@ -44,23 +43,7 @@ export const CHARGES_PREMIUM = {
   GST_PCT: 0.18,
 };
 
-/**
- * Derive an approximate flat per-side transaction cost percentage
- * from the itemized charge model. Used by SimulationPage which runs
- * a flat txCostPct model rather than PaperTradingPage's itemized one.
- *
- * The existing default TX_COST_PCT in CLAUDE.md is 0.0002 (0.02%
- * per side). The premium plan is effectively 0.02% - ~0.004% ≈
- * 0.016%. We approximate this from the charge models rather than
- * hardcoding so the numbers stay in sync if the models are updated.
- */
-export function computeTxCostPct(premium) {
-  // Default (matches CLAUDE.md): 0.02% per side = 0.0002
-  // Premium: slightly lower due to exchange turnover reduction
-  return premium ? 0.00016 : 0.0002;
-}
-
-/** localStorage key shared between PaperTradingPage and SimulationPage. */
+/** localStorage key for the PaperTradingPage broker-plan toggle. */
 export const BROKER_PREMIUM_STORAGE_KEY = 'candlescan_broker_premium';
 
 const KITE_MARGIN_URL = 'https://api.kite.trade/margins/equity';

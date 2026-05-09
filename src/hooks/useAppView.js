@@ -1,7 +1,6 @@
 /**
  * useAppView — owns the top-level view routing, back-button handling,
- * and the "where did I come from" flags (cameFromBatch,
- * cameFromSimulation).
+ * and the "where did I come from" flag (cameFromBatch).
  *
  * Extracted from src/App.jsx. Pure behaviour-preserving move:
  *   - Push/replaceState semantics unchanged
@@ -9,7 +8,7 @@
  *   - Auto-navigation to settings when returning from Zerodha OAuth
  *     is unchanged
  *
- * View values: 'main' | 'batch' | 'simulate' | 'paper' | 'novice' | 'settings'
+ * View values: 'main' | 'batch' | 'paper' | 'novice' | 'settings'
  *
  * settingsReturnView — when the user opens Settings, we record which
  * tab they were on. Back from Settings (explicit button + hardware/
@@ -25,7 +24,6 @@ export function useAppView() {
     return 'main';
   });
   const [cameFromBatch, setCameFromBatch] = useState(false);
-  const [cameFromSimulation, setCameFromSimulation] = useState(false);
 
   const lastBackTime = useRef(0);
   const viewRef = useRef('main');
@@ -69,7 +67,6 @@ export function useAppView() {
         viewRef.current = 'main';
         setViewRaw('main');
         setCameFromBatch(false);
-        setCameFromSimulation(false);
         window.history.pushState({ view: 'home-guard' }, '', '');
         return;
       }
@@ -90,7 +87,6 @@ export function useAppView() {
   return {
     view, setView,
     cameFromBatch, setCameFromBatch,
-    cameFromSimulation, setCameFromSimulation,
     backFromSettings,
   };
 }
