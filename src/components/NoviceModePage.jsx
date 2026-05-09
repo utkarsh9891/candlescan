@@ -326,6 +326,19 @@ export default function NoviceModePage({
     }
   }, [results, scanning, refreshing, dataSource]);
 
+  // Track tab visibility so the auto-refresh loop pauses when the app is
+  // backgrounded. Without this, the watch list keeps re-scanning every 75s
+  // even with the tab buried, burning Yahoo / Dhan quota the user never sees.
+  const [tabVisible, setTabVisible] = useState(
+    typeof document !== 'undefined' ? !document.hidden : true,
+  );
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onVis = () => setTabVisible(!document.hidden);
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
   // Auto-refresh loop
   useEffect(() => {
     if (!autoRefresh) return;
@@ -333,11 +346,14 @@ export default function NoviceModePage({
     // Once a broker token has expired, every refresh would just fail
     // the same way — pause until the user reconnects and scans again.
     if (tokenError) return;
+    // Pause polling whenever the tab is hidden — saves API quota and
+    // avoids stale-data races when the user comes back.
+    if (!tabVisible) return;
     const timer = setInterval(() => {
       runWatchRefresh();
     }, AUTO_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [autoRefresh, results.length, runWatchRefresh, tokenError]);
+  }, [autoRefresh, results.length, runWatchRefresh, tokenError, tabVisible]);
 
   // When auto-refresh is switched off mid-refresh, abort the in-flight
   // batchScan so no more re-checks land after the user opted out.

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan, resetBatchScanRateLimitState } from '../engine/batchScan.js';
@@ -6,6 +6,9 @@ import { fetchLiveMarketContext, enrichWithGoogleNews } from '../engine/marketCo
 import { getGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { unlockGate } from '../utils/credentialVault.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
+import { getMarketStatus } from '../utils/marketHours.js';
+import { decideNextScan, getCadenceMs, cadenceLabel } from '../utils/scanScheduler.js';
+import { saveScanResults, loadScanResults, clearScanResults } from '../utils/scanResultsCache.js';
 // Engine-specific imports for engine-aware batch scanning
 import { detectPatterns as detectPatternsScalp } from '../engine/patterns-scalp.js';
 import { detectLiquidityBox as detectLiquidityBoxScalp } from '../engine/liquidityBox-scalp.js';
@@ -282,6 +285,84 @@ function getEngineFns(engineVersion) {
   return { detectPatterns: detectPatternsV2, detectLiquidityBox: detectLiquidityBoxV2, computeRiskScore: computeRiskScoreV2 };
 }
 
+const AUTO_SCAN_KEY = 'cs.batchScan.autoScan';
+
+/**
+ * Status row for the Auto-scan toggle. Shows live cadence + market
+ * state so the user knows what "on" actually does for their engine.
+ */
+function AutoScanRow({ engine, timeframe, autoScan, setAutoScan, scanning, lastScanAt }) {
+  const cadence = getCadenceMs(engine, timeframe);
+  const supported = cadence != null;
+  const [marketTick, setMarketTick] = useState(() => getMarketStatus());
+  useEffect(() => {
+    const t = setInterval(() => setMarketTick(getMarketStatus()), 30000);
+    return () => clearInterval(t);
+  }, []);
+  let statusText;
+  if (!supported) {
+    statusText = 'Auto-scan not available for delivery engine';
+  } else if (!autoScan) {
+    statusText = `Auto-scan off · cadence ${cadenceLabel(engine, timeframe)}`;
+  } else if (!marketTick.isOpen) {
+    statusText = `Auto-scan paused · market closed`;
+  } else if (scanning) {
+    statusText = `Auto-scan active · scanning now`;
+  } else if (lastScanAt) {
+    const ageS = Math.max(0, Math.round((Date.now() - lastScanAt) / 1000));
+    const nextS = Math.max(0, Math.round((cadence - (Date.now() - lastScanAt)) / 1000));
+    statusText = ageS < 5
+      ? `Auto-scan active · just ran`
+      : `Auto-scan active · next in ${nextS}s`;
+  } else {
+    statusText = `Auto-scan active · firing soon`;
+  }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
+      padding: '6px 10px', borderRadius: 8,
+      background: supported && autoScan ? '#f0fdf4' : '#f8fafc',
+      border: supported && autoScan ? '1px solid #bbf7d0' : '1px solid #e2e5eb',
+    }}>
+      <label style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        fontSize: 11, fontWeight: 700, color: '#1a1d26',
+        cursor: supported ? 'pointer' : 'not-allowed',
+        opacity: supported ? 1 : 0.5,
+      }}>
+        <input
+          type="checkbox"
+          checked={autoScan && supported}
+          disabled={!supported}
+          onChange={(e) => setAutoScan(e.target.checked)}
+          style={{ cursor: supported ? 'pointer' : 'not-allowed' }}
+        />
+        Auto-scan
+      </label>
+      <span style={{ fontSize: 10, color: '#64748b', flex: 1, textAlign: 'right' }}>
+        {statusText}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Re-renders every second while a scan is in progress so the elapsed
+ * counter stays live without polluting the parent component with a tick.
+ */
+function ScanElapsed({ startedAt }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const sec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (sec < 60) return <>{sec}s</>;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return <>{m}m {s}s</>;
+}
+
 export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks, onOpenSettings, newsEnrichEnabled = true }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const nseIndex = savedIndex || DEFAULT_NSE_INDEX_ID;
@@ -297,10 +378,22 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
   const [searchQuery, setSearchQuery] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
+  const [lastScanAt, setLastScanAt] = useState(null);     // ms timestamp of last successful scan
+  const [restoredFromCache, setRestoredFromCache] = useState(false); // true while showing persisted scan
+  const [scanStartedAt, setScanStartedAt] = useState(null); // ms timestamp when scan began (for elapsed display)
+  const [autoScan, setAutoScan] = useState(() => {
+    try { return localStorage.getItem(AUTO_SCAN_KEY) === '1'; } catch { return false; }
+  });
+  const [tabVisible, setTabVisible] = useState(
+    typeof document !== 'undefined' ? !document.hidden : true,
+  );
   const abortRef = useRef(null);
+  const autoScanTimerRef = useRef(null);
 
   const startScan = useCallback(async (token) => {
     setScanning(true);
+    setRestoredFromCache(false);
+    setScanStartedAt(Date.now());
     setError('');
     setResults([]);
     setTelemetry(null);
@@ -434,9 +527,31 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
       }
     } finally {
       setScanning(false);
+      setScanStartedAt(null);
       abortRef.current = null;
+      // Mark scan completion + persist results so a refresh / accidental nav
+      // doesn't force the user to rerun. We snapshot from state inside the
+      // setter callback to avoid stale closures.
+      setLastScanAt(Date.now());
+      setResults((latestResults) => {
+        if (latestResults.length > 0) {
+          setTelemetry((latestTelem) => {
+            saveScanResults({
+              engine: engineVersion,
+              index: nseIndex,
+              timeframe,
+              dataSource: dataSource || 'yahoo',
+              results: latestResults,
+              telemetry: latestTelem,
+              savedAt: Date.now(),
+            });
+            return latestTelem;
+          });
+        }
+        return latestResults;
+      });
     }
-  }, [nseIndex, timeframe]);
+  }, [nseIndex, timeframe, engineVersion, dataSource, newsEnrichEnabled]);
 
   const handleScanClick = useCallback(() => {
     if (scanning) {
@@ -452,6 +567,95 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
 
     startScan(getGateToken());
   }, [scanning, startScan]);
+
+  // Restore the most recent persisted scan when the user lands on the page
+  // for a (engine, index, timeframe, dataSource) tuple they've scanned before.
+  // This is a paper-cut fix: previously a refresh after a 30s/300-stock scan
+  // forced the user to rerun the whole thing.
+  useEffect(() => {
+    // Don't clobber an in-flight or fresh scan.
+    if (scanning) return;
+    if (results.length > 0 && !restoredFromCache) return;
+    const cached = loadScanResults({
+      engine: engineVersion,
+      index: nseIndex,
+      timeframe,
+      dataSource: dataSource || 'yahoo',
+    });
+    if (cached && cached.results?.length > 0) {
+      setResults(cached.results);
+      setTelemetry(cached.telemetry || null);
+      setLastScanAt(cached.savedAt || null);
+      setRestoredFromCache(true);
+    } else {
+      // Switching engine/index/timeframe to a tuple we have no cache for —
+      // wipe the previously-restored view so the empty state shows fresh.
+      if (restoredFromCache) {
+        setResults([]);
+        setTelemetry(null);
+        setLastScanAt(null);
+        setRestoredFromCache(false);
+      }
+    }
+    // Intentionally narrow deps: we only re-evaluate on key change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineVersion, nseIndex, timeframe, dataSource]);
+
+  // Track tab visibility so the auto-scan loop pauses when the app is
+  // backgrounded — saves API quota and prevents stale-data races on resume.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onVis = () => setTabVisible(!document.hidden);
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  // Auto-scan loop. Computes the next-fire delay from scanScheduler and
+  // arms a single setTimeout. Re-runs whenever any input changes (engine,
+  // toggle, market state, visibility, scan completion) so it self-corrects
+  // when conditions shift. clearTimeout in cleanup is essential — without it
+  // a toggle-off mid-wait would still fire one stray scan.
+  useEffect(() => {
+    if (autoScanTimerRef.current) {
+      clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = null;
+    }
+    if (!autoScan) return;
+    if (!hasGateToken()) return;
+    const market = getMarketStatus();
+    const decision = decideNextScan({
+      engine: engineVersion,
+      timeframe,
+      now: Date.now(),
+      lastScanAt,
+      marketIsOpen: market.isOpen,
+      tabVisible,
+      scanInFlight: scanning,
+      hasBlockingError: Boolean(tokenError) || Boolean(error),
+    });
+    if (decision.action === 'idle') return;
+    autoScanTimerRef.current = setTimeout(() => {
+      autoScanTimerRef.current = null;
+      // Re-check conditions at fire time — state may have shifted while waiting.
+      if (!hasGateToken()) return;
+      if (scanning) return;
+      const m2 = getMarketStatus();
+      if (!m2.isOpen) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      startScan(getGateToken());
+    }, decision.delayMs);
+    return () => {
+      if (autoScanTimerRef.current) {
+        clearTimeout(autoScanTimerRef.current);
+        autoScanTimerRef.current = null;
+      }
+    };
+  }, [autoScan, engineVersion, timeframe, lastScanAt, tabVisible, scanning, tokenError, error, startScan]);
+
+  // Persist the auto-scan toggle so the preference survives page reloads.
+  useEffect(() => {
+    try { localStorage.setItem(AUTO_SCAN_KEY, autoScan ? '1' : '0'); } catch { /* ignore */ }
+  }, [autoScan]);
 
   const handlePassphraseSubmit = useCallback(async (passphrase) => {
     // unlockGate stores both the hash (gate token) AND the RSA public key,
@@ -542,13 +746,62 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
           width: '100%', padding: '12px 0', fontSize: 14, fontWeight: 700,
           borderRadius: 10, border: 'none', cursor: 'pointer',
           background: scanning ? '#dc2626' : '#2563eb',
-          color: '#fff', marginBottom: 12,
+          color: '#fff', marginBottom: 8,
         }}
       >
         {scanning
           ? `Cancel (${progress.completed}/${progress.total})`
           : 'Scan All'}
       </button>
+
+      {/* Auto-scan toggle. Disabled (and visually muted) when the engine
+          doesn't support auto-scan (delivery) so the user isn't misled. */}
+      <AutoScanRow
+        engine={engineVersion}
+        timeframe={timeframe}
+        autoScan={autoScan}
+        setAutoScan={setAutoScan}
+        scanning={scanning}
+        lastScanAt={lastScanAt}
+      />
+
+      {/* Cached-results banner — shown when we restored from localStorage
+          so the user knows what they're looking at isn't this minute's data. */}
+      {restoredFromCache && lastScanAt && !scanning && (
+        <div style={{
+          padding: '8px 10px', borderRadius: 8,
+          background: '#fffbeb', border: '1px solid #fde68a',
+          color: '#92400e', fontSize: 11, marginBottom: 10,
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{ flex: 1 }}>
+            Showing saved results from {formatIstTime(Math.floor(lastScanAt / 1000))} —
+            tap <strong>Scan All</strong> to refresh.
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              clearScanResults({
+                engine: engineVersion,
+                index: nseIndex,
+                timeframe,
+                dataSource: dataSource || 'yahoo',
+              });
+              setResults([]);
+              setTelemetry(null);
+              setLastScanAt(null);
+              setRestoredFromCache(false);
+            }}
+            style={{
+              padding: '3px 8px', fontSize: 10, fontWeight: 600,
+              borderRadius: 6, border: '1px solid #fde68a',
+              background: '#fff', color: '#92400e', cursor: 'pointer',
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Progress bar */}
       {scanning && (
@@ -564,6 +817,11 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
           </div>
           <div style={{ fontSize: 11, color: '#8892a8' }}>
             Scanning {progress.current}...
+            {scanStartedAt && (
+              <span style={{ marginLeft: 6, fontFamily: mono, color: '#4a5068' }}>
+                <ScanElapsed startedAt={scanStartedAt} />
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -757,8 +1015,50 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
           {displayed.length === 0 && (
             <div style={{
               textAlign: 'center', padding: 24, color: '#8892a8', fontSize: 13,
+              display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center',
             }}>
-              No actionable signals found. Try "All" filter or a different timeframe.
+              <div>No matches for the current filters.</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center' }}>
+                {filter !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setFilter('all')}
+                    style={{
+                      fontSize: 11, fontWeight: 600, padding: '4px 10px',
+                      borderRadius: 999, border: '1px solid #e2e5eb',
+                      background: '#fff', color: '#2563eb', cursor: 'pointer',
+                    }}
+                  >
+                    Show all results
+                  </button>
+                )}
+                {dirFilter !== 'any' && (
+                  <button
+                    type="button"
+                    onClick={() => setDirFilter('any')}
+                    style={{
+                      fontSize: 11, fontWeight: 600, padding: '4px 10px',
+                      borderRadius: 999, border: '1px solid #e2e5eb',
+                      background: '#fff', color: '#2563eb', cursor: 'pointer',
+                    }}
+                  >
+                    Clear direction filter
+                  </button>
+                )}
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    style={{
+                      fontSize: 11, fontWeight: 600, padding: '4px 10px',
+                      borderRadius: 999, border: '1px solid #e2e5eb',
+                      background: '#fff', color: '#2563eb', cursor: 'pointer',
+                    }}
+                  >
+                    Clear search "{searchQuery}"
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </>
