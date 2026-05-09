@@ -352,6 +352,7 @@ describe('handleYahooNewsForSymbol', () => {
           publisher: 'Reuters',
           link: 'https://finance.yahoo.com/news/reliance-q4-beats-123.html',
           providerPublishTime: 1714123456,
+          relatedTickers: ['RELIANCE.NS'],
         },
       ],
     }));
@@ -368,7 +369,9 @@ describe('handleYahooNewsForSymbol', () => {
   });
 
   it('HIT on second call uses cache', async () => {
-    const fetchMock = vi.fn(async () => jsonResp({ news: [{ title: 'TCS up' }] }));
+    const fetchMock = vi.fn(async () => jsonResp({
+      news: [{ title: 'TCS up', relatedTickers: ['TCS.NS'] }],
+    }));
     globalThis.fetch = fetchMock;
     const kv = makeKvStub();
     await worker.fetch(makeRequest('/news/yahoo?symbol=TCS'), { CANDLESCAN_KV: kv });
@@ -392,8 +395,8 @@ describe('handleYahooNewsForSymbol', () => {
   it('drops items without a title', async () => {
     globalThis.fetch = vi.fn(async () => jsonResp({
       news: [
-        { title: '', link: 'x' },
-        { title: 'Real headline', link: 'https://y.com/a' },
+        { title: '', link: 'x', relatedTickers: ['INFY.NS'] },
+        { title: 'Real headline', link: 'https://y.com/a', relatedTickers: ['INFY.NS'] },
       ],
     }));
     const kv = makeKvStub();
@@ -401,6 +404,59 @@ describe('handleYahooNewsForSymbol', () => {
     const body = await resp.json();
     expect(body.count).toBe(1);
     expect(body.items[0].title).toBe('Real headline');
+  });
+
+  it('drops items whose relatedTickers do not include the queried symbol', async () => {
+    // Reproduces the "Southern Copper appears under every NIFTY MIDCAP 150
+    // stock" bug: Yahoo's search endpoint returns generic feed when there's
+    // no targeted news for an Indian symbol — we keep ONLY items that
+    // carry the symbol in `relatedTickers`.
+    globalThis.fetch = vi.fn(async () => jsonResp({
+      news: [
+        { title: 'BAJAJHLDNG dividend announced', relatedTickers: ['BAJAJHLDNG.NS'] },
+        { title: 'Southern Copper Earnings Beat', relatedTickers: ['SCCO'] },
+        { title: 'Dutch Bros Lifts 2026 Outlook', relatedTickers: ['BROS'] },
+        { title: 'Generic 401k story with no tickers' }, // no relatedTickers field
+      ],
+    }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=BAJAJHLDNG'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    expect(body.count).toBe(1);
+    expect(body.items[0].title).toBe('BAJAJHLDNG dividend announced');
+  });
+
+  it('accepts bare symbol or .BO ticker in relatedTickers', async () => {
+    globalThis.fetch = vi.fn(async () => jsonResp({
+      news: [
+        { title: 'TCS bare match', relatedTickers: ['TCS'] },
+        { title: 'TCS BSE listing news', relatedTickers: ['TCS.BO'] },
+      ],
+    }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=TCS'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    expect(body.count).toBe(2);
+  });
+
+  it('returns empty items (cached fresh) when every item is filtered out', async () => {
+    // When Yahoo returns ONLY irrelevant generic feed for an Indian
+    // symbol, we want a fresh-empty result — not a stale/unavailable
+    // sentinel — so the client treats it as "no news today" and the
+    // tier chain falls through to Moneycontrol.
+    globalThis.fetch = vi.fn(async () => jsonResp({
+      news: [
+        { title: 'Generic US story', relatedTickers: ['SCCO'] },
+        { title: 'Another US story', relatedTickers: ['BROS'] },
+      ],
+    }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=BAJAJHLDNG'), { CANDLESCAN_KV: kv });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get('X-Cache')).toBe('MISS'); // freshly stored, not unavailable
+    const body = await resp.json();
+    expect(body.count).toBe(0);
+    expect(body.items).toEqual([]);
   });
 });
 
