@@ -17,11 +17,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeCachedChartJson, readCachedChartJson, CHART_CACHE_DIR } from './lib/chart-cache-fs.mjs';
 import { fetchNseIndexSymbolsNode } from './lib/nse-http.mjs';
+import { SECTOR_INDEX_SYMBOLS } from '../src/engine/sectorMap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const ALL_INTERVALS = ['1m', '5m', '15m'];
 const INDICES = ['NIFTY 200', 'NIFTY MIDCAP 150', 'NIFTY SMALLCAP 250'];
+
+// Index symbols used by the simulator/scanner alongside stock candles.
+// indexDirection.js uses ^NSEI for parent-trend across all NIFTY indices;
+// scalp's sector-context lookup reads ^NSEBANK + every ^CNX* sector index
+// at the same intraday timeframe as the stock. Without these, every CLI
+// run prints "Warning: NIFTY cache not found — index direction filter
+// disabled" and the scalp engine drops the sector boost.
+const INDEX_SYMBOLS = ['^NSEI', ...new Set(Object.values(SECTOR_INDEX_SYMBOLS))];
+
+// ^INDIAVIX is read at 1d (not 1m/5m/15m) for VIX regime classification.
+// Adding it to INDEX_SYMBOLS at the intraday intervals would just produce
+// no-data rows; we fetch it separately at 1d below.
+const VIX_SYMBOL = '^INDIAVIX';
 
 // Throttling config
 let MAX_CONCURRENT = 5;
@@ -221,7 +235,13 @@ async function main() {
       console.warn(`  Failed to fetch ${idx}: ${e.message}`);
     }
   }
+  // Always include the index symbols themselves (parent + sector). These
+  // sit alongside the constituent stocks so they get the same date×interval
+  // coverage and the simulator stops printing the "NIFTY cache not found"
+  // warning.
+  for (const s of INDEX_SYMBOLS) allSymbols.add(s);
   const symbols = [...allSymbols].sort();
+  console.log(`  Index symbols: ${INDEX_SYMBOLS.length} (^NSEI + sectorals)`);
   console.log(`\nTotal unique symbols: ${symbols.length}`);
 
   // ── Build work items ─────────────────────────────────────────────────
@@ -232,6 +252,10 @@ async function main() {
         workItems.push({ sym, date, interval });
       }
     }
+  }
+  // ^INDIAVIX only at 1d (VIX regime gate consumes the daily close).
+  for (const date of allDates) {
+    workItems.push({ sym: VIX_SYMBOL, date, interval: '1d' });
   }
 
   if (skipExisting) {
