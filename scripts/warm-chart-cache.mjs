@@ -40,7 +40,7 @@
  *
  * 6. CACHE SCHEMA — Each file is a complete Yahoo v8 chart JSON envelope:
  *    { chart: { result: [{ meta, timestamp, indicators: { quote: [...] } }], error: null } }
- *    Stored at: cache/charts/{SYMBOL}/{interval}/{YYYY-MM-DD}.json
+ *    Stored at: cache/charts/{SYMBOL}/{interval}/{YYYY-MM-DD}.json.gz (gzipped — see scripts/lib/chart-cache-fs.mjs)
  */
 
 import { DEFAULT_NSE_INDEX_ID } from '../src/config/nseIndices.js';
