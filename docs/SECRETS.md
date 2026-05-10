@@ -154,16 +154,21 @@ prompted interactively at cockpit startup.
 | Surface | What's stored | Where | Encrypted? |
 |---|---|---|---|
 | **PWA** | Client ID (plain in localStorage), encrypted PIN (in Worker vault), encrypted access token (in Worker vault) | browser localStorage + Worker round-trip for premium calls | RSA via Worker |
-| **Cockpit** | clientId + pin in `~/.candlescan/cockpit/secrets.json` | Mac local file (mode 0600) | yes if gate is set |
+| **Cockpit** | clientId + pin in `~/.candlescan/cockpit/secrets.json` | Mac local file (mode 0600) | **always — gate is required** (PBKDF2 + AES-256-GCM) |
 | **Cockpit (runtime)** | accessToken (derived from clientId+PIN+TOTP at boot) | in-memory only | n/a |
 
-Cockpit setup:
+Cockpit setup (`cockpit:gate -- set` is a prerequisite):
 
 ```bash
+npm run cockpit:gate -- set         # one-time: set the encryption passphrase
 npm run cockpit:dhan                # interactive: clientId + PIN
 npm run cockpit:dhan -- show        # show what's stored (redacted summary)
 npm run cockpit:dhan -- clear       # remove from secrets.json
 ```
+
+Without a gate, `cockpit:dhan` exits with a non-zero status and a
+message pointing at `cockpit:gate set`. PINs cannot be stored in
+plaintext.
 
 > **Note on cockpit data path**: the cockpit's scan loop currently uses
 > Yahoo (anonymous, free, ~1-min delayed). Live Dhan/Zerodha integration
@@ -181,11 +186,12 @@ every morning around 06:00 IST after their OAuth flow).
 | Surface | What's stored | Where | Encrypted? |
 |---|---|---|---|
 | **PWA** | API key + secret + access token, all in Worker vault | browser localStorage (vault blob) + Worker decrypts on each premium call | RSA via Worker |
-| **Cockpit** | apiKey + apiSecret + accessToken in `~/.candlescan/cockpit/secrets.json` | Mac local file (mode 0600) | yes if gate is set (apiSecret + accessToken; apiKey is plain) |
+| **Cockpit** | apiKey + apiSecret + accessToken in `~/.candlescan/cockpit/secrets.json` | Mac local file (mode 0600) | **always — gate is required** (apiSecret + accessToken encrypted; apiKey is plain) |
 
-Cockpit setup:
+Cockpit setup (`cockpit:gate -- set` is a prerequisite):
 
 ```bash
+npm run cockpit:gate -- set               # one-time: set the encryption passphrase
 npm run cockpit:zerodha                   # full setup (apiKey + apiSecret + accessToken)
 npm run cockpit:zerodha -- access-token   # daily refresh — paste new token
 npm run cockpit:zerodha -- show           # show what's stored (redacted)
