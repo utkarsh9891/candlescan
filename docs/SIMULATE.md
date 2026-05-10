@@ -23,7 +23,7 @@ node scripts/simulate-day.mjs 1d \
   --confidence 75 --max-positions 3 --max-trades 2
 ```
 
-`npm run simulate:run -- ...` is the npm wrapper for the same script. Pick any NSE trading day for `--date` — if the chart cache already has bars for that date, the run is near-instant; otherwise it falls back to Yahoo and warms the cache as it goes.
+`npm run simulate -- ...` is the npm wrapper for the same script. Pick any NSE trading day for `--date` — if the chart cache already has bars for that date, the run is near-instant; otherwise it falls back to Yahoo and warms the cache as it goes.
 
 ## Walk-forward (Mar 12 → today)
 
@@ -87,7 +87,7 @@ node scripts/warm-cache.mjs --from 2026-03-12 --to 2026-05-09 --skip-existing
 To warm a single index for one timeframe (faster, smaller scope):
 
 ```bash
-npm run cache:warm:charts -- 5m --index "NIFTY SMALLCAP 100"
+npm run cache:warm -- 5m --index "NIFTY SMALLCAP 100"
 ```
 
 To warm + auto-commit + push to the cache repo in one step:

@@ -34,7 +34,7 @@ npm start            # Dev server at http://127.0.0.1:5173/candlescan/
 npm run build        # Production build → dist/
 npm run preview      # Serve built files locally (no dev proxy)
 npm run test:batch   # CLI batch scan using <CACHE_ROOT>/charts/ (sibling candlescan-cache repo by default)
-npm run cache:warm:charts # Pre-warm chart cache from Yahoo (writes to <CACHE_ROOT>/charts/)
+npm run cache:warm # Pre-warm chart cache from Yahoo (writes to <CACHE_ROOT>/charts/)
 npm run cache:sync   # Warm + auto-commit + push the new chart data to candlescan-cache
 ```
 

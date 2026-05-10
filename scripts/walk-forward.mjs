@@ -496,7 +496,7 @@ async function main() {
     process.stderr.write(
       `[walk-forward] not enough trading days in [${opts.from}, ${opts.to}]: got ${days.length}, ` +
       `need at least trainDays(${opts.trainDays}) + testDays(${opts.testDays}) = ${opts.trainDays + opts.testDays}.\n` +
-      `Hint: warm the chart cache first (npm run cache:charts) or widen --from/--to.\n`,
+      `Hint: warm the chart cache first (npm run cache:warm) or widen --from/--to.\n`,
     );
     process.exit(1);
   }

@@ -3,9 +3,9 @@
  * Stage, commit, and push any new chart data into the sibling
  * candlescan-cache repo.
  *
- * Run after `npm run cache:charts` to publish the warmed bars:
+ * Run after `npm run cache:warm` to publish the warmed bars:
  *
- *   npm run cache:charts -- --all-timeframes --index "NIFTY 200"
+ *   npm run cache:warm -- --all-timeframes --index "NIFTY 200"
  *   npm run cache:sync
  *
  * No-ops cleanly if nothing was warmed. Refuses to run when CACHE_ROOT

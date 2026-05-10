@@ -2,12 +2,12 @@
  * Fetch Yahoo chart JSON for every symbol in an NSE index and write date-partitioned cache files.
  *
  * Usage:
- *   npm run cache:charts                                  # default: 5m, default index
- *   npm run cache:charts -- 5m                            # specific timeframe
- *   npm run cache:charts -- 5m --index "NIFTY TOTAL MARKET"
- *   npm run cache:charts -- --all-timeframes              # warm 1m, 5m, 15m in sequence
- *   npm run cache:charts -- --all-timeframes --index "NIFTY TOTAL MARKET"
- *   npm run cache:charts -- --all-timeframes --from-cache # top up every symbol already on disk
+ *   npm run cache:warm                                  # default: 5m, default index
+ *   npm run cache:warm -- 5m                            # specific timeframe
+ *   npm run cache:warm -- 5m --index "NIFTY TOTAL MARKET"
+ *   npm run cache:warm -- --all-timeframes              # warm 1m, 5m, 15m in sequence
+ *   npm run cache:warm -- --all-timeframes --index "NIFTY TOTAL MARKET"
+ *   npm run cache:warm -- --all-timeframes --from-cache # top up every symbol already on disk
  *
  * Fetches directly from Yahoo Finance (no CF worker proxy — avoids rate limits).
  *

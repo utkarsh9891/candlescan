@@ -550,7 +550,7 @@ async function main() {
   const days = enumerateTradingDays(opts.from, opts.to, allDates);
   if (days.length === 0) {
     process.stderr.write(
-      `[window-sweep] no trading days in [${opts.from}, ${opts.to}] — warm the cache first (npm run cache:charts).\n`,
+      `[window-sweep] no trading days in [${opts.from}, ${opts.to}] — warm the cache first (npm run cache:warm).\n`,
     );
     process.exit(1);
   }
