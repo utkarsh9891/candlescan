@@ -33,6 +33,7 @@
     "worker:rotate-keys": "bash scripts/rotate-keys.sh",
     "worker:audit-kv": "bash scripts/kv-audit.sh",
 
+    "help": "node scripts/help.mjs",
     "prepare": "git config core.hooksPath .git-hooks"
   },
   "dependencies": {

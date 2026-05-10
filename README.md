@@ -56,7 +56,12 @@ Full cockpit reference: [`docs/COCKPIT.md`](docs/COCKPIT.md).
 
 ## npm scripts
 
-Grouped by domain. All sub-commands follow `<domain>:<verb>`.
+Grouped by domain. All sub-commands follow `<domain>:<verb>`. For a
+quick reference on the command line:
+
+```bash
+npm run help        # categorized list with 1-line descriptions for every script
+```
 
 **Frontend / dev**
 
