@@ -8,16 +8,36 @@
     "build": "vite build",
     "preview": "vite preview",
     "pages": "bash scripts/deploy-to-pages.sh",
+
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+
     "simulate": "node scripts/simulate-day.mjs",
-    "cache:charts": "node scripts/warm-chart-cache.mjs",
+
+    "cockpit": "node scripts/cockpit/index.mjs",
+    "cockpit:init": "node scripts/cockpit/cli.mjs init",
+    "cockpit:status": "node scripts/cockpit/cli.mjs status",
+    "cockpit:config": "node scripts/cockpit/cli.mjs config",
+    "cockpit:logs": "node scripts/cockpit/cli.mjs logs",
+    "cockpit:help": "node scripts/cockpit/cli.mjs help",
+    "cockpit:dhan": "node scripts/cockpit/cli.mjs dhan",
+    "cockpit:zerodha": "node scripts/cockpit/cli.mjs zerodha",
+    "cockpit:gate": "node scripts/cockpit/cli.mjs gate",
+    "cockpit:rotate-topic": "node scripts/cockpit/cli.mjs rotate-topic",
+
     "cache:warm": "node scripts/warm-cache.mjs",
+    "cache:warm:charts": "node scripts/warm-chart-cache.mjs",
     "cache:sync": "node scripts/sync-cache-repo.mjs",
+
+    "worker:keys:rotate": "bash scripts/rotate-keys.sh",
+    "worker:kv:audit": "bash scripts/kv-audit.sh",
+
     "prepare": "git config core.hooksPath .git-hooks"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.2",
+    "hono": "^4.12.18",
     "lightweight-charts": "^5.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

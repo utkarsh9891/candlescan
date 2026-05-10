@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>CandleScan Cockpit</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --panel-2: #1a1a1a;
+    --border: #262626;
+    --text: #e5e5e5;
+    --muted: #737373;
+    --accent: #38bdf8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+    --magenta: #c084fc;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif; }
+  header { padding: 14px 16px; border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: var(--panel); }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  .pill { padding: 4px 10px; border-radius: 999px; background: var(--panel-2);
+    border: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .pill b { color: var(--text); font-weight: 500; }
+  .pill .pos { color: var(--green); }
+  .pill .neg { color: var(--red); }
+  nav { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  nav button { background: transparent; color: var(--muted); border: none; padding: 12px 16px;
+    font: inherit; cursor: pointer; border-bottom: 2px solid transparent; }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav button .count { color: var(--muted); margin-left: 4px; font-size: 12px; }
+  main { padding: 0; }
+  section { display: none; padding: 12px; }
+  section.active { display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border);
+    white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.04em; }
+  td.r, th.r { text-align: right; }
+  td.mono { font-variant-numeric: tabular-nums; }
+  tr:hover td { background: var(--panel-2); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600; }
+  .badge.long { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+  .badge.short { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+  .badge.open { background: rgba(56, 189, 248, 0.15); color: var(--accent); }
+  .badge.closed { background: rgba(115, 115, 115, 0.2); color: var(--muted); }
+  button.act { background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  button.act:hover { background: #2a2a2a; }
+  button.act.danger { color: var(--red); border-color: rgba(239, 68, 68, 0.4); }
+  button.act:disabled { opacity: 0.5; cursor: not-allowed; }
+  .empty { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .muted { color: var(--muted); }
+  .live { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; max-height: 70vh; overflow: auto; line-height: 1.5; }
+  .live .ev { padding: 2px 0; }
+  .live .ts { color: var(--muted); margin-right: 8px; }
+  .live .kind { color: var(--accent); margin-right: 8px; }
+  .live .kind.trade { color: var(--green); }
+  .live .kind.signal { color: var(--magenta); }
+  .live .kind.exit { color: var(--yellow); }
+  @media (max-width: 600px) {
+    th:not(.keep), td:not(.keep) { display: none; }
+    th.mobile, td.mobile { display: table-cell; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>CandleScan Cockpit</h1>
+  <span class="pill" id="cfg-pill">…</span>
+  <span class="pill" id="pnl-pill"><b>P&amp;L</b> <span id="pnl">—</span></span>
+  <span class="pill" id="sse-pill" title="SSE connection">●</span>
+</header>
+<nav>
+  <button data-tab="signals" class="active">Signals <span class="count" id="c-signals">0</span></button>
+  <button data-tab="open">Open <span class="count" id="c-open">0</span></button>
+  <button data-tab="closed">Closed <span class="count" id="c-closed">0</span></button>
+  <button data-tab="live">Live</button>
+</nav>
+<main>
+  <section id="tab-signals" class="active">
+    <table>
+      <thead>
+        <tr>
+          <th class="mobile">Time</th>
+          <th class="mobile">Symbol</th>
+          <th class="mobile">Side</th>
+          <th>Conf</th>
+          <th>Pattern</th>
+          <th class="r">Entry</th>
+          <th class="r">SL</th>
+          <th class="r">Target</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="signals-body"></tbody>
+    </table>
+    <div class="empty" id="signals-empty">No signals yet today.</div>
+  </section>
+  <section id="tab-open">
+    <table>
+      <thead>
+        <tr>
+          <th class="mobile">Time</th>
+          <th class="mobile">Symbol</th>
+          <th class="mobile">Side</th>
+          <th class="r">Shares</th>
+          <th class="r">Entry</th>
+          <th class="r">SL</th>
+          <th class="r">Target</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="open-body"></tbody>
+    </table>
+    <div class="empty" id="open-empty">No open positions.</div>
+  </section>
+  <section id="tab-closed">
+    <table>
+      <thead>
+        <tr>
+          <th class="mobile">Exit</th>
+          <th class="mobile">Symbol</th>
+          <th class="mobile">Side</th>
+          <th class="r">Entry</th>
+          <th class="r">Exit</th>
+          <th>Reason</th>
+          <th class="r mobile">Net P&amp;L</th>
+        </tr>
+      </thead>
+      <tbody id="closed-body"></tbody>
+    </table>
+    <div class="empty" id="closed-empty">No closed trades yet.</div>
+  </section>
+  <section id="tab-live">
+    <div class="live" id="live"></div>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n, d = 2) => (typeof n === 'number' ? n.toFixed(d) : '—');
+  const fmtRs = (n) => (typeof n === 'number' ? '₹' + Math.round(n).toLocaleString('en-IN') : '—');
+  const istTime = (epochSec) => {
+    if (!epochSec) return '—';
+    const d = new Date(epochSec * 1000);
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
+  };
+  const istTimeIso = (iso) => {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
+  };
+  const escape = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // Tab switching
+  document.querySelectorAll('nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  // ── State + render ──
+  let signalsById = new Map();
+  let tradesBySigId = new Map();
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' });
+      const d = await r.json();
+      $('cfg-pill').innerHTML = `<b>${escape(d.cfg.engine)}</b> · ${escape(d.cfg.index)} · ${escape(d.cfg.timeframe)} · conf≥${d.cfg.minConfidence}`;
+      const pnl = d.summary?.netPnl ?? 0;
+      const pnlEl = $('pnl');
+      pnlEl.textContent = fmtRs(pnl);
+      pnlEl.className = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'muted';
+      $('c-signals').textContent = d.signals?.length || 0;
+      $('c-open').textContent = d.summary?.open || 0;
+      $('c-closed').textContent = d.summary?.closed || 0;
+
+      tradesBySigId = new Map();
+      for (const t of (d.trades || [])) tradesBySigId.set(t.signalId, t);
+      signalsById = new Map();
+      for (const s of (d.signals || [])) signalsById.set(s.id, s);
+
+      renderSignals(d.signals || []);
+      renderOpen((d.trades || []).filter(t => t.status === 'open'));
+      renderClosed((d.trades || []).filter(t => t.status === 'closed'));
+    } catch (e) {
+      console.error('refresh failed', e);
+    }
+  }
+
+  function renderSignals(signals) {
+    const body = $('signals-body');
+    body.innerHTML = '';
+    const sorted = [...signals].sort((a, b) => b.barTs - a.barTs);
+    for (const s of sorted) {
+      const tr = document.createElement('tr');
+      const tradedFlag = tradesBySigId.has(s.id);
+      const dirClass = s.direction === 'long' ? 'long' : 'short';
+      const enterDisabled = tradedFlag ? 'disabled' : '';
+      const enterLabel = tradedFlag ? 'Entered' : 'Enter';
+      tr.innerHTML = `
+        <td class="mobile mono">${istTime(s.barTs)}</td>
+        <td class="mobile"><b>${escape(s.symbol)}</b></td>
+        <td class="mobile"><span class="badge ${dirClass}">${escape(s.action)}</span></td>
+        <td class="mono">${s.confidence}</td>
+        <td>${escape(s.pattern)}</td>
+        <td class="r mono">${fmt(s.entry)}</td>
+        <td class="r mono">${fmt(s.sl)}</td>
+        <td class="r mono">${fmt(s.target)}</td>
+        <td><button class="act" ${enterDisabled} data-sig="${escape(s.id)}">${enterLabel}</button></td>
+      `;
+      body.appendChild(tr);
+    }
+    $('signals-empty').style.display = sorted.length ? 'none' : 'block';
+  }
+
+  function renderOpen(open) {
+    const body = $('open-body');
+    body.innerHTML = '';
+    for (const t of open) {
+      const dirClass = t.direction === 'long' ? 'long' : 'short';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mobile mono">${istTimeIso(t.enteredAt)}</td>
+        <td class="mobile"><b>${escape(t.symbol)}</b></td>
+        <td class="mobile"><span class="badge ${dirClass}">${escape(t.direction.toUpperCase())}</span></td>
+        <td class="r mono">${t.shares.toLocaleString('en-IN')}</td>
+        <td class="r mono">${fmt(t.entry)}</td>
+        <td class="r mono">${fmt(t.sl)}</td>
+        <td class="r mono">${fmt(t.target)}</td>
+        <td><button class="act danger" data-exit="${escape(t.id)}">Force Exit</button></td>
+      `;
+      body.appendChild(tr);
+    }
+    $('open-empty').style.display = open.length ? 'none' : 'block';
+  }
+
+  function renderClosed(closed) {
+    const body = $('closed-body');
+    body.innerHTML = '';
+    const sorted = [...closed].sort((a, b) => (b.exitedAtTs || 0) - (a.exitedAtTs || 0));
+    for (const t of sorted) {
+      const dirClass = t.direction === 'long' ? 'long' : 'short';
+      const pnlClass = (t.netPnl ?? 0) > 0 ? 'pos' : (t.netPnl ?? 0) < 0 ? 'neg' : '';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mobile mono">${istTimeIso(t.exitedAt)}</td>
+        <td class="mobile"><b>${escape(t.symbol)}</b></td>
+        <td class="mobile"><span class="badge ${dirClass}">${escape(t.direction.toUpperCase())}</span></td>
+        <td class="r mono">${fmt(t.entry)}</td>
+        <td class="r mono">${fmt(t.exitPrice)}</td>
+        <td>${escape(t.exitReason || '')}</td>
+        <td class="r mono mobile ${pnlClass}">${fmtRs(t.netPnl)}</td>
+      `;
+      body.appendChild(tr);
+    }
+    $('closed-empty').style.display = sorted.length ? 'none' : 'block';
+  }
+
+  // ── Action buttons ──
+  document.body.addEventListener('click', async (e) => {
+    const enterBtn = e.target.closest('button[data-sig]');
+    if (enterBtn && !enterBtn.disabled) {
+      const sigId = enterBtn.dataset.sig;
+      const sig = signalsById.get(sigId);
+      if (!sig) return;
+      enterBtn.disabled = true;
+      enterBtn.textContent = '…';
+      try {
+        const r = await fetch(`/api/trades/enter?sig=${encodeURIComponent(sigId)}`, { method: 'GET' });
+        if (!r.ok) throw new Error('http ' + r.status);
+        await refresh();
+      } catch (err) {
+        alert('Enter failed: ' + err.message);
+        enterBtn.disabled = false;
+        enterBtn.textContent = 'Enter';
+      }
+      return;
+    }
+    const exitBtn = e.target.closest('button[data-exit]');
+    if (exitBtn && !exitBtn.disabled) {
+      const tradeId = exitBtn.dataset.exit;
+      const px = prompt('Force exit at price:');
+      const exitPrice = Number(px);
+      if (!Number.isFinite(exitPrice)) return;
+      exitBtn.disabled = true;
+      exitBtn.textContent = '…';
+      try {
+        const r = await fetch(`/api/trades/${encodeURIComponent(tradeId)}/exit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ exitPrice, exitReason: 'manual' }),
+        });
+        if (!r.ok) throw new Error('http ' + r.status);
+        await refresh();
+      } catch (err) {
+        alert('Exit failed: ' + err.message);
+        exitBtn.disabled = false;
+        exitBtn.textContent = 'Force Exit';
+      }
+    }
+  });
+
+  // ── SSE live feed ──
+  let liveLines = [];
+  const ssePill = $('sse-pill');
+  function connectSse() {
+    ssePill.style.color = 'var(--yellow)';
+    ssePill.title = 'connecting…';
+    const es = new EventSource('/api/events');
+    es.onopen = () => {
+      ssePill.style.color = 'var(--green)';
+      ssePill.title = 'live';
+    };
+    es.onerror = () => {
+      ssePill.style.color = 'var(--red)';
+      ssePill.title = 'reconnecting…';
+    };
+    es.onmessage = (ev) => {
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.kind === 'ping' || m.kind === 'hello') return;
+        liveLines.push(m);
+        if (liveLines.length > 200) liveLines.shift();
+        renderLive();
+        if (m.kind?.startsWith('trade:') || m.kind === 'signal:new' || m.kind === 'trade:exit:auto') {
+          refresh();
+        }
+      } catch {/* ignore */}
+    };
+  }
+
+  function renderLive() {
+    const el = $('live');
+    el.innerHTML = liveLines.map(m => {
+      const ts = new Date(m.ts).toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
+      const k = m.kind || '';
+      let cls = 'kind';
+      if (k.startsWith('trade')) cls += ' trade';
+      else if (k.startsWith('signal')) cls += ' signal';
+      else if (k === 'trade:exit:auto') cls += ' exit';
+      const summary = summarize(m);
+      return `<div class="ev"><span class="ts">${ts}</span><span class="${cls}">${escape(k)}</span><span>${escape(summary)}</span></div>`;
+    }).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function summarize(m) {
+    const p = m.payload || {};
+    if (m.kind === 'signal:new') return `${p.symbol} ${p.action} conf=${p.confidence} ${p.pattern}`;
+    if (m.kind === 'trade:enter') return `${p.symbol} ${p.shares}@${p.entry?.toFixed(2)}`;
+    if (m.kind === 'trade:exit') return `${p.symbol} @${p.exitPrice?.toFixed(2)} [${p.exitReason}] netPnl=${(p.netPnl ?? 0).toFixed(0)}`;
+    if (m.kind === 'trade:exit:auto') return `${p.symbol} @${p.exitPrice?.toFixed(2)} [${p.exitReason}]`;
+    if (m.kind === 'trade:trail') return `${p.symbol} SL→${p.newSl?.toFixed(2)}`;
+    if (m.kind === 'scan:tick') return `#${p.scanCount} scanned=${p.scanned} hits=${p.hits} new=${p.new}`;
+    return JSON.stringify(p).slice(0, 120);
+  }
+
+  refresh();
+  setInterval(refresh, 5000);
+  connectSse();
+})();
+</script>
+</body>
+</html>

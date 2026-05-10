@@ -89,17 +89,22 @@ Only the CF Worker (holding the private key) can decrypt them.
 
 ### Rotate RSA Keys
 
-Run the rotation script from the repo root:
+Run the rotation from the repo root:
 
 ```bash
-./scripts/rotate-keys.sh
+npm run worker:keys:rotate     # convenience alias
+# or directly:
+bash scripts/rotate-keys.sh
 ```
 
-This will:
+This single command bundles all three things you used to do separately:
 1. Generate a new RSA-2048 key pair
-2. Prompt for the premium passphrase
-3. Deploy keys to the CF Worker (`GATE_PRIVATE_KEY` secret + `GATE_PUBLIC_KEY` in KV)
-4. Clean up local key files
+2. Prompt for the premium passphrase → SHA-256 → upload as `GATE_PASSPHRASE_HASH` Worker secret
+3. Upload private key as `GATE_PRIVATE_KEY` Worker secret
+4. Upload public key to `CANDLESCAN_KV` as `GATE_PUBLIC_KEY` (used by the browser)
+5. Clean up local key files
+
+Granular flow (e.g. just changing the passphrase without rotating keys) isn't wired up — re-running the bundled script is fine because it's idempotent and rotating both is the safer default.
 
 **After rotation**: All users must re-enter their Zerodha credentials in Settings.
 
@@ -180,7 +185,7 @@ Run the rotation script to generate and deploy the RSA key pair:
 
 ```bash
 cd ..
-./scripts/rotate-keys.sh
+npm run worker:keys:rotate
 ```
 
 This sets the `GATE_PRIVATE_KEY` secret and stores `GATE_PUBLIC_KEY` in the
@@ -222,6 +227,67 @@ npx wrangler kv key list --binding RATE_LIMIT
 
 # Delete a specific key (to unblock an IP for today)
 npx wrangler kv key delete --binding RATE_LIMIT "rl:SOME_KEY_HERE"
+```
+
+### Audit + clean the `CANDLESCAN_*` KV namespaces
+
+```bash
+npm run worker:kv:audit            # list active vs stale across all bound namespaces
+npm run worker:kv:audit -- --clean # additionally delete stale keys
+```
+
+The audit walks every bound KV namespace from `wrangler.toml` —
+`CANDLESCAN_CONFIG`, `CANDLESCAN_CACHE`, and the legacy `CANDLESCAN_KV`
+— and classifies each key against the allowlists in
+[`scripts/kv-audit.sh`](../scripts/kv-audit.sh):
+
+- `CONFIG_EXACT` — long-lived config (currently: `GATE_PUBLIC_KEY`)
+- `CACHE_EXACT` — TTL'd cache by exact name (`kite_nse_instruments`,
+  `dhan_nse_instruments`)
+- `CACHE_PREFIXES` — TTL'd cache by prefix (`nse_fiidii_daily:`,
+  `nse_vix_daily:`, `india_news:`, `quote_last:`)
+- `STALE_EXACT` / `STALE_PREFIXES` — known leftovers (e.g. `yahoo_news:*`
+  from the removed `/news/yahoo` endpoint, `TEST_KEY`)
+
+**When you add a new KV key in `worker/index.js`, register it under the
+appropriate allowlist** so it isn't flagged as stale.
+
+### Split the legacy KV namespace
+
+The worker prefers `CANDLESCAN_CONFIG` for long-lived config and
+`CANDLESCAN_CACHE` for TTL'd cache values, falling back to `CANDLESCAN_KV`
+when those bindings aren't present. The split is purely operational —
+clearer auditing, and you can wipe the cache namespace any time without
+risking config loss.
+
+To migrate from the legacy single namespace:
+
+```bash
+cd worker
+
+# 1. Create the two new namespaces.
+npx wrangler kv namespace create CANDLESCAN_CONFIG
+npx wrangler kv namespace create CANDLESCAN_CACHE
+# Copy the printed ids.
+
+# 2. Edit worker/wrangler.toml — uncomment the two CANDLESCAN_CONFIG /
+#    CANDLESCAN_CACHE blocks and paste the ids.
+
+# 3. Migrate GATE_PUBLIC_KEY (the only long-lived key worth copying;
+#    TTL'd caches will rebuild on miss).
+LEGACY_ID=$(awk '/CANDLESCAN_KV/{f=1} f && /^id/{gsub(/[" ]/,"",$3); print $3; exit}' wrangler.toml)
+CONFIG_ID=$(awk '/CANDLESCAN_CONFIG/{f=1} f && /^id/{gsub(/[" ]/,"",$3); print $3; exit}' wrangler.toml)
+KEY_PEM=$(npx wrangler kv key get --namespace-id="$LEGACY_ID" --remote GATE_PUBLIC_KEY)
+echo "$KEY_PEM" | npx wrangler kv key put --namespace-id="$CONFIG_ID" --remote GATE_PUBLIC_KEY -
+
+# 4. Deploy. The worker will start writing new keys to CACHE/CONFIG,
+#    keep reading from the legacy fallback for any not-yet-migrated keys.
+npx wrangler deploy
+
+# 5. (Optional, after a few days) Clear the legacy namespace and remove
+#    its binding from wrangler.toml. Re-run audit + clean to confirm
+#    nothing valuable is left behind first.
+npm run worker:kv:audit
 ```
 
 ---
