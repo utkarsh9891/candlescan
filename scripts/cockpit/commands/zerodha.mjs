@@ -1,14 +1,15 @@
 /**
  * `cockpit zerodha` — interactive Zerodha Kite Connect credential setup.
  *
- * Stores: apiKey, apiSecret (hidden, encrypted at rest if gate is set),
- * accessToken (hidden, encrypted at rest if gate is set, daily-rotated).
+ * Stores: apiKey, apiSecret (encrypted at rest via the cockpit gate),
+ * accessToken (encrypted at rest, daily-rotated). Gate is REQUIRED —
+ * the set + access-token paths refuse to write plain creds.
  *
  * Subcommands:
- *   cockpit zerodha               set/update creds
- *   cockpit zerodha access-token  update only the daily access token
- *   cockpit zerodha show          show stored fields (redacted summary)
- *   cockpit zerodha clear         remove all Zerodha creds
+ *   cockpit zerodha               set/update creds  (REQUIRES gate)
+ *   cockpit zerodha access-token  rotate only the daily access token (REQUIRES gate)
+ *   cockpit zerodha show          show stored fields (redacted summary; works without gate)
+ *   cockpit zerodha clear         remove all Zerodha creds (works without gate)
  */
 
 import { ask, askSecret, confirm } from '../lib/prompts.mjs';
@@ -20,18 +21,22 @@ import {
   isEncrypted,
 } from '../lib/gate.mjs';
 
-export const help = `
-cockpit zerodha [access-token | show | clear] — manage Zerodha credentials
+export const help = `cockpit zerodha [access-token | show | clear] — manage Zerodha credentials
 
   cockpit zerodha               interactive setup of API key + secret + token
+                                (REQUIRES cockpit gate to be set first)
   cockpit zerodha access-token  rotate only the daily access token
+                                (REQUIRES cockpit gate to be set first)
   cockpit zerodha show          show stored fields (redacted summary)
   cockpit zerodha clear         remove all Zerodha creds from secrets.json
 
-Zerodha access tokens expire daily (~06:00 IST). Use 'access-token' each
-morning rather than re-running the full setup. If a gate is set,
-apiSecret + accessToken are encrypted at rest.
-`.trim();
+apiSecret + accessToken are encrypted at rest via the cockpit gate
+(PBKDF2 + AES-256-GCM). The set + access-token paths refuse to run if
+no gate is configured — set one first:
+  npm run cockpit:gate -- set
+
+Zerodha access tokens expire daily (~06:00 IST). Use \`access-token\`
+each morning rather than re-running the full setup.`;
 
 export async function run(args) {
   const sub = args[0];
@@ -41,8 +46,21 @@ export async function run(args) {
   return setAll();
 }
 
+/** Hard-fail if no gate is set. Both write paths call this first. */
+function requireGate(cur) {
+  if (cur.gate?.salt) return;
+  console.error('✗ Zerodha creds cannot be stored without a cockpit gate.');
+  console.error('  Broker credentials must be encrypted at rest.');
+  console.error('');
+  console.error('  Set a gate first:  npm run cockpit:gate -- set');
+  console.error('  Then re-run:       npm run cockpit:zerodha');
+  process.exit(1);
+}
+
 async function setAll() {
   const cur = readSecrets();
+  requireGate(cur);
+
   const z = cur.zerodha || {};
   console.log('Zerodha Kite Connect credential setup\n');
 
@@ -70,15 +88,16 @@ async function setAll() {
   };
   if (!next.zerodha.accessToken) delete next.zerodha.accessToken;
 
-  const finalState = await applyGate(next);
+  const finalState = await encryptWithGate(next);
   if (!finalState) return;
   writeSecrets(finalState);
-  console.log('\n✓ Zerodha creds saved.');
+  console.log('\n✓ Zerodha creds saved (apiSecret + accessToken encrypted at rest).');
   console.log('  rotate access token each morning:  npm run cockpit:zerodha -- access-token');
 }
 
 async function rotateAccessToken() {
   const cur = readSecrets();
+  requireGate(cur);
   if (!cur.zerodha?.apiKey) {
     console.log('no Zerodha config — run:  npm run cockpit:zerodha');
     return;
@@ -88,10 +107,10 @@ async function rotateAccessToken() {
   });
 
   const next = { ...cur, zerodha: { ...cur.zerodha, accessToken } };
-  const finalState = await applyGate(next);
+  const finalState = await encryptWithGate(next);
   if (!finalState) return;
   writeSecrets(finalState);
-  console.log('✓ access token rotated.');
+  console.log('✓ access token rotated (encrypted at rest).');
 }
 
 async function show() {
@@ -101,7 +120,7 @@ async function show() {
     console.log('no Zerodha creds configured.');
     return;
   }
-  const tag = (v) => v ? (isEncrypted(v) ? '<encrypted at rest>' : `<${v.length}-char, hidden>`) : '(unset)';
+  const tag = (v) => v ? (isEncrypted(v) ? '<encrypted at rest>' : `<${v.length}-char, plain>`) : '(unset)';
   console.log('Zerodha creds:');
   console.log(`  apiKey:      ${z.apiKey || '(unset)'}`);
   console.log(`  apiSecret:   ${tag(z.apiSecret)}`);
@@ -125,9 +144,8 @@ async function clear() {
   console.log('✓ Zerodha creds cleared.');
 }
 
-async function applyGate(nextCfg) {
-  if (!nextCfg.gate?.salt) return nextCfg;
-  console.log('\ngate is set — apiSecret + accessToken will be encrypted at rest.');
+async function encryptWithGate(nextCfg) {
+  console.log('\nGate is set — apiSecret + accessToken will be encrypted at rest.');
   const passphrase = await askSecret('passphrase to unlock gate');
   if (!verifyPassphrase(nextCfg.gate, passphrase)) {
     console.log('✗ wrong passphrase — aborting.');
