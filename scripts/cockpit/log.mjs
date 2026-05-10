@@ -15,7 +15,7 @@ const TTY = process.stdout.isTTY && !process.env.NO_COLOR;
 
 // Tiny inline ANSI helpers — chalk/picocolors equivalent for the few codes
 // we use, with a global TTY check so logs are clean when piped to a file
-// or captured by launchd.
+// or run in a non-interactive shell.
 const ESC = '\x1b[';
 const reset = (s) => (TTY ? `${ESC}0m${s}${ESC}0m` : s);
 const wrap = (open, close) => (s) => (TTY ? `${ESC}${open}m${s}${ESC}${close}m` : s);

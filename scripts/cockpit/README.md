@@ -8,6 +8,6 @@ management CLI.
 Quick links:
 
 - First-run: `npm run cockpit:init`
-- Daemon: `npm run cockpit`
+- Daemon: `npm run cockpit:start`
 - Health check: `npm run cockpit:status`
 - Help: `npm run cockpit:help` (or `:help -- <command>` for any subcommand)

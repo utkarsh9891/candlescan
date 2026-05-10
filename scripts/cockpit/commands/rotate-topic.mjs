@@ -70,5 +70,5 @@ export async function run() {
   console.log('Next steps on your phone:');
   console.log(`  1. ntfy app → Subscribe to topic → ${newTopic}`);
   console.log('  2. Unsubscribe from the old topic.');
-  console.log('Then restart the daemon:  npm run cockpit');
+  console.log('Then restart the daemon:  npm run cockpit:start');
 }

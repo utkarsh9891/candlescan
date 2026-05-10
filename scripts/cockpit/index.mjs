@@ -24,7 +24,7 @@ import { dispatch as dispatchCli } from './cli.mjs';
 
 const DEFAULT_EXIT_INTERVAL_SEC = 30;
 
-// Subcommand passthrough: `npm run cockpit init` etc. forwards to the CLI.
+// Subcommand passthrough: `npm run cockpit:start init` etc. forwards to the CLI.
 // No subcommand → boot the daemon (existing behavior).
 const cliArgs = process.argv.slice(2);
 if (cliArgs.length > 0) {

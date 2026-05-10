@@ -63,8 +63,8 @@ export async function setupDataSource(cfg) {
     if (!process.stdin.isTTY) {
       throw new Error(
         'scan.dataSource is "dhan" but stdin is not a TTY — Dhan needs an interactive ' +
-          'TOTP prompt at every boot. Either run interactively (npm run cockpit) or ' +
-          'switch dataSource to yahoo / zerodha for launchd auto-start.',
+          'TOTP prompt at every boot. Either run interactively (npm run cockpit:start) or ' +
+          'switch dataSource to yahoo / zerodha or run interactively.',
       );
     }
     log.boot(`data source: dhan · clientId=${cfg.dhan.clientId} — TOTP required`);

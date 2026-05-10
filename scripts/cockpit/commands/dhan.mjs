@@ -79,7 +79,7 @@ async function setCreds() {
   if (!finalState) return; // wrong passphrase, abort
   writeSecrets(finalState);
   console.log('\n✓ Dhan creds saved.');
-  console.log('  TOTP is prompted at  npm run cockpit  launch (interactive only).');
+  console.log('  TOTP is prompted at  npm run cockpit:start  launch (interactive only).');
 }
 
 async function show() {

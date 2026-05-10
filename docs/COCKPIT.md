@@ -14,7 +14,7 @@ surface on the phone.
 - [Architecture](#architecture)
 - [First-run setup](#first-run-setup)
 - [CLI reference](#cli-reference)
-  - [`cockpit` (daemon)](#cockpit-daemon)
+  - [`cockpit:start` (daemon)](#cockpitstart-daemon)
   - [`cockpit:init`](#cockpitinit)
   - [`cockpit:status`](#cockpitstatus)
   - [`cockpit:config`](#cockpitconfig)
@@ -99,7 +99,7 @@ npm run cockpit:dhan
 npm run cockpit:zerodha
 
 # 5. Start the daemon. Run this each morning when you want scanning to begin.
-npm run cockpit
+npm run cockpit:start
 
 # 6. Stop it any time:
 npm run cockpit:stop
@@ -131,10 +131,10 @@ multiple users / devices can point at their own cockpits without colliding.
 Every command supports `--help` (or `-h`); the dispatcher also takes
 `npm run cockpit:help <command>` for the same.
 
-### `cockpit` (daemon)
+### `cockpit:start` (daemon)
 
 ```bash
-npm run cockpit
+npm run cockpit:start
 ```
 
 Starts the daemon. Boots all three loops (scan / exit-monitor / HTTP).
@@ -271,7 +271,7 @@ others, and a daemon that auto-launches at a fixed time you have to keep
 in sync becomes its own maintenance burden.
 
 ```bash
-npm run cockpit         # start (foreground)
+npm run cockpit:start         # start (foreground)
 npm run cockpit:stop    # SIGTERM, escalates to SIGKILL after 5s
 ```
 
@@ -281,7 +281,7 @@ graceful shutdown, then SIGKILLs if the process hasn't exited. Safe to run
 even when the cockpit isn't running — it just reports "not running".
 
 A double-launch is prevented: if the pidfile exists and that process is
-alive, `npm run cockpit` refuses to start with a clear error pointing you
+alive, `npm run cockpit:start` refuses to start with a clear error pointing you
 at `cockpit:stop`. Stale pidfiles (process crashed, file lingered) are
 auto-cleaned on the next boot.
 
@@ -311,7 +311,7 @@ refer to the same thing:
 | Term | What it actually is |
 |---|---|
 | **Cockpit** | The official name in this codebase. Refers to the whole local-Mac system: scan loop + exit monitor + HTTP server + web UI + management CLI. |
-| Cockpit daemon | The `npm run cockpit` process — the long-running scan + exit monitor + HTTP server. |
+| Cockpit daemon | The `npm run cockpit:start` process — the long-running scan + exit monitor + HTTP server. |
 | Cockpit UI | The dark-themed single-page web UI served at `cockpit.local:5174/`. |
 | Autopilot / terminal mode | Informal aliases. Same thing. |
 

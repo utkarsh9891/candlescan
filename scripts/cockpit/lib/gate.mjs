@@ -30,10 +30,10 @@
  * Encrypted field marker: any string of the form  "enc:v1:<iv>:<tag>:<ct>"
  * is treated as encrypted and round-tripped through decrypt() at boot.
  *
- * Limitation: launchd-started cockpits cannot prompt for a passphrase.
- * Pick one or the other — interactive launches with a gate, or launchd
- * auto-start without. The runtime errors out clearly if a gate is set
- * and stdin is not a TTY.
+ * Limitation: non-interactive launches (no TTY) can't prompt for the
+ * passphrase. The cockpit is started manually anyway, so this isn't a
+ * real constraint — but the runtime errors out clearly if a gate is set
+ * and stdin is not a TTY (e.g. `nohup ... &`).
  */
 
 import crypto from 'node:crypto';

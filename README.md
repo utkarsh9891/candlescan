@@ -40,7 +40,7 @@ Cockpit (Mac scan daemon, optional):
 
 ```bash
 npm run cockpit:init   # interactive first-run setup
-npm run cockpit        # start the daemon (manual; run when you want to)
+npm run cockpit:start        # start the daemon (manual; run when you want to)
 npm run cockpit:stop   # gracefully stop the daemon
 npm run cockpit:status # health check
 npm run cockpit:help   # full CLI help
@@ -65,7 +65,7 @@ Grouped by domain. All sub-commands follow `<domain>:<verb>`.
 | `npm start` (alias `dev`) | Vite dev server |
 | `npm run build` | production build → `dist/` |
 | `npm run preview` | preview built `dist/` |
-| `npm run pages` | manual deploy to GitHub Pages (CI runs this on merge) |
+| `npm run pages:deploy` | manual deploy to GitHub Pages (CI runs this on merge) |
 
 **Tests**
 
@@ -79,13 +79,13 @@ Grouped by domain. All sub-commands follow `<domain>:<verb>`.
 
 | Command | Purpose |
 |---|---|
-| `npm run simulate` | CLI bar-by-bar trading simulation |
+| `npm run simulate:run` | CLI bar-by-bar trading simulation |
 
 **Cockpit (Mac scan daemon)**
 
 | Command | Purpose |
 |---|---|
-| `npm run cockpit` | start the daemon |
+| `npm run cockpit:start` | start the daemon |
 | `npm run cockpit:stop` | stop the daemon (SIGTERM, escalates to SIGKILL) |
 | `npm run cockpit:status` | health summary (secrets / daemon / today's P&L) |
 | `npm run cockpit:init` | interactive first-run setup wizard |

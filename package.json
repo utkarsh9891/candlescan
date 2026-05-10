@@ -7,15 +7,15 @@
     "dev": "bash scripts/start.sh",
     "build": "vite build",
     "preview": "vite preview",
-    "pages": "bash scripts/deploy-to-pages.sh",
+    "pages:deploy": "bash scripts/deploy-to-pages.sh",
 
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
 
-    "simulate": "node scripts/simulate-day.mjs",
+    "simulate:run": "node scripts/simulate-day.mjs",
 
-    "cockpit": "node scripts/cockpit/index.mjs",
+    "cockpit:start": "node scripts/cockpit/index.mjs",
     "cockpit:stop": "node scripts/cockpit/cli.mjs stop",
     "cockpit:init": "node scripts/cockpit/cli.mjs init",
     "cockpit:status": "node scripts/cockpit/cli.mjs status",
