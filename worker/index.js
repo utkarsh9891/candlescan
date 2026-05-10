@@ -7,7 +7,7 @@
  *   - /gate/unlock endpoint to retrieve RSA public key
  *   - /zerodha/historical endpoint for proxied Kite API calls
  *   - KV-backed stale-on-upstream-fail caches for /market/vix, /market/fiidii,
- *     /news/moneycontrol, /news/google (see `worker/cache.js`)
+ *     /news/india, /news/google (see `worker/cache.js`)
  *
  * Deploy:
  *   cd worker && npx wrangler deploy
@@ -30,15 +30,12 @@ import {
   fiidiiKey,
   FIIDII_TTL_MS,
   FIIDII_STALE_MAX_MS,
-  moneycontrolKey,
-  moneycontrolTtlMs,
-  MONEYCONTROL_STALE_MAX_MS,
+  indiaNewsKey,
+  indiaNewsTtlMs,
+  INDIA_NEWS_STALE_MAX_MS,
   googleNewsKey,
   GOOGLE_NEWS_TTL_MS,
   GOOGLE_NEWS_STALE_MAX_MS,
-  yahooNewsKey,
-  YAHOO_NEWS_TTL_MS,
-  YAHOO_NEWS_STALE_MAX_MS,
 } from './cache.js';
 
 const ALLOWED_ORIGINS = [
@@ -543,27 +540,42 @@ async function handleDhanInstruments(request, env, origin) {
 }
 
 /**
- * Fetch + parse all Moneycontrol RSS feeds. Throws if every feed
- * fetch fails (so `kvCacheFlow` can route to the stale fallback).
+ * Broad Indian news RSS map — Moneycontrol + LiveMint + Economic Times +
+ * Business Standard merged into a single payload. Each item carries the
+ * publisher tag so the client can attribute headlines in the UI.
+ *
+ * Throws if every feed fetch fails (so `kvCacheFlow` can route to the
+ * stale fallback). Per-feed failure is non-fatal — we still return what
+ * the surviving feeds produced.
+ *
  * Returns `{ items, count, fetchedAt }` on success.
  */
-async function fetchMoneycontrolUpstream() {
-  const feeds = [
-    'https://www.moneycontrol.com/rss/buzzingstocks.xml',
-    'https://www.moneycontrol.com/rss/MCtopnews.xml',
-    'https://www.moneycontrol.com/rss/marketreports.xml',
-    'https://www.moneycontrol.com/rss/business.xml',
-  ];
+const INDIA_NEWS_FEEDS = [
+  // Moneycontrol — daily-discussed buzz + macro/markets context
+  { url: 'https://www.moneycontrol.com/rss/buzzingstocks.xml', publisher: 'Moneycontrol' },
+  { url: 'https://www.moneycontrol.com/rss/MCtopnews.xml', publisher: 'Moneycontrol' },
+  { url: 'https://www.moneycontrol.com/rss/marketreports.xml', publisher: 'Moneycontrol' },
+  { url: 'https://www.moneycontrol.com/rss/business.xml', publisher: 'Moneycontrol' },
+  // LiveMint — markets section
+  { url: 'https://www.livemint.com/rss/markets', publisher: 'LiveMint' },
+  // Economic Times — stocks-in-news + broader markets
+  { url: 'https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms', publisher: 'Economic Times' },
+  { url: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms', publisher: 'Economic Times' },
+  // Business Standard — markets/stocks
+  { url: 'https://www.business-standard.com/rss/markets-stocks-10612.rss', publisher: 'Business Standard' },
+];
+
+async function fetchIndiaNewsUpstream() {
   const items = [];
   let anySuccess = false;
   let lastErr = null;
-  for (const url of feeds) {
+  for (const { url, publisher } of INDIA_NEWS_FEEDS) {
     try {
       const resp = await fetch(url, {
         headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
       });
       if (!resp.ok) {
-        lastErr = new Error(`Moneycontrol ${url} HTTP ${resp.status}`);
+        lastErr = new Error(`${publisher} ${url} HTTP ${resp.status}`);
         continue;
       }
       anySuccess = true;
@@ -580,39 +592,39 @@ async function fetchMoneycontrolUpstream() {
         let link = '';
         const lk = raw.match(/<link>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/link>/i);
         if (lk) link = (lk[1] || lk[2] || '').trim();
-        if (title) items.push({ title, description, link });
+        if (title) items.push({ title, description, link, publisher });
       }
     } catch (err) {
       lastErr = err;
     }
   }
-  if (!anySuccess) throw lastErr || new Error('All Moneycontrol feeds failed');
+  if (!anySuccess) throw lastErr || new Error('All India news feeds failed');
   return { items, count: items.length, fetchedAt: new Date().toISOString() };
 }
 
 /**
- * Handle /news/moneycontrol — proxy the Moneycontrol RSS feeds.
- * Browser can't hit moneycontrol.com directly (CORS blocked). We
- * merge all 4 feeds into a single JSON array of items so the browser
- * only makes one request. Client-side scoring via newsSentiment.js.
+ * Handle /news/india — proxy the broad Indian news RSS feeds. Browser
+ * can't hit these origins directly (CORS blocked). We merge all feeds
+ * into a single JSON array of items so the browser only makes one
+ * request. Client-side scoring via newsSentiment.js.
  *
  * Cache tiering:
  *   - Market hours: 10 min KV
  *   - Off-hours: 60 min KV
  *   - Upstream 502/timeout: stale up to 4h returned with X-Cache=STALE.
  */
-async function handleMoneycontrolNews(request, env, origin) {
+async function handleIndiaNews(request, env, origin) {
   const nowMs = Date.now();
-  const key = moneycontrolKey(nowMs);
-  const ttlMs = moneycontrolTtlMs(nowMs);
+  const key = indiaNewsKey(nowMs);
+  const ttlMs = indiaNewsTtlMs(nowMs);
 
   try {
     const result = await kvCacheFlow({
       kv: env.CANDLESCAN_KV,
       key,
       ttlMs,
-      staleMaxMs: MONEYCONTROL_STALE_MAX_MS,
-      fetchFresh: fetchMoneycontrolUpstream,
+      staleMaxMs: INDIA_NEWS_STALE_MAX_MS,
+      fetchFresh: fetchIndiaNewsUpstream,
       unavailablePayload: () => ({ items: [], count: 0, fetchedAt: new Date().toISOString(), source: 'unavailable' }),
     });
     if (result.warnMessage) console.warn(result.warnMessage);
@@ -626,7 +638,7 @@ async function handleMoneycontrolNews(request, env, origin) {
       },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: `Moneycontrol fetch failed: ${err?.message || err}` }), {
+    return new Response(JSON.stringify({ error: `India news fetch failed: ${err?.message || err}` }), {
       status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
     });
   }
@@ -733,118 +745,6 @@ async function handleGoogleNewsForSymbol(request, env, origin) {
     });
   } catch (err) {
     return new Response(JSON.stringify({ error: `Google News fetch failed: ${err?.message || err}` }), {
-      status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
-    });
-  }
-}
-
-/**
- * Fetch + parse Yahoo Finance news for a given NSE symbol via the
- * search endpoint. Yahoo returns structured JSON (not RSS) with
- * provider-published timestamps and direct article URLs — much cleaner
- * than the Google News RSS path. Throws on upstream 5xx/429/network so
- * `kvCacheFlow` can route to stale or the unavailable sentinel.
- */
-async function fetchYahooNewsUpstream(symbol) {
-  const q = encodeURIComponent(`${symbol}.NS`);
-  const apiUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${q}&newsCount=10&quotesCount=0&enableEnhancedTrivialQuery=true`;
-  const resp = await fetch(apiUrl, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (candlescan-proxy)',
-      Accept: 'application/json',
-    },
-  });
-  if (!resp.ok) {
-    const err = new Error(`Yahoo Search HTTP ${resp.status}`);
-    err.upstreamStatus = resp.status;
-    throw err;
-  }
-  const data = await resp.json().catch(() => ({}));
-  const rawNews = Array.isArray(data?.news) ? data.news : [];
-  // Drop items whose `relatedTickers` doesn't include the queried Indian
-  // symbol. When Yahoo has no targeted news for an NSE symbol the search
-  // endpoint falls back to generic global feed (Southern Copper / Dutch
-  // Bros / 401k articles) — those carry US tickers in relatedTickers and
-  // are useless for an Indian midcap scan, but their bullish keyword hits
-  // were polluting the news-sentiment layer (the only layer with positive
-  // rank bonuses per CLAUDE.md rule #4).
-  const sym = String(symbol).toUpperCase();
-  const allowedTickers = new Set([sym, `${sym}.NS`, `${sym}.BO`]);
-  const items = rawNews
-    .filter((n) => n && (n.title || n.headline))
-    .filter((n) => {
-      const tickers = Array.isArray(n.relatedTickers) ? n.relatedTickers : [];
-      return tickers.some((t) => allowedTickers.has(String(t).toUpperCase()));
-    })
-    .map((n) => ({
-      title: String(n.title || n.headline || '').trim(),
-      description: '', // Yahoo's search response carries no summary; clients tolerate empty
-      pubDate: n.providerPublishTime
-        ? new Date(n.providerPublishTime * 1000).toISOString()
-        : '',
-      link: String(n.link || n.url || '').trim(),
-      publisher: String(n.publisher || '').trim(),
-    }))
-    .filter((it) => it.title);
-  return { symbol, items, count: items.length, fetchedAt: new Date().toISOString() };
-}
-
-/**
- * Handle /news/yahoo — per-symbol Yahoo Finance News proxy.
- * Mirrors the /news/google contract (same response shape, same
- * X-Cache headers, same kvCacheFlow + unavailable sentinel) so the
- * client tier chain treats them interchangeably. Yahoo gives us
- * native article URLs and publisher names — Google RSS does not —
- * so this is the preferred per-symbol tier when both succeed.
- *
- * Cache: `yahoo_news:${symbol}:${YYYY-MM-DD}`, 4h fresh / 24h stale.
- */
-async function handleYahooNewsForSymbol(request, env, origin) {
-  const url = new URL(request.url);
-  const rawSym = url.searchParams.get('symbol') || '';
-  const symbol = rawSym.replace(/[^A-Za-z0-9&-]/g, '').slice(0, 24);
-  if (!symbol) {
-    return new Response(JSON.stringify({ error: 'Missing or invalid symbol parameter' }), {
-      status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
-    });
-  }
-
-  const nowMs = Date.now();
-  const key = yahooNewsKey(symbol, nowMs);
-
-  try {
-    const result = await kvCacheFlow({
-      kv: env.CANDLESCAN_KV,
-      key,
-      ttlMs: YAHOO_NEWS_TTL_MS,
-      staleMaxMs: YAHOO_NEWS_STALE_MAX_MS,
-      fetchFresh: () => fetchYahooNewsUpstream(symbol),
-      unavailablePayload: () => ({
-        symbol,
-        items: [],
-        headlines: [],
-        score: null,
-        count: 0,
-        fetchedAt: new Date().toISOString(),
-        source: 'unavailable',
-      }),
-    });
-    if (result.warnMessage) console.warn(result.warnMessage);
-    const sourceTag = result.status === 'HIT' ? 'fresh'
-      : result.status === 'MISS' ? 'miss'
-      : result.status === 'STALE' ? 'stale'
-      : 'unavailable';
-    return new Response(JSON.stringify(result.payload), {
-      status: 200,
-      headers: {
-        ...corsHeaders(origin),
-        ...cacheHeaders({ status: result.status, key: result.key, ageMs: result.ageMs ?? 0, cacheSource: sourceTag }),
-        'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=600',
-      },
-    });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: `Yahoo News fetch failed: ${err?.message || err}` }), {
       status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
     });
   }
@@ -1307,27 +1207,21 @@ export default {
       return handleDhanInstruments(request, env, origin);
     }
 
-    // Moneycontrol news RSS proxy — browser calls this during live scan
-    // to build a symbol-sentiment map. We proxy RSS feeds and return the
-    // raw XML; the browser parses and scores via newsSentiment.js.
-    if (path === '/news/moneycontrol') {
-      return handleMoneycontrolNews(request, env, origin);
+    // Broad Indian news RSS proxy — browser calls this during live scan
+    // to build a symbol-sentiment map. We merge multiple Indian publisher
+    // feeds (Moneycontrol, LiveMint, Economic Times, Business Standard)
+    // into a single payload; the browser parses and scores via
+    // newsSentiment.js.
+    if (path === '/news/india') {
+      return handleIndiaNews(request, env, origin);
     }
 
     // Google News per-symbol proxy — called for deep lookup on the top
     // ranked candidates after phase 3 so the news layer gets per-stock
-    // depth beyond what Moneycontrol's market-wide feeds provide.
+    // depth beyond what the broad-feed map provides.
     // Takes ?symbol=RELIANCE (sanitized to alphanumeric + -).
     if (path === '/news/google') {
       return handleGoogleNewsForSymbol(request, env, origin);
-    }
-
-    // Yahoo Finance News per-symbol proxy — preferred per-symbol tier
-    // because the response carries native article URLs and publisher
-    // names (Google RSS strips both). Same contract as /news/google so
-    // the client tier chain treats them interchangeably.
-    if (path === '/news/yahoo') {
-      return handleYahooNewsForSymbol(request, env, origin);
     }
 
     // India VIX live fetch — browser calls this at scan start to get

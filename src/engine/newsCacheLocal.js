@@ -11,20 +11,22 @@
  *              → Moneycontrol index map fallback
  *
  * Key shape:
- *   candlescan_news_v2:{SYMBOL}:{YYYY-MM-DD}
- *   candlescan_news_v2:{SYMBOL}:{YYYY-MM-DD}:meta
+ *   candlescan_news_v3:{SYMBOL}:{YYYY-MM-DD}
+ *   candlescan_news_v3:{SYMBOL}:{YYYY-MM-DD}:meta
  *
  *   SYMBOL = uppercase NSE symbol (no .NS)
  *   date   = IST calendar day when the fetch was stored; news *does*
  *            change intraday, so the date key only namespaces entries —
  *            freshness is enforced by `expiresAt`, not by the key.
  *
- * The `_v2` prefix exists to invalidate every device's cache after the
- * Worker started filtering Yahoo's generic-feed garbage by relatedTickers.
- * Pre-v2 entries persisted Yahoo's irrelevant US headlines (Southern
- * Copper, Dutch Bros, etc.) under Indian-stock keys; bumping the prefix
- * is the cheapest way to force a clean refetch on every device. Old
- * `candlescan_news:` entries are swept on module load below.
+ * The `_v3` prefix exists to invalidate every device's cache after the
+ * Yahoo per-symbol news tier was dropped and the broad-feed map was
+ * widened to LiveMint + ET + Business Standard. Pre-v3 entries may
+ * carry `source: 'yahoo'` or `source: 'moneycontrol'` headlines whose
+ * publisher attribution no longer matches what the Worker emits;
+ * bumping the prefix is the cheapest way to force a clean refetch on
+ * every device. Pre-v2 (`candlescan_news:`) and v2 (`candlescan_news_v2:`)
+ * entries are both swept on module load below.
  *
  * TTL: 4h during market hours, 12h off-hours. Rationale:
  *   - During market hours news sentiment can flip a position mid-session
@@ -43,17 +45,21 @@
  * null (get); never throws.
  */
 
-const PREFIX = 'candlescan_news_v2:';
-const LEGACY_PREFIX = 'candlescan_news:'; // pre-v2 — swept on module load
+const PREFIX = 'candlescan_news_v3:';
+// pre-v3 prefixes — both swept on module load
+const LEGACY_PREFIXES = [
+  'candlescan_news_v2:', // v2 (Yahoo-tagged headlines pre-PR drop)
+  'candlescan_news:',    // pre-v2 (Yahoo generic-feed garbage era)
+];
 const META_SUFFIX = ':meta';
 
 /**
- * One-shot cleanup of legacy (pre-v2) cache entries. Runs at module
- * load time; cheap on devices that never had the legacy prefix because
- * the loop short-circuits when no key matches. v2 keys (which start
- * with `candlescan_news_v2:`) don't collide with the legacy prefix
- * (`candlescan_news:`) because position 15 differs ('_' vs ':'), so
- * the simple startsWith check is safe.
+ * One-shot cleanup of pre-v3 cache entries. Runs at module load time;
+ * cheap on devices that never had any legacy prefix because the loop
+ * short-circuits when no key matches. v3 keys (`candlescan_news_v3:`)
+ * don't collide with the v2/v1 prefixes (`candlescan_news_v2:` and
+ * `candlescan_news:`) because the version segment differs, so the
+ * simple startsWith check is safe.
  */
 function purgeLegacyEntries() {
   if (!hasStorage()) return;
@@ -63,7 +69,8 @@ function purgeLegacyEntries() {
   for (let i = 0; i < n; i++) {
     let k;
     try { k = localStorage.key(i); } catch { continue; }
-    if (k && k.startsWith(LEGACY_PREFIX) && !k.startsWith(PREFIX)) {
+    if (!k || k.startsWith(PREFIX)) continue;
+    if (LEGACY_PREFIXES.some((p) => k.startsWith(p))) {
       stale.push(k);
     }
   }
@@ -174,7 +181,7 @@ export function getCachedNews(symbol, date) {
  * @param {Object} value
  * @param {number|null} value.score        sentiment in [-1, +1] or null
  * @param {Array}       [value.headlines]  list of headline objects
- * @param {string}      [value.source]     'google' | 'stale' | 'moneycontrol' | 'none'
+ * @param {string}      [value.source]     'google' | 'stale' | 'india' | 'none'
  * @param {Object}      [opts]
  * @param {number}      [opts.ttlMs]       override TTL (tests)
  * @param {string}      [opts.date]        override date (tests)
@@ -312,7 +319,7 @@ export function clearNewsCache(symbol) {
 /** Exported for tests. */
 export const _internals = {
   PREFIX,
-  LEGACY_PREFIX,
+  LEGACY_PREFIXES,
   META_SUFFIX,
   TTL_MARKET_MS,
   TTL_OFFHOURS_MS,
@@ -325,6 +332,6 @@ export const _internals = {
   purgeLegacyEntries,
 };
 
-// One-shot at module load — wipe pre-v2 entries left over from before
-// the Worker-side relatedTickers filter shipped.
+// One-shot at module load — wipe pre-v3 entries (v2 = Yahoo-tagged
+// headlines; v1 = Yahoo generic-feed garbage era).
 purgeLegacyEntries();

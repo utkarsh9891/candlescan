@@ -2,7 +2,7 @@
  * Integration tests for the four KV-cached Worker handlers:
  *   - /market/vix         → handleVixFetch
  *   - /market/fiidii      → handleFiiDiiFetch
- *   - /news/moneycontrol  → handleMoneycontrolNews
+ *   - /news/india         → handleIndiaNews
  *   - /news/google        → handleGoogleNewsForSymbol
  *
  * Rather than stand up a real Cloudflare Worker, we import the
@@ -203,26 +203,51 @@ describe('handleFiiDiiFetch', () => {
 });
 
 // ───────────────────────────────────────────────────────────
-// /news/moneycontrol
+// /news/india  (Moneycontrol + LiveMint + ET + Business Standard)
 // ───────────────────────────────────────────────────────────
-describe('handleMoneycontrolNews', () => {
-  it('MISS → fetches all 4 feeds → returns items', async () => {
+describe('handleIndiaNews', () => {
+  it('MISS → fetches all configured feeds → returns merged items', async () => {
     globalThis.fetch = vi.fn(async () => new Response(
       '<rss><channel><item><title>Reliance Q4 result beats</title><description>Strong earnings</description></item></channel></rss>',
       { status: 200, headers: { 'Content-Type': 'application/xml' } },
     ));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/moneycontrol'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('MISS');
     const body = await resp.json();
     expect(body.count).toBeGreaterThan(0);
   });
 
+  it('tags each item with the publisher of the originating feed', async () => {
+    // Map each upstream feed to a publisher-specific headline so we
+    // can assert the publisher field is populated end-to-end.
+    globalThis.fetch = vi.fn(async (url) => {
+      const u = String(url);
+      let title = 'Generic';
+      if (u.includes('moneycontrol.com')) title = 'MC: Reliance up';
+      else if (u.includes('livemint.com')) title = 'Mint: TCS in focus';
+      else if (u.includes('economictimes.indiatimes.com')) title = 'ET: HDFC rallies';
+      else if (u.includes('business-standard.com')) title = 'BS: INFY hits high';
+      return new Response(
+        `<rss><channel><item><title>${title}</title></item></channel></rss>`,
+        { status: 200 },
+      );
+    });
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    const publishers = new Set(body.items.map((it) => it.publisher));
+    expect(publishers.has('Moneycontrol')).toBe(true);
+    expect(publishers.has('LiveMint')).toBe(true);
+    expect(publishers.has('Economic Times')).toBe(true);
+    expect(publishers.has('Business Standard')).toBe(true);
+  });
+
   it('UNAVAILABLE sentinel when all feeds 502 + no cache', async () => {
     globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/moneycontrol'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
     expect(resp.status).toBe(200); // UNAVAILABLE returns 200 so callers don't retry
     expect(resp.headers.get('X-Cache')).toBe('UNAVAILABLE');
     const body = await resp.json();
@@ -324,139 +349,16 @@ describe('handleGoogleNewsForSymbol', () => {
   });
 });
 
-describe('handleMoneycontrolNews — link extraction', () => {
-  it('extracts <link> from Moneycontrol RSS items', async () => {
+describe('handleIndiaNews — link extraction', () => {
+  it('extracts <link> from broad-feed RSS items', async () => {
     globalThis.fetch = vi.fn(async () => new Response(
       '<rss><channel><item><title>RELIANCE up</title><description>Q4 strong</description><link>https://www.moneycontrol.com/news/business/reliance-q4-12345.html</link></item></channel></rss>',
       { status: 200 },
     ));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/moneycontrol'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
     const body = await resp.json();
     expect(body.items[0].link).toBe('https://www.moneycontrol.com/news/business/reliance-q4-12345.html');
-  });
-});
-
-describe('handleYahooNewsForSymbol', () => {
-  it('400 on missing symbol', async () => {
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/yahoo'), { CANDLESCAN_KV: kv });
-    expect(resp.status).toBe(400);
-  });
-
-  it('MISS → upstream fetch → normalized items with link + publisher', async () => {
-    globalThis.fetch = vi.fn(async () => jsonResp({
-      news: [
-        {
-          title: 'RELIANCE Q4 beats',
-          publisher: 'Reuters',
-          link: 'https://finance.yahoo.com/news/reliance-q4-beats-123.html',
-          providerPublishTime: 1714123456,
-          relatedTickers: ['RELIANCE.NS'],
-        },
-      ],
-    }));
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=RELIANCE'), { CANDLESCAN_KV: kv });
-    expect(resp.status).toBe(200);
-    expect(resp.headers.get('X-Cache')).toBe('MISS');
-    const body = await resp.json();
-    expect(body.count).toBe(1);
-    expect(body.items[0].title).toBe('RELIANCE Q4 beats');
-    expect(body.items[0].link).toContain('finance.yahoo.com');
-    expect(body.items[0].publisher).toBe('Reuters');
-    expect(body.items[0].pubDate).toMatch(/^\d{4}-\d{2}-\d{2}T/); // ISO from epoch
-  });
-
-  it('HIT on second call uses cache', async () => {
-    const fetchMock = vi.fn(async () => jsonResp({
-      news: [{ title: 'TCS up', relatedTickers: ['TCS.NS'] }],
-    }));
-    globalThis.fetch = fetchMock;
-    const kv = makeKvStub();
-    await worker.fetch(makeRequest('/news/yahoo?symbol=TCS'), { CANDLESCAN_KV: kv });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const resp2 = await worker.fetch(makeRequest('/news/yahoo?symbol=TCS'), { CANDLESCAN_KV: kv });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(resp2.headers.get('X-Cache')).toBe('HIT');
-  });
-
-  it('UNAVAILABLE sentinel when upstream 502s + no cache', async () => {
-    globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=NONEXIST'), { CANDLESCAN_KV: kv });
-    expect(resp.status).toBe(200);
-    expect(resp.headers.get('X-Cache')).toBe('UNAVAILABLE');
-    const body = await resp.json();
-    expect(body.source).toBe('unavailable');
-    expect(body.items).toEqual([]);
-  });
-
-  it('drops items without a title', async () => {
-    globalThis.fetch = vi.fn(async () => jsonResp({
-      news: [
-        { title: '', link: 'x', relatedTickers: ['INFY.NS'] },
-        { title: 'Real headline', link: 'https://y.com/a', relatedTickers: ['INFY.NS'] },
-      ],
-    }));
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=INFY'), { CANDLESCAN_KV: kv });
-    const body = await resp.json();
-    expect(body.count).toBe(1);
-    expect(body.items[0].title).toBe('Real headline');
-  });
-
-  it('drops items whose relatedTickers do not include the queried symbol', async () => {
-    // Reproduces the "Southern Copper appears under every NIFTY MIDCAP 150
-    // stock" bug: Yahoo's search endpoint returns generic feed when there's
-    // no targeted news for an Indian symbol — we keep ONLY items that
-    // carry the symbol in `relatedTickers`.
-    globalThis.fetch = vi.fn(async () => jsonResp({
-      news: [
-        { title: 'BAJAJHLDNG dividend announced', relatedTickers: ['BAJAJHLDNG.NS'] },
-        { title: 'Southern Copper Earnings Beat', relatedTickers: ['SCCO'] },
-        { title: 'Dutch Bros Lifts 2026 Outlook', relatedTickers: ['BROS'] },
-        { title: 'Generic 401k story with no tickers' }, // no relatedTickers field
-      ],
-    }));
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=BAJAJHLDNG'), { CANDLESCAN_KV: kv });
-    const body = await resp.json();
-    expect(body.count).toBe(1);
-    expect(body.items[0].title).toBe('BAJAJHLDNG dividend announced');
-  });
-
-  it('accepts bare symbol or .BO ticker in relatedTickers', async () => {
-    globalThis.fetch = vi.fn(async () => jsonResp({
-      news: [
-        { title: 'TCS bare match', relatedTickers: ['TCS'] },
-        { title: 'TCS BSE listing news', relatedTickers: ['TCS.BO'] },
-      ],
-    }));
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=TCS'), { CANDLESCAN_KV: kv });
-    const body = await resp.json();
-    expect(body.count).toBe(2);
-  });
-
-  it('returns empty items (cached fresh) when every item is filtered out', async () => {
-    // When Yahoo returns ONLY irrelevant generic feed for an Indian
-    // symbol, we want a fresh-empty result — not a stale/unavailable
-    // sentinel — so the client treats it as "no news today" and the
-    // tier chain falls through to Moneycontrol.
-    globalThis.fetch = vi.fn(async () => jsonResp({
-      news: [
-        { title: 'Generic US story', relatedTickers: ['SCCO'] },
-        { title: 'Another US story', relatedTickers: ['BROS'] },
-      ],
-    }));
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/yahoo?symbol=BAJAJHLDNG'), { CANDLESCAN_KV: kv });
-    expect(resp.status).toBe(200);
-    expect(resp.headers.get('X-Cache')).toBe('MISS'); // freshly stored, not unavailable
-    const body = await resp.json();
-    expect(body.count).toBe(0);
-    expect(body.items).toEqual([]);
   });
 });
 

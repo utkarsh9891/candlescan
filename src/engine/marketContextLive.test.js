@@ -166,7 +166,7 @@ describe('fetchLiveMarketContext', () => {
       const u = String(url);
       if (u.endsWith('/market/vix')) return { ok: true, status: 200, json: async () => ({ vix: 20 }) };
       if (u.endsWith('/market/fiidii')) return { ok: true, status: 200, json: async () => ({ fii: 1, dii: 2 }) };
-      if (u.endsWith('/news/moneycontrol')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      if (u.endsWith('/news/india')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
       return { ok: false, status: 404, json: async () => ({}) };
     });
 
@@ -182,7 +182,7 @@ describe('fetchLiveMarketContext', () => {
       const u = String(url);
       if (u.endsWith('/market/vix')) return { ok: true, status: 200, json: async () => ({ vix: 30 }) };
       if (u.endsWith('/market/fiidii')) return { ok: true, status: 200, json: async () => ({ fii: 1, dii: 2 }) };
-      if (u.endsWith('/news/moneycontrol')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      if (u.endsWith('/news/india')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
       return { ok: false, status: 404, json: async () => ({}) };
     });
     vi.setSystemTime(new Date(Date.now() + TEN_MIN + 1));
@@ -197,7 +197,7 @@ describe('clearMarketContextCache', () => {
       const u = String(url);
       if (u.endsWith('/market/vix')) return { ok: true, status: 200, json: async () => ({ vix: 20 }) };
       if (u.endsWith('/market/fiidii')) return { ok: true, status: 200, json: async () => ({ fii: 1, dii: 2 }) };
-      if (u.endsWith('/news/moneycontrol')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      if (u.endsWith('/news/india')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
       return { ok: false, status: 404, json: async () => ({}) };
     });
 

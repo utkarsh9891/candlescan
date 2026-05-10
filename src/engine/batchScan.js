@@ -14,7 +14,7 @@ import { computeRiskScore as computeRiskScoreDefault } from './risk.js';
 import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
 import { classifyNewsSentiment, classifyInstitutionalFlow, liquidityTier } from './marketContext.js';
 import { getSector } from './sectorMap.js';
-import { fetchLiveGoogleNewsDetailForSymbol, fetchLiveYahooNewsForSymbol } from './marketContextLive.js';
+import { fetchLiveGoogleNewsDetailForSymbol } from './marketContextLive.js';
 import { getCachedNews, setCachedNews } from './newsCacheLocal.js';
 import { isTokenExpiredError } from './brokerErrors.js';
 
@@ -66,42 +66,40 @@ function createSemaphore(max) {
 }
 
 /**
- * Four-tier news fallback chain (Wave 1.5d). Never throws — on any
- * failure it returns a sentinel so the caller can fall back to the
- * index-wide Moneycontrol map. Telemetry counters are updated in place.
+ * Four-tier news fallback chain. Never throws — on any failure it
+ * returns a sentinel so the caller can fall back to the index-wide
+ * broad-feed map. Telemetry counters are updated in place.
  *
  * Tiers, in order:
  *   1. In-memory hour cache   — fastest, scoped to this JS context.
  *   2. localStorage cache     — survives page reload; TTL 4h market / 12h off.
- *   3. Worker fetch           — reads `X-Cache` header:
+ *   3. Worker fetch (Google)  — reads `X-Cache` header:
  *        HIT | MISS            → fresh Google News, store in both caches.
  *        STALE                 → KV-served stale; store, mark `source: 'stale'`.
  *        UNAVAILABLE           → Worker has nothing; fall to tier 4.
- *   4. Moneycontrol fallback  — supplied by caller as `moneycontrolFn(symbol)`
+ *   4. Broad-feed fallback    — supplied by caller as `broadNewsFn(symbol)`
  *                               or derived from the index-wide newsMap. When
- *                               present, returns `{score, source: 'moneycontrol'}`.
+ *                               present, returns `{score, source: 'india'}`.
  *                               When missing, returns `{score: null, source: 'none'}`
  *                               so the scan continues without a news veto.
  *
  * @param {string} symbol  uppercase NSE symbol (no .NS)
  * @param {Object} opts
- * @param {Function} [opts.newsFetchFn]      override Google fetcher (tests)
- * @param {Function} [opts.yahooNewsFetchFn] override Yahoo fetcher (tests)
- * @param {Function} [opts.moneycontrolFn]   override Moneycontrol fallback (tests)
- * @param {Object} opts.telemetry            batchScan telemetry object
- * @param {Object} [opts.newsSem]            semaphore for concurrency cap
+ * @param {Function} [opts.newsFetchFn]   override Google fetcher (tests)
+ * @param {Function} [opts.broadNewsFn]   override broad-feed fallback (tests)
+ * @param {Object} opts.telemetry         batchScan telemetry object
+ * @param {Object} [opts.newsSem]         semaphore for concurrency cap
  * @param {AbortSignal} [opts.signal]
  * @param {boolean} [opts.newsEnrichEnabled=true] when false, skip the per-symbol
- *   Worker tiers (Google + Yahoo) and rely solely on the index-wide
- *   Moneycontrol fallback. This is the below-premium path: still gets
- *   a sentiment signal for stocks the daily MC sweep happened to mention,
- *   but no per-symbol Worker calls are issued.
+ *   Worker tier (Google) and rely solely on the index-wide broad-feed
+ *   fallback. This is the below-premium path: still gets a sentiment
+ *   signal for stocks the daily sweep happened to mention, but no
+ *   per-symbol Worker calls are issued.
  * @returns {Promise<{score: number|null, headlines: Array, source: string}>}
  */
 async function fetchPerSymbolNews(symbol, {
   newsFetchFn,
-  yahooNewsFetchFn,
-  moneycontrolFn,
+  broadNewsFn,
   telemetry,
   newsSem,
   signal,
@@ -136,11 +134,11 @@ async function fetchPerSymbolNews(symbol, {
     return value;
   }
 
-  // ── Tier 3 + 3.5: Worker fetches (Google → Yahoo) ────────────────
+  // ── Tier 3: Worker fetch (Google) ────────────────────────────────
   // Premium-gated: when news enrichment is disabled (gate locked or user-
-  // turned-off in Settings), skip the Worker calls entirely and fall
-  // straight to the index-wide Moneycontrol baseline. The MC map is
-  // built once at scan start and is free, so non-premium users still
+  // turned-off in Settings), skip the Worker call entirely and fall
+  // straight to the index-wide broad-feed baseline. The broad-feed map
+  // is built once at scan start and is free, so non-premium users still
   // get sentiment for stocks the daily sweep happened to mention.
   if (newsEnrichEnabled) {
     if (newsSem) await newsSem.acquire();
@@ -155,17 +153,10 @@ async function fetchPerSymbolNews(symbol, {
       }
 
       const googleFetcher = newsFetchFn || fetchLiveGoogleNewsDetailForSymbol;
-      const yahooFetcher = yahooNewsFetchFn || fetchLiveYahooNewsForSymbol;
 
-      // Try Google first (tier 3). On UNAVAILABLE / empty / throw, try
-      // Yahoo (tier 3.5) before falling through to MC. Yahoo recovers
-      // independently when Google's RSS endpoint is throttled, and its
-      // response carries native URLs + publishers — strictly better
-      // headline metadata than Google when both succeed.
       let resolved = null;
       let resolvedSource = null;
 
-      // Tier 3 — Google
       telemetry.newsFetched++;
       let gres = null;
       try {
@@ -177,22 +168,6 @@ async function fetchPerSymbolNews(symbol, {
       if (gres && gres.score != null && gStatus !== 'UNAVAILABLE') {
         resolved = gres;
         resolvedSource = gStatus === 'STALE' ? 'stale' : 'google';
-      }
-
-      // Tier 3.5 — Yahoo (only if Google didn't resolve)
-      if (!resolved) {
-        telemetry.newsFetched++;
-        let yres = null;
-        try {
-          yres = await yahooFetcher(symbol);
-        } catch {
-          telemetry.newsFetchErrors++;
-        }
-        const yStatus = String(yres?.cacheStatus || '').toUpperCase();
-        if (yres && yres.score != null && yStatus !== 'UNAVAILABLE') {
-          resolved = yres;
-          resolvedSource = yStatus === 'STALE' ? 'stale-yahoo' : 'yahoo';
-        }
       }
 
       if (resolved) {
@@ -209,36 +184,37 @@ async function fetchPerSymbolNews(symbol, {
         // Persist only fresh results — STALE entries get served to the
         // current scan but not re-cached, so the next scan refetches
         // once upstream recovers.
-        if (resolvedSource === 'google' || resolvedSource === 'yahoo') {
+        if (resolvedSource === 'google') {
           setCachedNews(symbol, { ...value });
         }
         return value;
       }
-      // Both tiers UNAVAILABLE / empty — fall through to tier 4 below.
+      // Worker UNAVAILABLE / empty — fall through to tier 4 below.
     } finally {
       if (newsSem) newsSem.release();
     }
   }
 
-  // ── Tier 4: Moneycontrol baseline ─────────────────────────────────
+  // ── Tier 4: broad-feed baseline ───────────────────────────────────
   // Always available, no auth required. The cheap free path — index-wide
-  // RSS map, string-matched to the symbol. Imperfect (matches by company
-  // name / symbol literal in the headline) but free, and the only
-  // sentiment source available below the premium gate.
+  // RSS map (Moneycontrol + LiveMint + ET + Business Standard merged at
+  // the Worker), string-matched to the symbol. Imperfect (matches by
+  // company name / symbol literal in the headline) but free, and the
+  // only sentiment source available below the premium gate.
   try {
-    if (moneycontrolFn) {
-      const mc = await moneycontrolFn(symbol);
+    if (broadNewsFn) {
+      const mc = await broadNewsFn(symbol);
       if (mc && mc.score != null) {
         telemetry.newsFromFallback++;
         return {
           score: mc.score,
           headlines: mc.headlines || [],
-          source: 'moneycontrol',
+          source: 'india',
         };
       }
     }
   } catch {
-    // Moneycontrol fallback never throws into the scan — silently
+    // Broad-feed fallback never throws into the scan — silently
     // coalesce into the "unavailable" branch below.
   }
 
@@ -394,9 +370,8 @@ export async function batchScan({
   signal,
   fetchFn, // optional: custom fetch function (e.g. fetchDhanOHLCV) — defaults to Yahoo
   newsFetchFn, // optional: override for per-symbol Google news fetch (tests)
-  yahooNewsFetchFn, // optional: override for per-symbol Yahoo news fetch (tests)
   newsConcurrency = 6, // cap on parallel per-symbol news fetches (Worker rate-limit)
-  moneycontrolFn, // optional: tier-4 fallback used when the Worker is UNAVAILABLE (tests)
+  broadNewsFn, // optional: tier-4 fallback used when the Worker is UNAVAILABLE (tests)
   flowFetchFn, // optional: override for the CF Worker fetch inside fetchFlowClass (tests)
   newsEnrichEnabled = true, // when false, skip per-symbol Worker news tiers (premium gate locked)
 }) {
@@ -447,10 +422,10 @@ export async function batchScan({
     newsFetched: 0,
     newsCacheHits: 0,
     newsFetchErrors: 0,
-    // Wave 1.5d telemetry — the 4-tier news fallback chain.
+    // Telemetry for the 4-tier news fallback chain.
     // `newsFromCache` counts localStorage hits (tier 2).
-    // `newsFromFallback` counts Moneycontrol tier-4 resolutions when
-    //   the Worker reported UNAVAILABLE or the fetcher errored.
+    // `newsFromFallback` counts broad-feed tier-4 resolutions when the
+    //   Worker reported UNAVAILABLE or the fetcher errored.
     // `newsUnavailable` counts candidates that ended with score=null
     //   at every tier — the scan proceeds without a news veto for them.
     newsFromCache: 0,
@@ -550,7 +525,7 @@ export async function batchScan({
           // Mixes live market context (VIX, flow, news map) with
           // per-stock derived values (sector, news sentiment, liquidity).
           const cleanSym = String(displaySymbol).toUpperCase().replace(/\.NS$/, '');
-          // Index-wide Moneycontrol map — used as the fallback when the
+          // Index-wide broad-feed map — used as the fallback when the
           // per-symbol Google News fetch fails or returns nothing.
           const indexNewsScore = marketContext?.newsMap?.[cleanSym] ?? null;
           let newsScore = indexNewsScore;
@@ -558,7 +533,7 @@ export async function batchScan({
           // Headlines that drove this symbol's sentiment — surfaced in UI
           // so the trader can see WHY the news layer said bullish/bearish.
           let headlines = marketContext?.headlinesMap?.[cleanSym] || [];
-          let newsSource = indexNewsScore != null ? 'moneycontrol' : null;
+          let newsSource = indexNewsScore != null ? 'india' : null;
           // Liquidity tier from the average bar volume over recent trading
           const recentVols = candles.slice(-60).map((c) => c.v || 0);
           const avgPerBarVol = recentVols.length
@@ -607,34 +582,34 @@ export async function batchScan({
           //
           // Full 4-tier fallback chain lives in fetchPerSymbolNews:
           //   in-memory → localStorage → Worker (HIT/STALE/UNAVAILABLE)
-          //             → Moneycontrol (below, auto-derived from the
+          //             → broad-feed (below, auto-derived from the
           //               caller's marketContext when not explicitly
-          //               injected via `moneycontrolFn`).
+          //               injected via `broadNewsFn`).
           const isCandidate = risk.direction && risk.action && risk.action !== 'NO TRADE';
           if (isCandidate) {
             // Auto-build the tier-4 fallback from the index-wide newsMap
             // when the caller didn't inject a test override. The closure
             // captures `indexNewsScore` + `headlines` which were already
             // computed above from the index-wide marketContext.
-            const mcFn = moneycontrolFn || (indexNewsScore != null
+            const broadFn = broadNewsFn || (indexNewsScore != null
               ? async () => ({ score: indexNewsScore, headlines })
               : null);
             const enrich = await fetchPerSymbolNews(cleanSym, {
-              newsFetchFn, yahooNewsFetchFn, moneycontrolFn: mcFn,
+              newsFetchFn, broadNewsFn: broadFn,
               telemetry, newsSem, signal, newsEnrichEnabled,
             });
             if (enrich && enrich.score != null) {
-              if (enrich.source === 'moneycontrol') {
-                // Tier-4 fell back to Moneycontrol. Use its score
+              if (enrich.source === 'india') {
+                // Tier-4 fell back to the broad-feed map. Use its score
                 // directly; it already reflects the index-wide signal.
                 newsScore = enrich.score;
-                newsSource = 'moneycontrol';
+                newsSource = 'india';
                 if (enrich.headlines?.length) headlines = enrich.headlines;
               } else {
-                // Per-symbol Worker tier (Google or Yahoo, fresh or stale)
-                // wins over the index-wide MC signal; if both exist we
-                // average them (matches enrichWithGoogleNews semantics in
-                // marketContextLive.js).
+                // Per-symbol Worker tier (Google, fresh or stale) wins
+                // over the index-wide broad-feed signal; if both exist
+                // we average them (matches enrichWithGoogleNews semantics
+                // in marketContextLive.js).
                 newsScore = indexNewsScore != null
                   ? (indexNewsScore + enrich.score) / 2
                   : enrich.score;
@@ -642,8 +617,7 @@ export async function batchScan({
                   headlines = enrich.headlines;
                 }
                 // `source` propagates which tier resolved: 'google',
-                // 'yahoo', 'stale', 'stale-yahoo', or 'both' when blended
-                // with the index map.
+                // 'stale', or 'both' when blended with the index map.
                 const baseSource = enrich.source || 'google';
                 newsSource = indexNewsScore != null ? 'both' : baseSource;
               }

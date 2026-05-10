@@ -10,20 +10,20 @@
  *
  * Sources (both free, both toggleable):
  *
- *   1. Moneycontrol RSS — Indian market-wide feeds that mention
- *      specific stocks in their headlines. Single fetch returns
- *      ~50 items covering the most actively-discussed stocks today.
- *      Feeds used: buzzing stocks, stocks-in-news, markets.
+ *   1. Broad Indian RSS — Moneycontrol + LiveMint + Economic Times +
+ *      Business Standard market-wide feeds that mention specific
+ *      stocks in their headlines. Single multi-feed fetch returns
+ *      ~80-120 items covering the most actively-discussed stocks.
  *
  *   2. Google News RSS — per-stock query results. More targeted but
  *      requires one fetch per symbol. Only used for stocks that
  *      appear in the technical candidate list (top 20-30 ranked).
  *
  * Strategy:
- *   - Default mode: Moneycontrol only (broad, cheap). Matches
+ *   - Default mode: broad-feed only (broad, cheap). Matches
  *     headlines against the NIFTY TOTAL MARKET symbol universe;
- *     ~30-60 symbols get sentiment per scan typically.
- *   - Deep mode:  Moneycontrol + per-symbol Google News for the
+ *     ~80-120 symbols get sentiment per scan typically.
+ *   - Deep mode:  broad-feed + per-symbol Google News for the
  *     top N candidates that passed phases 1-3 of tradeDecision.
  *
  * Sentiment scoring:
@@ -171,26 +171,35 @@ export function extractSymbols(text, symbolUniverse) {
 
 // ─── Fetchers ──────────────────────────────────────────────────────
 
-const MONEYCONTROL_FEEDS = [
+const INDIA_BROAD_FEEDS = [
+  // Moneycontrol
   'https://www.moneycontrol.com/rss/buzzingstocks.xml',
   'https://www.moneycontrol.com/rss/MCtopnews.xml',
   'https://www.moneycontrol.com/rss/marketreports.xml',
   'https://www.moneycontrol.com/rss/business.xml',
+  // LiveMint
+  'https://www.livemint.com/rss/markets',
+  // Economic Times
+  'https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms',
+  'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
+  // Business Standard
+  'https://www.business-standard.com/rss/markets-stocks-10612.rss',
 ];
 
 /**
- * Fetch and score Moneycontrol's Indian market feeds.
- * Returns a symbol → score map. Symbols are matched against the
- * provided universe; headlines not mentioning any symbol are skipped.
+ * Fetch and score the broad Indian market feeds (Moneycontrol +
+ * LiveMint + Economic Times + Business Standard). Returns a symbol →
+ * score map. Symbols are matched against the provided universe;
+ * headlines not mentioning any symbol are skipped.
  *
  * @param {Set<string>} symbolUniverse
  * @param {{fetchFn?: Function}} [opts]  inject a fetch for testing
  * @returns {Promise<Record<string, number>>}
  */
-export async function fetchMoneycontrolSentiment(symbolUniverse, { fetchFn } = {}) {
+export async function fetchIndianBroadFeedSentiment(symbolUniverse, { fetchFn } = {}) {
   const f = fetchFn || globalThis.fetch;
   const perSymbolScores = {}; // symbol → array of scores (to average)
-  for (const url of MONEYCONTROL_FEEDS) {
+  for (const url of INDIA_BROAD_FEEDS) {
     try {
       const res = await f(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
       if (!res.ok) continue;
@@ -259,25 +268,25 @@ export async function fetchGoogleNewsSentimentForSymbol(symbol, { fetchFn, maxAg
  * Build a full symbol → sentiment score map for a scan.
  *
  * Modes:
- *   - 'moneycontrol'  : fetch only Moneycontrol feeds (fast, broad)
- *   - 'google'        : fetch only per-symbol Google News (slow, targeted)
- *   - 'both'          : fetch Moneycontrol first, then top-N deep via Google
+ *   - 'india'  : fetch only the broad Indian feeds (fast, broad)
+ *   - 'google' : fetch only per-symbol Google News (slow, targeted)
+ *   - 'both'   : fetch broad-feeds first, then top-N deep via Google
  *
  * @param {Set<string>} symbolUniverse
  * @param {{
- *   mode?: 'moneycontrol' | 'google' | 'both',
+ *   mode?: 'india' | 'google' | 'both',
  *   deepSymbols?: string[],
  *   fetchFn?: Function,
  * }} [opts]
  * @returns {Promise<Record<string, number>>}
  */
 export async function buildNewsSentimentMap(symbolUniverse, opts = {}) {
-  const mode = opts.mode || 'moneycontrol';
+  const mode = opts.mode || 'india';
   const merged = {};
 
-  if (mode === 'moneycontrol' || mode === 'both') {
-    const mcScores = await fetchMoneycontrolSentiment(symbolUniverse, opts);
-    Object.assign(merged, mcScores);
+  if (mode === 'india' || mode === 'both') {
+    const broadScores = await fetchIndianBroadFeedSentiment(symbolUniverse, opts);
+    Object.assign(merged, broadScores);
   }
 
   if (mode === 'google' || mode === 'both') {

@@ -10,7 +10,7 @@
  * All helpers are pure / side-effect-free at module load so they
  * can be unit-tested under Vitest with a small in-memory KV stub.
  *
- * Used by `/market/vix`, `/market/fiidii`, `/news/moneycontrol`,
+ * Used by `/market/vix`, `/market/fiidii`, `/news/india`,
  * `/news/google` in `worker/index.js`.
  */
 
@@ -202,7 +202,7 @@ export function cacheHeaders({ status, key, ageMs, cacheSource }) {
 
 /**
  * Orchestrate the "KV hit → upstream fetch → stale fallback" flow that
- * `/market/vix`, `/market/fiidii`, `/news/moneycontrol`, `/news/google`
+ * `/market/vix`, `/market/fiidii`, `/news/india`, `/news/google`
  * all share.
  *
  * @param {object} opts
@@ -289,20 +289,17 @@ export const VIX_STALE_MAX_MS = 24 * 60 * 60 * 1000;
 export const FIIDII_TTL_MS = 6 * 60 * 60 * 1000;
 export const FIIDII_STALE_MAX_MS = 48 * 60 * 60 * 1000;
 
-// Moneycontrol RSS — 10min market hours, 60min off-hours.
-export function moneycontrolTtlMs(nowMs = Date.now()) {
+// Broad Indian news RSS map (Moneycontrol + LiveMint + ET + Business Standard
+// merged into one endpoint) — 10min market hours, 60min off-hours.
+export function indiaNewsTtlMs(nowMs = Date.now()) {
   return isMarketHoursIST(nowMs) ? 10 * 60 * 1000 : 60 * 60 * 1000;
 }
 // Up to 4h old snapshot is servable on upstream fail.
-export const MONEYCONTROL_STALE_MAX_MS = 4 * 60 * 60 * 1000;
+export const INDIA_NEWS_STALE_MAX_MS = 4 * 60 * 60 * 1000;
 
 // Google News — 4h fresh, 24h stale max.
 export const GOOGLE_NEWS_TTL_MS = 4 * 60 * 60 * 1000;
 export const GOOGLE_NEWS_STALE_MAX_MS = 24 * 60 * 60 * 1000;
-
-// Yahoo Finance News — same window as Google so the two tiers age in lockstep.
-export const YAHOO_NEWS_TTL_MS = 4 * 60 * 60 * 1000;
-export const YAHOO_NEWS_STALE_MAX_MS = 24 * 60 * 60 * 1000;
 
 // ───────────────────────────────────────────────────────────
 // Key builders
@@ -314,14 +311,11 @@ export function vixKey(nowMs = Date.now()) {
 export function fiidiiKey(nowMs = Date.now()) {
   return `nse_fiidii_daily:${istDateString(nowMs)}`;
 }
-export function moneycontrolKey(nowMs = Date.now()) {
-  const ttlMs = moneycontrolTtlMs(nowMs);
+export function indiaNewsKey(nowMs = Date.now()) {
+  const ttlMs = indiaNewsTtlMs(nowMs);
   const hourBucket = Math.floor(nowMs / ttlMs);
-  return `moneycontrol_rss:${hourBucket}`;
+  return `india_news_rss:${hourBucket}`;
 }
 export function googleNewsKey(symbol, nowMs = Date.now()) {
   return `google_news:${symbol}:${istDateString(nowMs)}`;
-}
-export function yahooNewsKey(symbol, nowMs = Date.now()) {
-  return `yahoo_news:${symbol}:${istDateString(nowMs)}`;
 }

@@ -43,7 +43,7 @@ Complete inventory of every external data source and API the app talks to. Each 
 
 - Cross-origin requests from the PWA need the Worker proxy (`candlescan-proxy.utkarsh-dev.workers.dev`) because Yahoo blocks direct browser access.
 - `quoteSummary` module endpoints (for company profile / sector / news) now require a crumb + cookie — **not usable** in current form without a full scraping workflow.
-- Per-symbol news endpoint (`/v7/finance/news?symbols=X`) returns 500 for Indian symbols — **not usable**.
+- Per-symbol news endpoints (`/v7/finance/news?symbols=X`, `/v1/finance/search?q=X`) return either 500 or generic global headlines for Indian symbols — **not usable for news** (the Worker dropped the `/news/yahoo` proxy after the `relatedTickers` filter still left empty/null for most NSE symbols). Yahoo is still used for OHLCV + VIX.
 
 ---
 
@@ -228,7 +228,7 @@ Complete inventory of every external data source and API the app talks to. Each 
 | **Pre-market gap** | derived (prev close vs today open) | ✅ | ✅ | ❌ | ❌ |
 | **Liquidity tier** | derived (per-bar avg volume) | ✅ | ✅ | ✅ TIER_D < 500/bar | ❌ |
 | **FII/DII flow** | NSE `/api/fiidiiTradeReact` | ❌ no historical | ✅ live | ❌ | ❌ |
-| **News sentiment** | _not yet fetched automatically_ | ❌ | ⚠️ needs source | ✅ counter-STRONG | ✅ +2 mild, +5 strong |
+| **News sentiment** | Worker `/news/india` (broad-feed map) + `/news/google` (per-symbol, premium) | ❌ no historical | ✅ live | ✅ counter-STRONG | ✅ +2 mild, +5 strong |
 
 ### Composition rules
 
@@ -238,18 +238,26 @@ The composer in `marketContext.js` operates primarily in **veto-only mode** for 
 
 Dhan's public API does **not** expose news (their watchlist news is a web-only feature). Alternatives:
 
-| Source | Cost | Coverage | Integration effort |
-|---|---|---|---|
-| **Google News RSS** | Free | Any query, global | Low — RSS parsing, free-text sentiment |
-| **Moneycontrol / LiveMint RSS** | Free | Indian market | Low — RSS parsing |
-| **NSE corporate announcements** | Free | Official filings only | Medium — XML parsing |
-| **Yahoo Finance search** | Free | Unreliable (returns generic news) | Tried, doesn't work |
-| **Yahoo Finance per-symbol news** | Free | 500 errors on Indian symbols | Tried, doesn't work |
-| **NewsAPI.org** | Free tier 100/day | Global English news | Low — REST API |
-| **RavenPack** | Paid, enterprise | Pre-scored sentiment | N/A |
-| **StockTwits API** | Free tier | Social sentiment | Low — REST API |
+| Source | Cost | Coverage | Integration effort | In use? |
+|---|---|---|---|:---:|
+| **Broad Indian RSS** (Moneycontrol + LiveMint + Economic Times + Business Standard) | Free | Indian market, ~80-120 symbols/scan | Low — multi-feed RSS parsing at the Worker, scored client-side | ✅ Tier 4 (`/news/india`) |
+| **Google News RSS** | Free | Any query, global | Low — RSS parsing, free-text sentiment | ✅ Tier 3 (`/news/google`, per-symbol, premium-gated) |
+| **NSE corporate announcements** | Free | Official filings only | Medium — XML parsing, NSE cookie warm-up | ❌ Candidate for next iteration |
+| **Yahoo Finance search / per-symbol news** | Free | 500 errors on Indian symbols, generic global feed | Tried, removed | ❌ Dropped — `/news/yahoo` retired |
+| **NewsAPI.org** | Free tier 100/day | Global English news | Low — REST API | ❌ Cap too low for batch scans |
+| **Marketaux** | Free tier 100/day | Indian + global, pre-tagged | Low — REST API | ❌ Cap too low for batch scans |
+| **Finnhub** | Free 60/min | India coverage, English-only | Low — REST API | ❌ Candidate if Google tier degrades further |
+| **RavenPack** | Paid, enterprise | Pre-scored sentiment | N/A | ❌ |
+| **StockTwits API** | Free tier | Social sentiment | Low — REST API | ❌ |
 
-**Recommended**: Google News RSS + a simple keyword-based sentiment scorer. Free, works for Indian symbols, and gives reasonable directional sentiment from headline + summary text without requiring a paid sentiment service.
+**News tier chain (live scan)**:
+
+| Tier | Source | Scope | Lifetime |
+|---|---|---|---|
+| 1 | In-memory `Map` | Per-tab JS context | Current hour |
+| 2 | `localStorage` (`candlescan_news_v3:`) | Per-browser | 4h market / 12h off-hours |
+| 3 | Worker → Google News RSS (`/news/google`) | Per symbol, premium-gated | KV 4h fresh / 24h stale |
+| 4 | Worker → Broad Indian RSS map (`/news/india`) | All symbols, one fetch at scan start | KV 10min market / 60min off-hours / 4h stale |
 
 ### FII/DII data source
 
@@ -271,7 +279,7 @@ Dhan's public API does **not** expose news (their watchlist news is a web-only f
 | GitHub Releases | Update check | Yes | Yes via Worker | 24h localStorage | Settings → Check for updates |
 | Cloudflare Worker | Proxy hub | Dev bypasses | Yes | Internal KV | Deployed once, always on |
 | India VIX | Regime filter | Yes | Live fetch | 59d disk cache | Automatic, hardcoded thresholds |
-| News sentiment | Bullish/bearish bias | ❌ empty | ❌ empty (needs source) | `cache/news/<date>.json` | Automatic when present |
+| News sentiment | Bullish/bearish bias | ❌ empty | ✅ live (broad RSS map + per-symbol Google) | `cache/news/<date>.json` (warm script) + Worker KV (live) | Automatic when present |
 
 ### What's currently ON in backtest
 
@@ -283,7 +291,7 @@ Dhan's public API does **not** expose news (their watchlist news is a web-only f
 
 ### What's currently OFF in backtest (data not populated)
 
-- News sentiment (no fetcher yet — would require building a Google News RSS pipeline or similar)
+- News sentiment in backtest (the live tier chain works, but historical news is not stored — `scripts/warm-news.mjs` only captures *current* RSS state, useful for the day-of run)
 - FII/DII historical (no source available; live-only)
 
 ### What's ON in live scanning
@@ -295,6 +303,5 @@ All of the above PLUS:
 
 ### What still needs to be built
 
-1. **News fetcher** — Google News RSS + simple sentiment scoring. Populates `cache/news/<date>.json` so backtest can use the layer and live scan has real data.
-2. **FII/DII live integration** — Call NSE's `/api/fiidiiTradeReact` on scan start in BatchScanPage / PaperTradingPage, populate `marketContext.flow` for the current session.
-3. **VIX live fetch** — Currently only cached. Add a live fetch to get current-minute VIX during live scanning so PANIC regime can veto on spikes.
+1. **NSE corporate-announcements integration** — Add a `/news/nse-announcements` Worker endpoint backed by `nseindia.com/api/corporate-announcements?index=equities` (with cookie warm-up, same pattern as the FII/DII handler). Filings (results, board meetings, order wins, fundraises, splits) carry structured event types — much higher signal-to-noise than free-text RSS. Would slot in above the broad-feed tier and could let us evaluate dropping the per-symbol Google tier entirely.
+2. **Historical news for backtest** — Live news is wired (broad RSS + per-symbol Google), but `cache/news/<date>.json` is only populated by `scripts/warm-news.mjs` running on the day of. Backtests against past dates run with an empty news layer.
