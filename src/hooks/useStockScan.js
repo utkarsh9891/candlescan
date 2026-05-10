@@ -30,7 +30,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchOHLCV } from '../engine/fetcher.js';
-import { fetchLiveGoogleNewsDetailForSymbol } from '../engine/marketContextLive.js';
+import { fetchLiveBroadFeedForSymbol } from '../engine/marketContextLive.js';
 import { classifyNewsSentiment } from '../engine/marketContext.js';
 import { detectPatterns as detectPatternsClassic } from '../engine/patterns-classic.js';
 import { detectLiquidityBox as detectLiquidityBoxClassic } from '../engine/liquidityBox-classic.js';
@@ -282,7 +282,7 @@ export function useStockScan({
 
       // Fire-and-forget async news fetch (stale-response guard via newsReqId)
       setStockNewsLoading(true);
-      fetchLiveGoogleNewsDetailForSymbol(displaySymbol)
+      fetchLiveBroadFeedForSymbol(displaySymbol)
         .then((res) => {
           if (newsReqId !== stockNewsReqIdRef.current) return;
           setStockNews({

@@ -2,10 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   batchScan,
   fetchFlowClass,
-  _resetBatchScanNewsCache,
   _resetBatchScanFlowCache,
 } from './batchScan.js';
-import { clearNewsCache } from './newsCacheLocal.js';
 import { bullishEngulfing } from './__fixtures__/candles.js';
 
 // Mock fetchOHLCV to return deterministic data without network
@@ -28,12 +26,6 @@ vi.mock('./transport.js', () => ({
   cfUrl: (path) => `https://mock.workers.dev${path?.startsWith('/') ? path : '/' + (path || '')}`,
 }));
 
-// Default-mock the live Google News fetcher so the existing tests
-// don't hit the network. Individual tests override via `newsFetchFn`.
-vi.mock('./marketContextLive.js', () => ({
-  fetchLiveGoogleNewsDetailForSymbol: vi.fn(async () => ({ score: null, headlines: [] })),
-}));
-
 // Silence the FII/DII console.warn that our scan emits when the Worker
 // fetch falls through to the NEUTRAL fallback. Individual tests that
 // want to assert on the warning spy it explicitly.
@@ -43,9 +35,7 @@ let warnSpy;
 // exercise the flow path pass `flowFetchFn` directly.
 let originalFetch;
 beforeEach(() => {
-  _resetBatchScanNewsCache();
   _resetBatchScanFlowCache();
-  clearNewsCache();
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   originalFetch = globalThis.fetch;
   globalThis.fetch = vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }));
@@ -187,110 +177,61 @@ describe('batchScan', () => {
   });
 });
 
-describe('batchScan per-symbol news enrichment', () => {
-  it('fetches news only for candidate symbols (not the whole universe)', async () => {
-    const newsFetchFn = vi.fn(async () => ({ score: 0.6, headlines: [{ title: 'beat', score: 0.6 }] }));
-
-    // The bullishEngulfing fixture produces a tradable signal for every
-    // symbol in this suite — so "candidates" here equals the full input.
-    // The assertion that matters is: the news fetcher is NEVER called
-    // for filter-rejected symbols, and the count equals the candidate
-    // count, not the scan universe.
-    const results = await batchScan({
-      symbols: ['AAA', 'BBB', 'CCC'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-    });
-
-    const actionable = results.filter((r) => r.action && r.action !== 'NO TRADE');
-    expect(newsFetchFn).toHaveBeenCalledTimes(actionable.length);
-    expect(actionable.length).toBeGreaterThan(0);
-    // Telemetry surfaces the fetch count
-    expect(results.telemetry.newsFetched).toBe(actionable.length);
-    expect(results.telemetry.newsCacheHits).toBe(0);
-    // The per-symbol news plumbed through to the returned row
-    for (const r of actionable) {
-      expect(r.newsScore).toBeGreaterThan(0);
-      expect(r.newsHeadlines.length).toBeGreaterThan(0);
-      expect(r.newsSource).toBe('google');
-    }
-  });
-
-  it('hits the per-(symbol, hour) cache on a second scan within the hour', async () => {
-    const newsFetchFn = vi.fn(async () => ({ score: 0.4, headlines: [{ title: 'gain' }] }));
-
-    const first = await batchScan({
-      symbols: ['XX', 'YY'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-    });
-    const firstFetched = first.telemetry.newsFetched;
-    expect(firstFetched).toBeGreaterThan(0);
-
-    // Second scan within the same hour — same symbols must resolve from
-    // cache and the fetcher must not be called again.
-    const prevCalls = newsFetchFn.mock.calls.length;
-    const second = await batchScan({
-      symbols: ['XX', 'YY'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-    });
-    expect(newsFetchFn.mock.calls.length).toBe(prevCalls); // no new network calls
-    expect(second.telemetry.newsFetched).toBe(0);
-    expect(second.telemetry.newsCacheHits).toBeGreaterThan(0);
-  });
-
-  it('falls back to the broad-feed index map when per-symbol fetch fails', async () => {
-    const newsFetchFn = vi.fn(async () => { throw new Error('CF Worker 502'); });
-
+describe('batchScan news (single-tier broad-feed map)', () => {
+  // After the Google tier-3 drop, news is single-tier: marketContext.newsMap
+  // is the only source. Per candidate we either resolve from that map
+  // (newsResolved++) or have nothing to attach (newsUnavailable++).
+  it('resolves news from the index-wide broad-feed map for candidates that match', async () => {
     const results = await batchScan({
       symbols: ['ZZZ'],
       timeframe: '5m',
       gateToken: 'test',
       delayMs: 0,
-      newsFetchFn,
       marketContext: {
-        newsMap: { ZZZ: -0.25 }, // broad-feed-scored; classifies BEARISH
+        newsMap: { ZZZ: -0.25 }, // BEARISH
         headlinesMap: { ZZZ: [{ title: 'profit warning', source: 'india' }] },
       },
     });
 
-    // Fall back to the broad-feed map for sentiment, news source stays 'india'
     const r = results.find((x) => x.symbol === 'ZZZ');
     expect(r).toBeDefined();
     expect(r.newsScore).toBeCloseTo(-0.25);
     expect(r.newsSource).toBe('india');
-    // Error was counted in telemetry but did not crash the scan
-    expect(results.telemetry.newsFetchErrors).toBeGreaterThan(0);
-    // The scan still yielded a row for the symbol
-    expect(results.length).toBe(1);
+    expect(r.newsHeadlines).toHaveLength(1);
+    expect(results.telemetry.newsResolved).toBeGreaterThan(0);
+    expect(results.telemetry.newsUnavailable).toBe(0);
   });
 
-  it('does not fetch news for filter-rejected symbols', async () => {
-    // sectorMap-based filter won't reject arbitrary strings in this
-    // setup; instead validate the inverse with an aborted signal that
-    // kills the scan before any symbol is processed.
-    const controller = new AbortController();
-    controller.abort();
-    const newsFetchFn = vi.fn(async () => ({ score: 0.5, headlines: [] }));
-
+  it('counts unavailable when the symbol is missing from the broad-feed map', async () => {
     const results = await batchScan({
-      symbols: ['AAA', 'BBB'],
+      symbols: ['NOMATCH'],
       timeframe: '5m',
       gateToken: 'test',
       delayMs: 0,
-      signal: controller.signal,
-      newsFetchFn,
+      marketContext: {
+        newsMap: {}, // empty — no symbol mentioned
+        headlinesMap: {},
+      },
     });
 
-    expect(newsFetchFn).not.toHaveBeenCalled();
-    expect(results.telemetry.newsFetched).toBe(0);
+    const r = results.find((x) => x.symbol === 'NOMATCH');
+    expect(r).toBeDefined();
+    expect(r.newsScore).toBeNull();
+    expect(r.newsSource).toBeNull();
+    expect(results.telemetry.newsUnavailable).toBeGreaterThan(0);
+    expect(results.telemetry.newsResolved).toBe(0);
+  });
+
+  it('runs cleanly with no marketContext at all (newsScore stays null, scan still completes)', async () => {
+    const results = await batchScan({
+      symbols: ['AAA'],
+      timeframe: '5m',
+      gateToken: 'test',
+      delayMs: 0,
+      // no marketContext — newsMap defaults to undefined
+    });
+    expect(results.length).toBe(1);
+    expect(results[0].newsScore).toBeNull();
   });
 });
 
@@ -467,163 +408,3 @@ describe('batchScan live FII/DII flow wiring', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// Wave 1.5d — 4-tier news fallback chain
-// ─────────────────────────────────────────────────────────────────────
-describe('batchScan news fallback chain (Wave 1.5d)', () => {
-  it('tier 3 STALE: Worker served from KV; scan uses it and marks it stale', async () => {
-    const newsFetchFn = vi.fn(async () => ({
-      score: 0.35,
-      headlines: [{ title: 'old news but valid', score: 0.35 }],
-      cacheStatus: 'STALE',
-      cacheSource: 'kv',
-    }));
-
-    const results = await batchScan({
-      symbols: ['AAA'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-    });
-
-    const actionable = results.filter((r) => r.action && r.action !== 'NO TRADE');
-    expect(actionable.length).toBeGreaterThan(0);
-    for (const r of actionable) {
-      // STALE Google score propagates; source distinguishes it from a fresh HIT.
-      expect(r.newsScore).toBeCloseTo(0.35);
-      expect(r.newsSource).toBe('stale');
-    }
-    // Telemetry: none of the fallback counters should fire because
-    // tier 3 succeeded (just with stale data).
-    expect(results.telemetry.newsFetched).toBeGreaterThan(0);
-    expect(results.telemetry.newsFromFallback).toBe(0);
-    expect(results.telemetry.newsUnavailable).toBe(0);
-  });
-
-  it('tier 3 UNAVAILABLE → tier 4 broad-feed: scan completes with broad-feed sentiment', async () => {
-    // Worker says it has nothing, not even stale.
-    const newsFetchFn = vi.fn(async () => ({
-      score: null,
-      headlines: [],
-      cacheStatus: 'UNAVAILABLE',
-      cacheSource: null,
-    }));
-    const broadNewsFn = vi.fn(async () => ({
-      score: -0.4,
-      headlines: [{ title: 'downgrade', source: 'india' }],
-    }));
-
-    const results = await batchScan({
-      symbols: ['BBB'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-      broadNewsFn,
-    });
-
-    expect(newsFetchFn).toHaveBeenCalled();
-    expect(broadNewsFn).toHaveBeenCalled();
-    const r = results.find((x) => x.symbol === 'BBB');
-    expect(r).toBeDefined();
-    expect(r.newsScore).toBeCloseTo(-0.4);
-    expect(r.newsSource).toBe('india');
-    expect(results.telemetry.newsFromFallback).toBeGreaterThan(0);
-    expect(results.telemetry.newsUnavailable).toBe(0);
-  });
-
-  it('tier 3 UNAVAILABLE + no broad-feed: scan still yields a row with score=null', async () => {
-    const newsFetchFn = vi.fn(async () => ({
-      score: null,
-      headlines: [],
-      cacheStatus: 'UNAVAILABLE',
-    }));
-
-    const results = await batchScan({
-      symbols: ['CCC'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-      // No broadNewsFn, no marketContext.newsMap — tier 4 empty.
-    });
-
-    expect(results.length).toBe(1);
-    const r = results[0];
-    // No news at any tier — row still exists, just no sentiment bonus.
-    expect(r.newsScore == null).toBe(true);
-    expect(results.telemetry.newsUnavailable).toBeGreaterThan(0);
-  });
-
-  it('tier 2 localStorage hit: second scan within TTL skips the Worker', async () => {
-    const newsFetchFn = vi.fn(async () => ({
-      score: 0.55,
-      headlines: [{ title: 'fresh', score: 0.55 }],
-      cacheStatus: 'HIT',
-    }));
-
-    const first = await batchScan({
-      symbols: ['DDD'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-    });
-    expect(first.telemetry.newsFetched).toBeGreaterThan(0);
-    const worker1 = newsFetchFn.mock.calls.length;
-    expect(worker1).toBeGreaterThan(0);
-
-    // Drop the in-memory hour cache so the disk cache (tier 2) is
-    // the only thing that can satisfy the second scan. This simulates
-    // a page reload: in-memory cache is empty, but localStorage survives.
-    _resetBatchScanNewsCache();
-
-    const second = await batchScan({
-      symbols: ['DDD'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-    });
-
-    // Worker was NOT called again — localStorage served the request.
-    expect(newsFetchFn.mock.calls.length).toBe(worker1);
-    expect(second.telemetry.newsFetched).toBe(0);
-    expect(second.telemetry.newsFromCache).toBeGreaterThan(0);
-
-    // Score and headlines survived the disk round-trip.
-    const r = second.find((x) => x.symbol === 'DDD');
-    expect(r).toBeDefined();
-    expect(r.newsScore).toBeCloseTo(0.55);
-    expect(r.newsHeadlines.length).toBeGreaterThan(0);
-  });
-
-  it('cold start + Worker throws 502: falls through to broad-feed, no crash', async () => {
-    // Simulate the exact Google News 502 scenario the load-test saw.
-    const newsFetchFn = vi.fn(async () => {
-      throw new Error('CF Worker upstream 502');
-    });
-    const broadNewsFn = vi.fn(async (sym) => ({
-      score: sym === 'EEE' ? -0.2 : 0.2,
-      headlines: [{ title: `mc-${sym}`, source: 'india' }],
-    }));
-
-    const results = await batchScan({
-      symbols: ['EEE'],
-      timeframe: '5m',
-      gateToken: 'test',
-      delayMs: 0,
-      newsFetchFn,
-      broadNewsFn,
-    });
-
-    expect(results.length).toBe(1);
-    const r = results[0];
-    expect(r.newsScore).toBeCloseTo(-0.2);
-    expect(r.newsSource).toBe('india');
-    // Thrown errors get counted AND the fallback ran.
-    expect(results.telemetry.newsFetchErrors).toBeGreaterThan(0);
-    expect(results.telemetry.newsFromFallback).toBeGreaterThan(0);
-  });
-});

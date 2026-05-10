@@ -28,8 +28,8 @@ export const CF_WORKER_URL = 'https://candlescan-proxy.utkarsh-dev.workers.dev';
  *
  *   cfUrl('/market/vix')       → 'https://…/market/vix'
  *   cfUrl('market/vix')        → 'https://…/market/vix'
- *   cfUrl('/news/google?symbol=RELIANCE')
- *                              → 'https://…/news/google?symbol=RELIANCE'
+ *   cfUrl('/quote/last?symbol=RELIANCE')
+ *                              → 'https://…/quote/last?symbol=RELIANCE'
  *
  * @param {string} path
  * @returns {string}

@@ -79,7 +79,7 @@ function nextId() { return `sch_${Date.now()}_${_idCounter++}`; }
  * @param {string} params.dataSource
  * @param {string} params.nseIndex — used to resolve indexDirection at fire time
  */
-export function useScheduledChecks({ dataSource, nseIndex, newsEnrichEnabled = true }) {
+export function useScheduledChecks({ dataSource, nseIndex }) {
   const [checks, setChecks] = useState([]);
   const checksRef = useRef(checks);
   checksRef.current = checks;
@@ -185,7 +185,6 @@ export function useScheduledChecks({ dataSource, nseIndex, newsEnrichEnabled = t
         concurrency: 1,
         delayMs: 0,
         fetchFn: createFetchFn(ds || 'yahoo'),
-        newsEnrichEnabled,
       });
 
       const r = results?.[0] || null;

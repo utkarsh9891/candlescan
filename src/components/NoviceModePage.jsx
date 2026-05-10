@@ -88,7 +88,7 @@ const NEW_HIGHLIGHT_MS = 45 * 1000;
 
 export default function NoviceModePage({
   savedIndex, onIndexChange, indexOptions, dataSource, onSelectSymbol,
-  scheduledChecks, onOpenSettings, newsEnrichEnabled = true,
+  scheduledChecks, onOpenSettings,
 }) {
   const [scanning, setScanning] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -217,7 +217,6 @@ export default function NoviceModePage({
         },
         signal: controller.signal,
         fetchFn: createFetchFn(dataSource || 'yahoo'),
-        newsEnrichEnabled,
       });
       setLastScanAt(Date.now());
       // After the full array returns, sort canonically (onResult sorted

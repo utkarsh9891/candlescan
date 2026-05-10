@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { NSE_INDEX_OPTIONS, DEFAULT_NSE_INDEX_ID, getCustomIndices } from '../config/nseIndices.js';
 import { fetchNseIndexSymbolList } from '../engine/nseIndexFetch.js';
 import { batchScan, resetBatchScanRateLimitState } from '../engine/batchScan.js';
-import { fetchLiveMarketContext, enrichWithGoogleNews } from '../engine/marketContextLive.js';
+import { fetchLiveMarketContext } from '../engine/marketContextLive.js';
 import { getGateToken, hasGateToken, clearGateToken } from '../utils/batchAuth.js';
 import { unlockGate } from '../utils/credentialVault.js';
 import { createFetchFn } from '../engine/dataSourceFetch.js';
@@ -363,7 +363,7 @@ function ScanElapsed({ startedAt }) {
   return <>{m}m {s}s</>;
 }
 
-export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks, onOpenSettings, newsEnrichEnabled = true }) {
+export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChange, indexOptions, engineVersion, dataSource, debugMode, scheduledChecks, onOpenSettings }) {
   const allOptions = indexOptions || NSE_INDEX_OPTIONS;
   const nseIndex = savedIndex || DEFAULT_NSE_INDEX_ID;
   const [timeframe, setTimeframe] = useState('5m');
@@ -479,7 +479,6 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
         },
         signal: controller.signal,
         fetchFn: createFetchFn(dataSource || 'yahoo'),
-        newsEnrichEnabled,
       });
       // Capture telemetry attached as a non-enumerable property on the result array
       if (scanResults && scanResults.telemetry) {
@@ -492,31 +491,6 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
         setTokenError(scanResults.tokenError);
       }
 
-      // ── Phase 5: Google News deep enrichment for top candidates ──
-      // After the scan completes, pick the top-N actionable results and
-      // fetch per-symbol Google News to deepen their sentiment signal.
-      // This is phase 3's deep pass — Moneycontrol gave broad coverage;
-      // Google gives per-stock depth for the ones we might actually trade.
-      if (engineVersion === 'scalp' && liveMarketContext && scanResults.length > 0) {
-        try {
-          const topActionable = scanResults
-            .filter((r) => r.action !== 'NO TRADE' && r.action !== 'WAIT')
-            .slice(0, 10)
-            .map((r) => r.symbol);
-          if (topActionable.length > 0) {
-            const enriched = await enrichWithGoogleNews(liveMarketContext.newsMap, topActionable);
-            // eslint-disable-next-line no-console
-            console.log(`[LiveContext] Google News enriched ${Object.keys(enriched).length - Object.keys(liveMarketContext.newsMap).length} new symbols`);
-            // Note: the rankScore was already computed during the scan, so
-            // the enriched scores affect only subsequent scans (which will
-            // hit the cached map). For a live trader re-scanning every
-            // few minutes, this means the second scan has the benefit.
-            liveMarketContext.newsMap = enriched;
-          }
-        } catch {
-          // Enrichment is optional — scan results are already shown
-        }
-      }
     } catch (e) {
       const msg = e?.message || String(e);
       if (msg.includes('403')) {
@@ -551,7 +525,7 @@ export default function BatchScanPage({ onSelectSymbol, savedIndex, onIndexChang
         return latestResults;
       });
     }
-  }, [nseIndex, timeframe, engineVersion, dataSource, newsEnrichEnabled]);
+  }, [nseIndex, timeframe, engineVersion, dataSource]);
 
   const handleScanClick = useCallback(() => {
     if (scanning) {

@@ -1,7 +1,7 @@
 /**
  * Unit tests for `worker/cache.js` — the KV-backed cache helpers that
  * back `/market/vix`, `/market/fiidii`, `/news/india`,
- * `/news/google` in the Cloudflare Worker.
+ * `/quote/last` in the Cloudflare Worker.
  *
  * The core coverage targets:
  *   - KV hit returns cached value without calling the upstream fetcher.
@@ -26,9 +26,9 @@ import {
   FIIDII_TTL_MS,
   indiaNewsKey,
   indiaNewsTtlMs,
-  googleNewsKey,
-  GOOGLE_NEWS_TTL_MS,
-  GOOGLE_NEWS_STALE_MAX_MS,
+  quoteLastKey,
+  QUOTE_LAST_TTL_MS,
+  QUOTE_LAST_STALE_MAX_MS,
   _resetCacheState,
   _getCacheCounters,
 } from './cache.js';
@@ -133,9 +133,18 @@ describe('key builders', () => {
     const ts = Date.UTC(2026, 3, 21, 5, 0, 0);
     expect(fiidiiKey(ts)).toBe('nse_fiidii_daily:2026-04-21');
   });
-  it('googleNewsKey includes symbol + IST date', () => {
-    const ts = Date.UTC(2026, 3, 21, 5, 0, 0);
-    expect(googleNewsKey('RELIANCE', ts)).toBe('google_news:RELIANCE:2026-04-21');
+  it('quoteLastKey includes symbol + 30s window bucket', () => {
+    // Two timestamps inside the same 30s window share the same bucket;
+    // a third in the next 30s window differs.
+    const a = Date.UTC(2026, 3, 21, 5, 0, 0);
+    const b = Date.UTC(2026, 3, 21, 5, 0, 29); // 29s later, same bucket
+    const c = Date.UTC(2026, 3, 21, 5, 0, 30); // 30s later, next bucket
+    expect(quoteLastKey('RELIANCE', a)).toBe(quoteLastKey('RELIANCE', b));
+    expect(quoteLastKey('RELIANCE', a)).not.toBe(quoteLastKey('RELIANCE', c));
+    // Per-symbol namespace
+    expect(quoteLastKey('RELIANCE', a)).not.toBe(quoteLastKey('TCS', a));
+    // Key shape
+    expect(quoteLastKey('RELIANCE', a)).toMatch(/^quote_last:RELIANCE:\d+$/);
   });
   it('indiaNewsKey buckets by TTL window', () => {
     // Two timestamps 5 minutes apart during market hours share the same
@@ -337,10 +346,10 @@ describe('kvCacheFlow', () => {
   });
 });
 
-describe('integration — Google-News style flow', () => {
-  it('uses GOOGLE_NEWS_TTL_MS=4h and STALE_MAX=24h', () => {
-    expect(GOOGLE_NEWS_TTL_MS).toBe(4 * 60 * 60 * 1000);
-    expect(GOOGLE_NEWS_STALE_MAX_MS).toBe(24 * 60 * 60 * 1000);
+describe('integration — quote-last style flow', () => {
+  it('uses QUOTE_LAST_TTL_MS=30s and STALE_MAX=5min', () => {
+    expect(QUOTE_LAST_TTL_MS).toBe(30 * 1000);
+    expect(QUOTE_LAST_STALE_MAX_MS).toBe(5 * 60 * 1000);
   });
 
   it('FII/DII TTL is 6h', () => {
@@ -349,34 +358,35 @@ describe('integration — Google-News style flow', () => {
 
   it('full stale-fallback path — pre-warmed cache, then upstream 502', async () => {
     const kv = makeKvStub();
+    const key = quoteLastKey('RELIANCE');
 
     // First call — cache miss, upstream succeeds.
     const first = await kvCacheFlow({
       kv,
-      key: googleNewsKey('RELIANCE'),
-      ttlMs: GOOGLE_NEWS_TTL_MS,
-      staleMaxMs: GOOGLE_NEWS_STALE_MAX_MS,
-      fetchFresh: async () => ({ symbol: 'RELIANCE', items: [{ title: 'Reliance up 2%' }], count: 1 }),
-      unavailablePayload: () => ({ items: [], source: 'unavailable' }),
+      key,
+      ttlMs: QUOTE_LAST_TTL_MS,
+      staleMaxMs: QUOTE_LAST_STALE_MAX_MS,
+      fetchFresh: async () => ({ symbol: 'RELIANCE', last: 1234.5 }),
+      unavailablePayload: () => ({ symbol: 'RELIANCE', last: null, source: 'unavailable' }),
     });
     expect(first.status).toBe('MISS');
     expect(kv.writeCount()).toBe(1);
 
     // Simulate cache being a bit stale (past ttlMs but within staleMaxMs).
-    const stored = JSON.parse(kv.store.get(googleNewsKey('RELIANCE')));
-    stored.writtenAt = Date.now() - (GOOGLE_NEWS_TTL_MS + 1000);
-    kv.store.set(googleNewsKey('RELIANCE'), JSON.stringify(stored));
+    const stored = JSON.parse(kv.store.get(key));
+    stored.writtenAt = Date.now() - (QUOTE_LAST_TTL_MS + 1000);
+    kv.store.set(key, JSON.stringify(stored));
 
-    // Second call — upstream is 502ing (Google is degraded).
+    // Second call — upstream is 502ing (Yahoo is degraded).
     const second = await kvCacheFlow({
       kv,
-      key: googleNewsKey('RELIANCE'),
-      ttlMs: GOOGLE_NEWS_TTL_MS,
-      staleMaxMs: GOOGLE_NEWS_STALE_MAX_MS,
-      fetchFresh: async () => { throw new Error('Google RSS HTTP 502'); },
-      unavailablePayload: () => ({ items: [], source: 'unavailable' }),
+      key,
+      ttlMs: QUOTE_LAST_TTL_MS,
+      staleMaxMs: QUOTE_LAST_STALE_MAX_MS,
+      fetchFresh: async () => { throw new Error('Yahoo /v8/chart HTTP 502'); },
+      unavailablePayload: () => ({ symbol: 'RELIANCE', last: null, source: 'unavailable' }),
     });
     expect(second.status).toBe('STALE');
-    expect(second.payload.items[0].title).toBe('Reliance up 2%');
+    expect(second.payload.last).toBe(1234.5);
   });
 });

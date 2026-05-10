@@ -3,12 +3,14 @@
  * Warm the news sentiment cache for a given date.
  *
  * Usage:
- *   node scripts/warm-news.mjs                      # today, broad Indian feeds
+ *   node scripts/warm-news.mjs                      # today
  *   node scripts/warm-news.mjs --date 2026-04-10    # specific date
- *   node scripts/warm-news.mjs --source both        # broad-feed + Google per-symbol
- *   node scripts/warm-news.mjs --source google      # Google only
+ *   node scripts/warm-news.mjs --index "NIFTY 500"  # different universe
  *
  * Writes: cache/news/<YYYY-MM-DD>.json  (symbol → score in [-1, +1])
+ * Source: broad Indian feeds (Moneycontrol + LiveMint + Economic Times),
+ * fetched directly from upstream. Single-source — the Google per-symbol
+ * mode that used to live here was dropped in PR #228.
  *
  * Note: this fetches CURRENT news from the RSS feeds. "Historical" news
  * sentiment for a past date isn't actually available — this script is
@@ -30,20 +32,18 @@ const NEWS_DIR = path.join(REPO_ROOT, 'cache', 'news');
 function parseArgs() {
   const args = process.argv.slice(2);
   let date = new Date().toISOString().slice(0, 10);
-  let source = 'india';
   let index = 'NIFTY TOTAL MARKET';
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }
-    if (args[i] === '--source' && args[i + 1]) { source = args[++i]; continue; }
     if (args[i] === '--index' && args[i + 1]) { index = args[++i]; continue; }
   }
-  return { date, source, index };
+  return { date, index };
 }
 
 async function main() {
-  const { date, source, index } = parseArgs();
+  const { date, index } = parseArgs();
 
-  console.log(`── News warm: ${date} | source=${source} | universe=${index}`);
+  console.log(`── News warm: ${date} | universe=${index}`);
 
   // Load symbol universe from NSE
   let symbols = [];
@@ -63,10 +63,10 @@ async function main() {
 
   const universe = new Set(symbols.map((s) => String(s).toUpperCase()));
 
-  // Fetch sentiment
-  console.log(`Fetching news from ${source}...`);
+  // Fetch sentiment from the broad Indian feeds
+  console.log('Fetching news from broad Indian feeds...');
   const started = Date.now();
-  const map = await buildNewsSentimentMap(universe, { mode: source });
+  const map = await buildNewsSentimentMap(universe);
   const elapsed = Date.now() - started;
 
   const scoredCount = Object.keys(map).length;
