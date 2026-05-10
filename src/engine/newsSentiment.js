@@ -171,19 +171,24 @@ export function extractSymbols(text, symbolUniverse) {
 
 // ─── Fetchers ──────────────────────────────────────────────────────
 
+const GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+
+// Per-feed config — `ua` overrides the default 'Mozilla/5.0' UA when the
+// publisher blocks generic UAs from non-residential IPs (Moneycontrol
+// returns empty bodies; Googlebot is whitelisted). Business Standard was
+// previously in this list but blocked with HTTP 403 even on Googlebot,
+// so it's been removed entirely.
 const INDIA_BROAD_FEEDS = [
   // Moneycontrol
-  'https://www.moneycontrol.com/rss/buzzingstocks.xml',
-  'https://www.moneycontrol.com/rss/MCtopnews.xml',
-  'https://www.moneycontrol.com/rss/marketreports.xml',
-  'https://www.moneycontrol.com/rss/business.xml',
+  { url: 'https://www.moneycontrol.com/rss/buzzingstocks.xml', ua: GOOGLEBOT_UA },
+  { url: 'https://www.moneycontrol.com/rss/MCtopnews.xml', ua: GOOGLEBOT_UA },
+  { url: 'https://www.moneycontrol.com/rss/marketreports.xml', ua: GOOGLEBOT_UA },
+  { url: 'https://www.moneycontrol.com/rss/business.xml', ua: GOOGLEBOT_UA },
   // LiveMint
-  'https://www.livemint.com/rss/markets',
+  { url: 'https://www.livemint.com/rss/markets' },
   // Economic Times
-  'https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms',
-  'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
-  // Business Standard
-  'https://www.business-standard.com/rss/markets-stocks-10612.rss',
+  { url: 'https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms' },
+  { url: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms' },
 ];
 
 /**
@@ -199,9 +204,9 @@ const INDIA_BROAD_FEEDS = [
 export async function fetchIndianBroadFeedSentiment(symbolUniverse, { fetchFn } = {}) {
   const f = fetchFn || globalThis.fetch;
   const perSymbolScores = {}; // symbol → array of scores (to average)
-  for (const url of INDIA_BROAD_FEEDS) {
+  for (const { url, ua } of INDIA_BROAD_FEEDS) {
     try {
-      const res = await f(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const res = await f(url, { headers: { 'User-Agent': ua || 'Mozilla/5.0' } });
       if (!res.ok) continue;
       const xml = await res.text();
       const items = parseRssItems(xml);

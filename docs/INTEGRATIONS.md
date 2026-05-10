@@ -212,9 +212,18 @@ Complete inventory of every external data source and API the app talks to. Each 
 
 ### Rate limiting
 
-- 20 req/day per IP (free tier) for anonymous users
-- Unlimited for users with valid gate token
-- KV keys: `rl:{SHA256(ip)}:{YYYY-MM-DD}`, TTL 86400s
+Two independent per-IP daily counters (UTC day, KV-backed, TTL 86400s):
+
+| Counter | Limit | Applies to | KV key prefix |
+|---|---|---|---|
+| Generic GET proxy (`?url=...`) | 20 req/day | Yahoo / NSE generic passthrough | `rl:` |
+| Public read-only endpoints | 100 req/day | `/news/india`, `/news/google`, `/market/vix`, `/market/fiidii` | `prl:` |
+
+Gate-token holders bypass **both** counters (premium = unlimited).
+
+Why two counters: a typical scan touches each public endpoint ~1× (broad-feed map fetched once at scan start, VIX + FII/DII similarly). 100/day comfortably covers 5-10 scans/day for an unauthenticated user but caps a runaway script before it can drain Cloudflare Workers' free 100k req/day budget. The lower 20/day on the generic proxy is intentional — that path forwards arbitrary Yahoo/NSE traffic, so the threshold doubles as a premium-conversion lever.
+
+`/dhan/instruments` and `/github/releases` are **not** rate-limited because they're rare (once per session / once per 24h) and KV-cached at the route level.
 
 ---
 
@@ -240,10 +249,11 @@ Dhan's public API does **not** expose news (their watchlist news is a web-only f
 
 | Source | Cost | Coverage | Integration effort | In use? |
 |---|---|---|---|:---:|
-| **Broad Indian RSS** (Moneycontrol + LiveMint + Economic Times + Business Standard) | Free | Indian market, ~80-120 symbols/scan | Low — multi-feed RSS parsing at the Worker, scored client-side | ✅ Tier 4 (`/news/india`) |
+| **Broad Indian RSS** (Moneycontrol + LiveMint + Economic Times) | Free | Indian market, ~80-120 symbols/scan | Low — multi-feed RSS parsing at the Worker, scored client-side. Moneycontrol feeds use Googlebot UA (default UA gets empty bodies from CF egress IPs). | ✅ Tier 4 (`/news/india`) |
 | **Google News RSS** | Free | Any query, global | Low — RSS parsing, free-text sentiment | ✅ Tier 3 (`/news/google`, per-symbol, premium-gated) |
 | **NSE corporate announcements** | Free | Official filings only | Medium — XML parsing, NSE cookie warm-up | ❌ Candidate for next iteration |
 | **Yahoo Finance search / per-symbol news** | Free | 500 errors on Indian symbols, generic global feed | Tried, removed | ❌ Dropped — `/news/yahoo` retired |
+| **Business Standard RSS** | Free | Indian market | Tried, removed | ❌ Dropped — HTTP 403 from CF egress even on Googlebot UA |
 | **NewsAPI.org** | Free tier 100/day | Global English news | Low — REST API | ❌ Cap too low for batch scans |
 | **Marketaux** | Free tier 100/day | Indian + global, pre-tagged | Low — REST API | ❌ Cap too low for batch scans |
 | **Finnhub** | Free 60/min | India coverage, English-only | Low — REST API | ❌ Candidate if Google tier degrades further |

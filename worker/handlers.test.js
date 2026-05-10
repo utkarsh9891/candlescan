@@ -228,7 +228,6 @@ describe('handleIndiaNews', () => {
       if (u.includes('moneycontrol.com')) title = 'MC: Reliance up';
       else if (u.includes('livemint.com')) title = 'Mint: TCS in focus';
       else if (u.includes('economictimes.indiatimes.com')) title = 'ET: HDFC rallies';
-      else if (u.includes('business-standard.com')) title = 'BS: INFY hits high';
       return new Response(
         `<rss><channel><item><title>${title}</title></item></channel></rss>`,
         { status: 200 },
@@ -241,7 +240,30 @@ describe('handleIndiaNews', () => {
     expect(publishers.has('Moneycontrol')).toBe(true);
     expect(publishers.has('LiveMint')).toBe(true);
     expect(publishers.has('Economic Times')).toBe(true);
-    expect(publishers.has('Business Standard')).toBe(true);
+    // Business Standard was dropped (HTTP 403 from CF egress even on Googlebot UA)
+    expect(publishers.has('Business Standard')).toBe(false);
+  });
+
+  it('sends Googlebot UA for Moneycontrol feeds, default UA for others', async () => {
+    // Moneycontrol returns empty bodies to the default `candlescan-proxy`
+    // UA when called from CF egress IPs. Per-feed `ua` override sends
+    // Googlebot/2.1 instead, which they whitelist for indexing. Other
+    // publishers don't need the override.
+    const sentUserAgents = [];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      sentUserAgents.push({ url: String(url), ua: init?.headers?.['User-Agent'] });
+      return new Response('<rss><channel><item><title>x</title></item></channel></rss>', { status: 200 });
+    });
+    const kv = makeKvStub();
+    await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
+
+    const mcCalls = sentUserAgents.filter((c) => c.url.includes('moneycontrol.com'));
+    expect(mcCalls.length).toBeGreaterThan(0);
+    for (const c of mcCalls) expect(c.ua).toMatch(/Googlebot/);
+
+    const livemintCalls = sentUserAgents.filter((c) => c.url.includes('livemint.com'));
+    expect(livemintCalls.length).toBeGreaterThan(0);
+    for (const c of livemintCalls) expect(c.ua).not.toMatch(/Googlebot/);
   });
 
   it('UNAVAILABLE sentinel when all feeds 502 + no cache', async () => {
@@ -359,6 +381,95 @@ describe('handleIndiaNews — link extraction', () => {
     const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
     const body = await resp.json();
     expect(body.items[0].link).toBe('https://www.moneycontrol.com/news/business/reliance-q4-12345.html');
+  });
+});
+
+// ───────────────────────────────────────────────────────────
+// Public-endpoint rate limiting (DOS guard)
+// ───────────────────────────────────────────────────────────
+describe('publicEndpointGuard — DOS protection on /news/* + /market/*', () => {
+  // Helper: send a request with a CF-Connecting-IP header so the
+  // counter has a stable key (otherwise every request shares the
+  // 'unknown' bucket).
+  function makeIpRequest(path, ip) {
+    return new Request(`https://candlescan-proxy.workers.dev${path}`, {
+      method: 'GET',
+      headers: {
+        Origin: 'https://utkarsh9891.github.io',
+        'CF-Connecting-IP': ip,
+      },
+    });
+  }
+
+  // Mirror the worker's IP-hash logic so we can pre-seed the counter
+  // at the exact key the guard will read on the next request.
+  async function ipKey(ip, prefix = 'prl') {
+    const data = new TextEncoder().encode(ip);
+    const hash = await crypto.subtle.digest('SHA-256', data);
+    const hex = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const today = new Date().toISOString().slice(0, 10);
+    return `${prefix}:${hex.slice(0, 16)}:${today}`;
+  }
+
+  it('rejects with 429 when the per-IP daily limit is already exceeded', async () => {
+    // Pre-seed the rate-limit KV with a count at the limit so the next
+    // request flips to 429 without us having to issue 100 actual requests.
+    const candlescanKv = makeKvStub();
+    const rateLimitKv = makeKvStub();
+    rateLimitKv.store.set(await ipKey('1.2.3.4'), '100'); // == PUBLIC_DAILY_LIMIT
+
+    globalThis.fetch = vi.fn(async () => new Response('<rss></rss>', { status: 200 }));
+
+    const resp = await worker.fetch(
+      makeIpRequest('/news/india', '1.2.3.4'),
+      { CANDLESCAN_KV: candlescanKv, RATE_LIMIT: rateLimitKv },
+    );
+    expect(resp.status).toBe(429);
+    expect(resp.headers.get('X-RateLimit-Remaining')).toBe('0');
+    const body = await resp.json();
+    expect(body.error).toMatch(/limit exceeded/i);
+    // Upstream was NOT called — request short-circuited at the guard.
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('allows the request when the per-IP counter is below the limit', async () => {
+    const candlescanKv = makeKvStub();
+    const rateLimitKv = makeKvStub();
+    // No seed — counter starts at 0, well below the 100/day cap.
+    globalThis.fetch = vi.fn(async () => new Response('<rss><channel><item><title>x</title></item></channel></rss>', { status: 200 }));
+    const resp = await worker.fetch(
+      makeIpRequest('/news/india', '5.6.7.8'),
+      { CANDLESCAN_KV: candlescanKv, RATE_LIMIT: rateLimitKv },
+    );
+    expect(resp.status).toBe(200);
+  });
+
+  it('does NOT rate-limit non-public paths (/dhan/instruments, /github/releases)', async () => {
+    // Pre-seed the KV way over the limit — these paths should still go
+    // through because they're not in PUBLIC_RATE_LIMITED_PATHS.
+    const candlescanKv = makeKvStub();
+    const rateLimitKv = makeKvStub();
+    rateLimitKv.store.set(await ipKey('1.2.3.4'), '99999');
+
+    globalThis.fetch = vi.fn(async () => jsonResp([{ tag_name: 'v1.0.0' }]));
+    const resp = await worker.fetch(
+      makeIpRequest('/github/releases?repo=foo/bar', '1.2.3.4'),
+      { CANDLESCAN_KV: candlescanKv, RATE_LIMIT: rateLimitKv },
+    );
+    expect(resp.status).toBe(200);
+  });
+
+  it('skips rate limit entirely when RATE_LIMIT KV is not bound', async () => {
+    // Backward compat: if env.RATE_LIMIT is missing the guard early-returns
+    // allowed=true. This is what protects every test in this file from
+    // needing a RATE_LIMIT binding.
+    const candlescanKv = makeKvStub();
+    globalThis.fetch = vi.fn(async () => new Response('<rss><channel><item><title>x</title></item></channel></rss>', { status: 200 }));
+    const resp = await worker.fetch(
+      makeIpRequest('/news/india', '1.2.3.4'),
+      { CANDLESCAN_KV: candlescanKv }, // no RATE_LIMIT
+    );
+    expect(resp.status).toBe(200);
   });
 });
 
