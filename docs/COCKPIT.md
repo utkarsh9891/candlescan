@@ -328,20 +328,63 @@ paths, npm scripts, log lines). The other terms are just synonyms.
 The cockpit's scan loop fetches OHLCV from one of three sources,
 configured via `scan.dataSource` in `secrets.json`:
 
-| Source | Status | Latency | Auth | Notes |
+| Source | Status | Latency | Auth model | Notes |
 |---|---|---|---|---|
-| `yahoo` (default) | ✅ live | ~1 min delay | none | what ships today |
-| `dhan` | 🚧 planned | real-time | clientId + PIN + TOTP at boot | creds CLI ships today (`cockpit:dhan`); the live OHLCV fetcher lands in the next iteration |
-| `zerodha` | 🚧 planned | real-time | apiKey + apiSecret + daily accessToken | same as above (`cockpit:zerodha`) |
+| `yahoo` (default) | ✅ live | ~1 min delay | none | anonymous, no creds, fallback when broker unavailable |
+| `dhan` | ✅ live | real-time | clientId + PIN stored, TOTP prompted at boot | needs `cockpit:dhan` first; not compatible with launchd auto-start (TOTP needs a TTY) |
+| `zerodha` | ✅ live | real-time | apiKey + apiSecret + daily accessToken | needs `cockpit:zerodha` first; refresh token daily via `cockpit:zerodha -- access-token` |
 
-**Today** the scan loop ignores `scan.dataSource` and always uses
-Yahoo. The config field is wired so that storing Dhan/Zerodha creds via
-the CLI commands today is forward setup — when the live fetchers land,
-flipping `scan.dataSource = "dhan"` (or `"zerodha"`) is the only
-change needed in your config.
+Switch sources by editing `scan.dataSource` in `secrets.json` (or via
+`cockpit:init` re-run). The cockpit talks to each broker's REST API
+directly — **no Cloudflare Worker hop** — so dropping the worker out of
+the cockpit's path entirely is intentional and shipped.
 
-If the 1-min Yahoo delay is a problem, the live broker fetchers move
-up the priority list — flag it.
+### Dhan boot flow
+
+Configured Dhan + dataSource=dhan → at every cockpit boot:
+
+1. Reads `dhan.clientId` + `dhan.pin` from secrets (decrypts via gate
+   if set).
+2. Prompts for the current 6-digit TOTP from your authenticator app.
+3. Exchanges (clientId + pin + TOTP) for a 24-hour access token via
+   `https://auth.dhan.co/app/generateAccessToken`.
+4. Holds the access token in memory for the cockpit's lifetime —
+   never written to disk.
+
+If the cockpit is started non-interactively (launchd, `nohup`, anything
+without a TTY) **and** `dataSource=dhan`, boot fails with a clear
+message. Dhan + launchd are mutually exclusive — switch to
+`yahoo` / `zerodha` for auto-start.
+
+### Zerodha boot flow
+
+Configured Zerodha + dataSource=zerodha → at every cockpit boot:
+
+1. Reads `zerodha.apiKey` + `zerodha.accessToken` from secrets
+   (decrypts via gate if set).
+2. Validates both are present, errors out cleanly if not.
+3. Uses them on every Kite API call as `Authorization: token <key>:<token>`.
+
+Zerodha access tokens expire daily (around 06:00 IST). Each morning,
+generate a fresh one via the PWA Settings OAuth flow and paste it in:
+
+```bash
+npm run cockpit:zerodha -- access-token
+```
+
+### Instrument-map caching
+
+Both brokers need a symbol → broker-id map for OHLCV calls (Kite uses
+`instrument_token`, Dhan uses `securityId`). The cockpit caches these
+maps to disk on first use:
+
+| Broker | Cache file | TTL | Source |
+|---|---|---|---|
+| Zerodha | `~/.candlescan/cockpit/cache/zerodha-instruments.json` | 24h | `GET https://api.kite.trade/instruments/NSE` (~3 MB CSV) |
+| Dhan | `~/.candlescan/cockpit/cache/dhan-instruments.json` | 7 days | `GET https://images.dhan.co/api-data/api-scrip-master.csv` (~32 MB) |
+
+First boot on a fresh setup spends a few extra seconds downloading +
+parsing. Subsequent boots load instantly from the cache.
 
 ## Configurable knobs (`secrets.json`)
 

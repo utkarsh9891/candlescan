@@ -21,7 +21,6 @@ import { baseUrl } from './config.mjs';
 import { detectPatterns } from '../../src/engine/patterns-v2.js';
 import { detectLiquidityBox } from '../../src/engine/liquidityBox-v2.js';
 import { computeRiskScore } from '../../src/engine/risk-v2.js';
-import { fetchLiveCandles } from './lib/yahoo.mjs';
 import { getIndexSymbols } from './lib/symbols.mjs';
 import { marketState } from './lib/market-hours.mjs';
 import { recordSignal } from './lib/state.mjs';
@@ -31,7 +30,7 @@ const ACTIONABLE = new Set(['STRONG BUY', 'BUY', 'STRONG SHORT', 'SHORT']);
 const FETCH_CONCURRENCY = 5;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
-export async function runScan({ cfg, provider, scanCount, eventBus }) {
+export async function runScan({ cfg, provider, scanCount, eventBus, dataSource }) {
   const ms = marketState();
   if (!ms.open) {
     log.scan(
@@ -52,14 +51,20 @@ export async function runScan({ cfg, provider, scanCount, eventBus }) {
   const t0 = Date.now();
   log.scan(
     `#${scanCount} ${cfg.scan.index} (${symbols.length} stocks) ` +
-      `tf=${cfg.scan.timeframe} conf>=${cfg.scan.minConfidence}`,
+      `src=${dataSource?.name || 'yahoo'} tf=${cfg.scan.timeframe} conf>=${cfg.scan.minConfidence}`,
   );
+
+  const fetchFn = dataSource?.fetchLiveCandles;
+  if (typeof fetchFn !== 'function') {
+    log.err('no data-source fetcher configured — check scan.dataSource in secrets.json');
+    return;
+  }
 
   const results = await pMap(
     symbols,
     async (sym) => {
       try {
-        const data = await fetchLiveCandles(sym, cfg.scan.timeframe);
+        const data = await fetchFn(sym, cfg.scan.timeframe);
         if (!data?.candles?.length || data.candles.length < 10) return null;
         return { sym, ...data };
       } catch (e) {

@@ -18,6 +18,7 @@ import log from './log.mjs';
 import { runScan } from './scan.mjs';
 import { startServer, makeEventBus } from './lib/server.mjs';
 import { runExitMonitor } from './lib/exit-monitor.mjs';
+import { setupDataSource } from './lib/data-source.mjs';
 import { dispatch as dispatchCli } from './cli.mjs';
 
 const DEFAULT_EXIT_INTERVAL_SEC = 30;
@@ -53,6 +54,17 @@ async function main() {
       `tf=${cfg.scan.timeframe} conf>=${cfg.scan.minConfidence} interval=${cfg.scan.intervalSec}s`,
   );
   log.boot(`host=${baseUrl(cfg)}`);
+
+  // Resolve the broker data source (Yahoo / Dhan / Zerodha). For Dhan
+  // this prompts for TOTP interactively and exchanges for an in-memory
+  // access token. Failure here aborts boot.
+  let dataSource;
+  try {
+    dataSource = await setupDataSource(cfg);
+  } catch (e) {
+    log.err(`data source: ${e.message}`);
+    process.exit(1);
+  }
 
   const provider = makeNtfyProvider({
     server: cfg.ntfy.server,
@@ -90,7 +102,7 @@ async function main() {
     scanInFlight = true;
     scanCount += 1;
     try {
-      await runScan({ cfg, provider, scanCount, eventBus });
+      await runScan({ cfg, provider, scanCount, eventBus, dataSource });
     } catch (e) {
       log.err(`scan #${scanCount} crashed: ${e.message}`);
     } finally {

@@ -40,7 +40,14 @@ export async function run() {
   const cur = readSecrets();
   const ok = !!cur.ntfy?.topic && !!cur.host?.name;
   console.log(`${ok ? '✓' : '✗'} secrets:  ${secretsPath()}`);
-  console.log(`    engine=${cur.scan?.engine || '?'} index="${cur.scan?.index || '?'}" tf=${cur.scan?.timeframe || '?'} conf>=${cur.scan?.minConfidence ?? '?'}`);
+  const ds = cur.scan?.dataSource || 'yahoo';
+  console.log(`    engine=${cur.scan?.engine || '?'} index="${cur.scan?.index || '?'}" tf=${cur.scan?.timeframe || '?'} conf>=${cur.scan?.minConfidence ?? '?'} src=${ds}`);
+  if (ds === 'dhan' && (!cur.dhan?.clientId || !cur.dhan?.pin)) {
+    console.log(`    ⚠ scan.dataSource=dhan but dhan creds incomplete — run: npm run cockpit:dhan`);
+  }
+  if (ds === 'zerodha' && (!cur.zerodha?.apiKey || !cur.zerodha?.accessToken)) {
+    console.log(`    ⚠ scan.dataSource=zerodha but zerodha creds incomplete — run: npm run cockpit:zerodha`);
+  }
   if (cur.gate?.salt) console.log(`    gate:  SET (${cur.gate.algo})`);
   if (cur.dhan?.clientId) console.log(`    dhan:  configured (clientId=${cur.dhan.clientId})`);
   if (cur.zerodha?.apiKey) console.log(`    zerodha: configured (apiKey=${cur.zerodha.apiKey.slice(0, 6)}…)`);
