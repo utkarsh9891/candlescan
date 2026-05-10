@@ -20,11 +20,11 @@ surface on the phone.
   - [`cockpit:config`](#cockpitconfig)
   - [`cockpit:dhan`](#cockpitdhan)
   - [`cockpit:zerodha`](#cockpitzerodha)
-  - [`cockpit:gate`](#cockpitgate)
   - [`cockpit:rotate-topic`](#cockpitrotate-topic)
   - [`cockpit:logs`](#cockpitlogs)
   - [`cockpit:help`](#cockpithelp)
 - [Auto-start at 09:08 IST (launchd)](#auto-start-at-0908-ist-launchd)
+- [How this differs from the PWA's gate](#how-this-differs-from-the-pwas-gate)
 - [Configurable knobs (`secrets.json`)](#configurable-knobs-secretsjson)
 - [Files + data layout](#files--data-layout)
 - [Trade flow walkthrough](#trade-flow-walkthrough)
@@ -92,18 +92,16 @@ sudo scutil --set LocalHostName cockpit
 # 3. Run the interactive setup wizard.
 npm run cockpit:init
 
-# 4. (optional, but nice-to-have for security) Set a passphrase that
-#    encrypts broker creds at rest in secrets.json.
-npm run cockpit:gate set
-
-# 5. (optional) Configure broker creds for live data.
+# 4. (optional, forward-looking) Configure broker creds. The cockpit's scan
+#    path currently uses anonymous Yahoo and does NOT yet read these — this
+#    is preparation for the planned broker-data path.
 npm run cockpit:dhan
 npm run cockpit:zerodha
 
-# 6. Start the daemon.
+# 5. Start the daemon.
 npm run cockpit
 
-# 7. (optional) Auto-start every weekday at 09:08 IST.
+# 6. (optional) Auto-start every weekday at 09:08 IST.
 bash scripts/cockpit/launchd/install.sh
 ```
 
@@ -141,9 +139,8 @@ npm run cockpit
 ```
 
 Starts the daemon. Boots all three loops (scan / exit-monitor / HTTP).
-If a [gate](#cockpitgate) is set, prompts for the passphrase. If the
-process is started non-interactively (e.g. via launchd) **and** a gate
-is set, it errors out with a clear message — gates require a TTY.
+Loads secrets directly from `~/.candlescan/cockpit/secrets.json`
+(mode 0600).
 
 ### `cockpit:init`
 
@@ -185,47 +182,29 @@ paste into a bug report.
 
 ```bash
 npm run cockpit:dhan                    # set / update creds
-npm run cockpit:dhan -- show            # show stored fields (redacted)
+npm run cockpit:dhan -- show            # show stored fields (redacted summary)
 npm run cockpit:dhan -- clear           # remove all Dhan creds
 npm run cockpit:dhan -- --help          # full help
 ```
 
-Stores: clientId, partnerId (optional), pin (hidden, encrypted if
-[gate](#cockpitgate) is set). **TOTP is not stored** — when the daemon
-launches and detects Dhan is configured, it prompts for the current TOTP
-interactively, exchanges (clientId + pin + TOTP) for a 24-hour access
-token via the Dhan auth endpoint, and holds the token in memory for the
-session. This is why a Dhan-configured cockpit cannot fully auto-start
-via launchd today (no TTY for TOTP).
+Stores: clientId, partnerId (optional), pin (hidden in the file, mode 0600).
+**TOTP is not stored** — when the daemon launches and detects Dhan is
+configured, it prompts for the current TOTP interactively, exchanges
+(clientId + pin + TOTP) for a 24-hour access token via the Dhan auth
+endpoint, and holds the token in memory for the session.
 
 ### `cockpit:zerodha`
 
 ```bash
 npm run cockpit:zerodha                       # set apiKey + apiSecret + accessToken
 npm run cockpit:zerodha -- access-token       # rotate ONLY the daily access token
-npm run cockpit:zerodha -- show               # show stored fields (redacted)
+npm run cockpit:zerodha -- show               # show stored fields (redacted summary)
 npm run cockpit:zerodha -- clear              # remove all Zerodha creds
 npm run cockpit:zerodha -- --help             # full help
 ```
 
 Zerodha access tokens expire daily around 06:00 IST. Use `access-token`
-each morning rather than re-running the full setup. If a [gate](#cockpitgate)
-is set, `apiSecret` and `accessToken` are encrypted at rest.
-
-### `cockpit:gate`
-
-```bash
-npm run cockpit:gate                          # show status (default)
-npm run cockpit:gate -- set                   # set / change passphrase
-npm run cockpit:gate -- clear                 # remove gate (decrypts)
-npm run cockpit:gate -- test                  # verify a passphrase
-npm run cockpit:gate -- --help                # full help
-```
-
-Optional passphrase that encrypts Dhan PIN + Zerodha apiSecret/accessToken
-in `secrets.json`. Crypto: PBKDF2-SHA256 (200k iter) → AES-256-GCM (12-byte
-IV, embedded auth tag). Once set, the daemon prompts at startup. **Launchd
-auto-start does not work while a gate is set** — pick one or the other.
+each morning rather than re-running the full setup.
 
 ### `cockpit:rotate-topic`
 
@@ -233,16 +212,15 @@ auto-start does not work while a gate is set** — pick one or the other.
 npm run cockpit:rotate-topic
 ```
 
-Generates a new random ntfy topic, sends a notification to the **old** topic
-announcing the new name (so your phone's ntfy app gets the message), then
-updates `secrets.json`. After running:
+Generates a new random ntfy topic locally, prints it to your terminal,
+and updates `secrets.json`. **Does not push anything to the old topic** —
+if the old topic was leaked, sending the new value over that channel
+would just leak the new one too. After running:
 
-1. Subscribe to the new topic in the ntfy app on your phone.
-2. Unsubscribe from the old.
-3. Update your password manager.
+1. Copy the new topic from your terminal into your password manager.
+2. ntfy app on phone → Subscribe to topic → paste the new topic.
+3. Unsubscribe from the old.
 4. Restart the daemon.
-
-Cheap and clean — rotate any time you suspect a topic leak.
 
 ### `cockpit:logs`
 
@@ -289,6 +267,24 @@ sudo pmset repeat cancel
 
 [plist]: ../scripts/cockpit/launchd/com.candlescan.cockpit.plist
 
+## How this differs from the PWA's gate
+
+There are two distinct security surfaces in the project. They are
+**unrelated** despite both using the word "gate":
+
+| | **PWA gate** | **Cockpit secrets** |
+|---|---|---|
+| Where it lives | Cloudflare Worker (`GATE_PASSPHRASE_HASH` secret + `GATE_PUBLIC_KEY` in KV) + browser localStorage vault | `~/.candlescan/cockpit/secrets.json` on your Mac |
+| What it protects | Premium-tier broker access (Zerodha / Dhan via Worker proxy) for the deployed PWA | ntfy topic + (forward-looking) Dhan / Zerodha creds for the local cockpit |
+| Crypto | RSA-OAEP-2048 (vault) + SHA-256 hash (passphrase) | none beyond Unix file permissions (mode 0600) |
+| Configured via | [`scripts/rotate-keys.sh`](../scripts/rotate-keys.sh) → `npm run keys:rotate` | the cockpit CLI (`npm run cockpit:init`, `cockpit:dhan`, etc.) |
+| Required for the cockpit? | **No** — the cockpit talks to Yahoo + NSE directly, no Worker round-trip needed | n/a |
+
+The cockpit does **not** call the PWA's gate-protected Worker endpoints
+today. It talks to Yahoo and NSE directly from your Mac. So `keys:rotate`
+is unrelated to cockpit operation; it's only relevant if you also use
+the deployed PWA's premium-tier broker integrations.
+
 ## Configurable knobs (`secrets.json`)
 
 | Path | Default | Purpose |
@@ -304,11 +300,10 @@ sudo pmset repeat cancel
 | `scan.timeframe` | `5m` | `1m` / `5m` / `15m` |
 | `exit.intervalSec` | `30` | exit-monitor poll frequency |
 | `dhan.clientId` | — | Dhan client ID (set via `cockpit:dhan`) |
-| `dhan.pin` | — | Dhan PIN (encrypted if gate is set) |
+| `dhan.pin` | — | Dhan PIN (file is mode 0600) |
 | `zerodha.apiKey` | — | Zerodha API key |
-| `zerodha.apiSecret` | — | Zerodha API secret (encrypted if gate is set) |
-| `zerodha.accessToken` | — | Zerodha daily access token (encrypted if gate is set) |
-| `gate.salt`, `gate.verifier` | — | gate config (set via `cockpit:gate`) |
+| `zerodha.apiSecret` | — | Zerodha API secret |
+| `zerodha.accessToken` | — | Zerodha daily access token |
 
 ## Files + data layout
 
@@ -325,7 +320,7 @@ Source layout:
 scripts/cockpit/
   index.mjs                       # entry: daemon (or dispatch to CLI if args)
   cli.mjs                         # CLI dispatcher with help text
-  config.mjs                      # secrets loader + interactive gate decrypt
+  config.mjs                      # secrets loader + defaults + validation
   log.mjs                         # ANSI-colored categorized logger + file mirror
   notify.mjs                      # provider abstraction (ntfy primary)
   scan.mjs                        # scan loop body
@@ -341,9 +336,8 @@ scripts/cockpit/
     exit-monitor.mjs              # SL/target/EOD/trail logic
     prompts.mjs                   # readline + hidden-input helpers
     secrets-rw.mjs                # atomic secrets.json read/write
-    gate.mjs                      # PBKDF2 + AES-GCM encryption
   commands/
-    init.mjs config.mjs dhan.mjs zerodha.mjs gate.mjs
+    init.mjs config.mjs dhan.mjs zerodha.mjs
     rotate-topic.mjs status.mjs logs.mjs
   launchd/
     com.candlescan.cockpit.plist  # template
@@ -385,9 +379,12 @@ edge cases or bailing out of a position the rules wouldn't catch.
   at the first tranche target as single-leg; per-tranche partial exits TODO.
 - **Confidence-tier sizing** per [tradeDecision.js][td]'s `DEFAULT_SIZE_TIERS`.
   Cockpit currently uses a flat Rs 1L base.
-- **Gate + launchd are mutually exclusive.** Gates require an interactive
-  TTY for the passphrase prompt; launchd has no TTY. Future work: keychain
-  integration so the gate key can be unlocked non-interactively.
+- **Encryption-at-rest of broker creds.** Today secrets.json relies on Unix
+  file permissions (mode 0600). Once the cockpit's scan path actually
+  consumes Dhan / Zerodha creds (Yahoo-only today), an at-rest encryption
+  pass becomes worth adding. Earlier iteration shipped a PBKDF2 + AES-GCM
+  gate command but it was removed because it was protecting unused fields
+  and confused the "PWA gate" naming — see the table above.
 - **NSE holiday calendar is hardcoded** for 2026 + 2027 in
   [holidays.mjs][hol]. Refresh annually from NSE's official list.
 

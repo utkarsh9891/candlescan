@@ -61,11 +61,12 @@ Full cockpit docs: [`docs/COCKPIT.md`](docs/COCKPIT.md).
 | `npm run cockpit:init` | interactive first-run setup wizard |
 | `npm run cockpit:dhan` | configure Dhan broker creds (CLI) |
 | `npm run cockpit:zerodha` | configure Zerodha broker creds (CLI) |
-| `npm run cockpit:gate` | manage optional cred-encryption passphrase |
-| `npm run cockpit:rotate-topic` | rotate the ntfy push topic |
+| `npm run cockpit:rotate-topic` | rotate the ntfy push topic locally (no remote notify) |
 | `npm run cockpit:status` | cockpit health summary |
 | `npm run cockpit:logs` | print/follow today's cockpit log |
 | `npm run cockpit:help` | full CLI help |
+| `npm run keys:rotate` | rotate CF Worker RSA keys + gate passphrase hash (PWA premium gate) |
+| `npm run kv:audit` | audit `CANDLESCAN_KV` namespace (active vs stale keys; `--clean` to delete stale) |
 
 CLI docs: see `--help` on any command, e.g. `npm run cockpit:help -- dhan`.
 

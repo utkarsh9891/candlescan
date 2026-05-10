@@ -1,13 +1,11 @@
 /**
- * `cockpit rotate-topic` — generate a new ntfy topic, notify the OLD
- * topic so your phone-side ntfy app gets the new name in a notification,
- * then update secrets.json.
+ * `cockpit rotate-topic` — generate a new ntfy topic and update secrets.json.
  *
- * After this runs you must:
- *   1. Subscribe to the new topic in the ntfy app on your phone.
- *   2. Unsubscribe from the old one.
- *   3. Update your password manager.
- *   4. Restart the cockpit daemon.
+ * Important: this command does NOT notify any ntfy channel. If the old
+ * topic was leaked, sending the new topic over the old one would just
+ * leak the new topic too. The new topic is printed to the local terminal
+ * only; copy it from there into your password manager and the ntfy app
+ * on your phone.
  */
 
 import crypto from 'node:crypto';
@@ -15,13 +13,17 @@ import { confirm } from '../lib/prompts.mjs';
 import { readSecrets, writeSecrets } from '../lib/secrets-rw.mjs';
 
 export const help = `
-cockpit rotate-topic — generate a new ntfy topic and notify the old one
+cockpit rotate-topic — generate a new ntfy topic locally (no remote notify)
 
-Generates 24 random hex chars, sends a notification to the OLD topic
-announcing the new name (so your phone gets the message), then writes
-the new topic to secrets.json. You then resubscribe on your phone.
+Generates a fresh random topic, prints it to this terminal, and updates
+secrets.json. Does NOT push anything to the old topic — if the old topic
+was compromised, that channel is treated as untrusted.
 
-If you suspect a topic leak, rotate. Cheap and clean.
+After running:
+  1. Copy the new topic into your password manager.
+  2. ntfy app → Subscribe to topic → paste the new topic.
+  3. Unsubscribe from the old topic in the ntfy app.
+  4. Restart the cockpit daemon.
 `.trim();
 
 export async function run() {
@@ -32,57 +34,26 @@ export async function run() {
     return;
   }
   const newTopic = 'candlescan-' + crypto.randomBytes(12).toString('hex');
-  const server = cur.ntfy?.server || 'https://ntfy.sh';
 
   console.log(`current: ${oldTopic.slice(0, 12)}…${oldTopic.slice(-4)}`);
   console.log(`new:     ${newTopic}`);
-  console.log('  → save the new value in your password manager BEFORE confirming.');
+  console.log('');
+  console.log('Save the new topic in your password manager BEFORE confirming.');
+  console.log('No remote notification is sent — the new value lives only here.');
+  console.log('');
 
-  const ok = await confirm('Send announcement to old topic and rotate?', false);
+  const ok = await confirm('Write new topic to secrets.json?', false);
   if (!ok) {
-    console.log('aborted.');
+    console.log('aborted; topic unchanged.');
     return;
-  }
-
-  // Notify the OLD topic so the user's phone receives the new name once.
-  try {
-    const res = await fetch(server, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        topic: oldTopic,
-        title: 'ntfy topic rotated',
-        message: `New topic: ${newTopic}\nSubscribe in the ntfy app, then unsubscribe from this one.`,
-        priority: 5,
-        tags: ['key', 'rotating_light'],
-      }),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      console.log(`⚠ old-topic notify failed: HTTP ${res.status} ${text}`.trim());
-      const proceed = await confirm('Continue with rotation anyway?', false);
-      if (!proceed) {
-        console.log('aborted; topic unchanged.');
-        return;
-      }
-    } else {
-      console.log('✓ announced to old topic.');
-    }
-  } catch (e) {
-    console.log(`⚠ old-topic notify failed: ${e.message}`);
-    const proceed = await confirm('Continue with rotation anyway?', false);
-    if (!proceed) {
-      console.log('aborted; topic unchanged.');
-      return;
-    }
   }
 
   const next = { ...cur, ntfy: { ...cur.ntfy, topic: newTopic } };
   writeSecrets(next);
   console.log('✓ secrets.json updated.');
-  console.log(`\nNext steps on your phone:`);
+  console.log('');
+  console.log('Next steps on your phone:');
   console.log(`  1. ntfy app → Subscribe to topic → ${newTopic}`);
-  console.log(`  2. Unsubscribe from the old topic.`);
-  console.log(`Then restart the daemon:  npm run cockpit`);
+  console.log('  2. Unsubscribe from the old topic.');
+  console.log('Then restart the daemon:  npm run cockpit');
 }
