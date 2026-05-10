@@ -125,21 +125,23 @@ describe('newsCacheLocal', () => {
     expect(localStorage.getItem(key)).toBeNull();
   });
 
-  it('purgeLegacyEntries() removes pre-v2 entries but leaves v2 + unrelated keys', () => {
-    // Seed legacy entries (the bad-cache state on devices that scanned
-    // pre-Worker-filter), a v2 entry, and an unrelated app key.
-    localStorage.setItem('candlescan_news:RELIANCE:2026-05-08', JSON.stringify({ score: 1, headlines: [{ title: 'old' }] }));
+  it('purgeLegacyEntries() removes pre-v3 entries (v1 + v2) but leaves v3 + unrelated keys', () => {
+    // Seed legacy entries from both prior versions:
+    //   v1 (no version suffix) — Yahoo generic-feed garbage era
+    //   v2 (`_v2`)             — Yahoo-tagged headlines pre-PR drop
+    // Plus a current v3 entry and an unrelated app key.
+    localStorage.setItem('candlescan_news:RELIANCE:2026-05-08', JSON.stringify({ score: 1, headlines: [{ title: 'old-v1' }] }));
     localStorage.setItem('candlescan_news:RELIANCE:2026-05-08:meta', '{}');
-    localStorage.setItem('candlescan_news:TCS:2026-05-08', JSON.stringify({ score: 1, headlines: [{ title: 'old' }] }));
-    localStorage.setItem('candlescan_news_v2:INFY:2026-05-09', JSON.stringify({ score: 0.5, headlines: [{ title: 'new' }], expiresAt: Date.now() + 60000 }));
+    localStorage.setItem('candlescan_news_v2:TCS:2026-05-08', JSON.stringify({ score: 1, headlines: [{ title: 'old-v2' }] }));
+    localStorage.setItem('candlescan_news_v3:INFY:2026-05-09', JSON.stringify({ score: 0.5, headlines: [{ title: 'new' }], expiresAt: Date.now() + 60000 }));
     localStorage.setItem('candlescan_other:KEY', 'untouched');
 
     _internals.purgeLegacyEntries();
 
     expect(localStorage.getItem('candlescan_news:RELIANCE:2026-05-08')).toBeNull();
     expect(localStorage.getItem('candlescan_news:RELIANCE:2026-05-08:meta')).toBeNull();
-    expect(localStorage.getItem('candlescan_news:TCS:2026-05-08')).toBeNull();
-    expect(localStorage.getItem('candlescan_news_v2:INFY:2026-05-09')).not.toBeNull();
+    expect(localStorage.getItem('candlescan_news_v2:TCS:2026-05-08')).toBeNull();
+    expect(localStorage.getItem('candlescan_news_v3:INFY:2026-05-09')).not.toBeNull();
     expect(localStorage.getItem('candlescan_other:KEY')).toBe('untouched');
   });
 });

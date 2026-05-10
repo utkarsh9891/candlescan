@@ -3,9 +3,9 @@
  * Warm the news sentiment cache for a given date.
  *
  * Usage:
- *   node scripts/warm-news.mjs                      # today, Moneycontrol
+ *   node scripts/warm-news.mjs                      # today, broad Indian feeds
  *   node scripts/warm-news.mjs --date 2026-04-10    # specific date
- *   node scripts/warm-news.mjs --source both        # MC + Google per-symbol
+ *   node scripts/warm-news.mjs --source both        # broad-feed + Google per-symbol
  *   node scripts/warm-news.mjs --source google      # Google only
  *
  * Writes: cache/news/<YYYY-MM-DD>.json  (symbol → score in [-1, +1])
@@ -30,7 +30,7 @@ const NEWS_DIR = path.join(REPO_ROOT, 'cache', 'news');
 function parseArgs() {
   const args = process.argv.slice(2);
   let date = new Date().toISOString().slice(0, 10);
-  let source = 'moneycontrol';
+  let source = 'india';
   let index = 'NIFTY TOTAL MARKET';
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--date' && args[i + 1]) { date = args[++i]; continue; }

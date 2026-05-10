@@ -4,13 +4,14 @@
  * Counterpart to scripts/warm-news.mjs (which populates cache/ for
  * backtest use). This module fetches the same three data layers in
  * real time for live scanning in the browser, via the CF Worker proxy
- * (NSE + Moneycontrol + Yahoo are all CORS-blocked from the browser).
+ * (NSE + the Indian news publishers are all CORS-blocked from the browser).
  *
  * Layers fetched here:
  *   1. India VIX close → regime classification
  *   2. FII/DII net values → institutional flow classification
- *   3. Moneycontrol news items → parsed + scored client-side into
- *      a symbol → sentiment map
+ *   3. Broad Indian news items (Moneycontrol + LiveMint + Economic
+ *      Times + Business Standard merged at the Worker) → parsed +
+ *      scored client-side into a symbol → sentiment map
  *
  * Caching strategy — per layer, 10-minute TTL:
  *   - Previously a single day-keyed cache wrapped all three layers,
@@ -19,8 +20,8 @@
  *     the HIGH-VIX regime veto missed intraday regime changes and
  *     breaking news was invisible until the next UTC midnight.
  *   - Now each layer has its own 10-min TTL matching the Worker's
- *     Moneycontrol market-hours cadence, with per-layer in-flight
- *     de-duplication so concurrent scans issue exactly one CF call.
+ *     news market-hours cadence, with per-layer in-flight de-duplication
+ *     so concurrent scans issue exactly one CF call.
  *   - News items are cached as raw items; the per-universe scoreMap
  *     and headlinesMap are recomputed on every call because scoring
  *     depends on which symbols are in the caller's universe — without
@@ -33,7 +34,7 @@ import { scoreText, extractSymbols } from './newsSentiment.js';
 import { CF_WORKER_URL } from './transport.js';
 
 /**
- * 10 minutes — matches the Worker's Moneycontrol KV TTL during market
+ * 10 minutes — matches the Worker's broad-feed KV TTL during market
  * hours and VIX's regime-change cadence. Short enough that the HIGH-VIX
  * veto sees real regime shifts; long enough to de-dup rapid re-scans.
  */
@@ -114,17 +115,23 @@ export async function fetchLiveFiiDii() {
 }
 
 /**
- * Fetch raw Moneycontrol news items from the Worker. Cached with a
+ * Fetch raw broad Indian news items from the Worker. Cached with a
  * 10-min TTL. Kept separate from scoring because scoring depends on
  * the caller's symbol universe and must be recomputed each call.
- * @returns {Promise<Array<{title?: string, description?: string}>>}
+ *
+ * The Worker merges multiple Indian publisher feeds (Moneycontrol,
+ * LiveMint, Economic Times, Business Standard) into a single payload;
+ * each item carries a `publisher` tag so we can attribute headlines
+ * in the UI without a second round trip.
+ *
+ * @returns {Promise<Array<{title?: string, description?: string, link?: string, publisher?: string}>>}
  */
-async function fetchRawMoneycontrolItems() {
+async function fetchRawIndianNewsItems() {
   if (isFresh(newsItemsCache)) return newsItemsCache.items || [];
   if (newsItemsInflight) return newsItemsInflight;
   newsItemsInflight = (async () => {
     try {
-      const res = await fetch(`${CF_WORKER_URL}/news/moneycontrol`, {
+      const res = await fetch(`${CF_WORKER_URL}/news/india`, {
         headers: { Accept: 'application/json' },
       });
       if (!res.ok) return [];
@@ -143,7 +150,7 @@ async function fetchRawMoneycontrolItems() {
 }
 
 /**
- * Fetch Moneycontrol news items and score them against a symbol universe.
+ * Fetch broad Indian news items and score them against a symbol universe.
  * Returns BOTH the aggregated score map AND the individual headlines
  * per symbol so the UI can show WHY a stock has the sentiment it does.
  *
@@ -155,11 +162,11 @@ async function fetchRawMoneycontrolItems() {
  * @param {Set<string>} symbolUniverse  uppercase NSE symbols to match
  * @returns {Promise<{
  *   scoreMap: Record<string, number>,
- *   headlinesMap: Record<string, Array<{title, description, score}>>,
+ *   headlinesMap: Record<string, Array<{title, description, score, source, publisher}>>,
  * }>}
  */
 export async function fetchLiveNews(symbolUniverse) {
-  const items = await fetchRawMoneycontrolItems();
+  const items = await fetchRawIndianNewsItems();
   const perSymbolScores = {};
   const perSymbolHeadlines = {};
   for (const item of items) {
@@ -176,7 +183,8 @@ export async function fetchLiveNews(symbolUniverse) {
         // Truncate long descriptions for UI display
         description: (item.description || '').slice(0, 200),
         score: Math.round(score * 100) / 100,
-        source: 'moneycontrol',
+        source: 'india',
+        publisher: item.publisher || '',
         url: item.link || '',
       });
     }
@@ -326,75 +334,10 @@ export async function fetchLiveGoogleNewsDetailForSymbol(symbol) {
 }
 
 /**
- * Per-symbol Yahoo Finance news. Same contract as
- * fetchLiveGoogleNewsDetailForSymbol — returns `{score, headlines,
- * cacheStatus, cacheSource}` with the same headline shape — so the
- * batchScan tier chain can swap them in/out without branching on
- * source. Yahoo's response carries native article URLs and
- * publisher names, which we surface so the UI can render clickable
- * source-attributed headlines.
- *
- * Used as the per-symbol news tier 3.5 — sits between Google
- * (tier 3) and Moneycontrol-by-string-match (tier 4 dropped).
- */
-export async function fetchLiveYahooNewsForSymbol(symbol) {
-  if (!symbol) return { score: null, headlines: [], cacheStatus: null };
-  const clean = String(symbol).toUpperCase().replace(/\.NS$/, '');
-  try {
-    const res = await fetch(`${CF_WORKER_URL}/news/yahoo?symbol=${encodeURIComponent(clean)}`, {
-      headers: { Accept: 'application/json' },
-    });
-    const cacheStatus = typeof res?.headers?.get === 'function'
-      ? (res.headers.get('X-Cache') || null)
-      : null;
-    const cacheSource = typeof res?.headers?.get === 'function'
-      ? (res.headers.get('X-Cache-Source') || null)
-      : null;
-    if (!res.ok) {
-      return { score: null, headlines: [], cacheStatus, cacheSource };
-    }
-    const data = await res.json();
-    const items = data.items || [];
-    if (!items.length) return { score: null, headlines: [], cacheStatus, cacheSource };
-    const cutoff = Date.now() - 5 * 24 * 3600 * 1000;
-    const scored = [];
-    for (const item of items) {
-      if (item.pubDate) {
-        const t = Date.parse(item.pubDate);
-        if (!isNaN(t) && t < cutoff) continue;
-      }
-      const text = `${item.title || ''} ${item.description || ''}`;
-      const s = scoreText(text);
-      scored.push({
-        title: item.title || '',
-        description: (item.description || '').slice(0, 200),
-        score: Math.round(s * 100) / 100,
-        source: 'yahoo',
-        url: item.link || '',
-        publisher: item.publisher || '',
-      });
-    }
-    if (!scored.length) return { score: null, headlines: [], cacheStatus, cacheSource };
-    const avg = scored.reduce((a, b) => a + b.score, 0) / scored.length;
-    const headlines = scored
-      .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
-      .slice(0, 5);
-    return {
-      score: Math.max(-1, Math.min(1, avg)),
-      headlines,
-      cacheStatus,
-      cacheSource,
-    };
-  } catch {
-    return { score: null, headlines: [], cacheStatus: null };
-  }
-}
-
-/**
  * Deep news lookup for a single symbol via Google News RSS.
- * Moneycontrol's feeds are broad — they mention roughly the top
- * 50 most-discussed stocks each day. For symbols that passed
- * technical filters but weren't in Moneycontrol's headlines, this
+ * The broad Indian feeds are wide-net — they mention roughly the top
+ * 50-120 most-discussed stocks each day. For symbols that passed
+ * technical filters but weren't in those headlines, this
  * endpoint fetches per-symbol Google News and scores the results.
  *
  * @param {string} symbol  e.g. "RELIANCE"
@@ -436,7 +379,7 @@ export async function fetchLiveGoogleNewsForSymbol(symbol) {
  * news depth. Fetches in parallel (Promise.all) — browser is responsible
  * for the concurrency limit by only passing the top-N.
  *
- * Merges with existing newsMap: if a symbol already has a Moneycontrol
+ * Merges with existing newsMap: if a symbol already has a broad-feed
  * score, the two are averaged. Otherwise the Google score becomes the
  * new entry.
  *
@@ -456,7 +399,7 @@ export async function enrichWithGoogleNews(existingMap, symbolsToEnrich) {
   for (const { sym, score } of results) {
     if (score == null) continue;
     if (merged[sym] != null) {
-      // Average Moneycontrol + Google for a balanced signal
+      // Average broad-feed + Google for a balanced signal
       merged[sym] = (merged[sym] + score) / 2;
     } else {
       merged[sym] = score;

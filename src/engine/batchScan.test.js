@@ -28,12 +28,10 @@ vi.mock('./transport.js', () => ({
   cfUrl: (path) => `https://mock.workers.dev${path?.startsWith('/') ? path : '/' + (path || '')}`,
 }));
 
-// Default-mock the live Google + Yahoo News fetchers so the existing tests
-// don't hit the network. Individual tests override via `newsFetchFn` /
-// `yahooNewsFetchFn`.
+// Default-mock the live Google News fetcher so the existing tests
+// don't hit the network. Individual tests override via `newsFetchFn`.
 vi.mock('./marketContextLive.js', () => ({
   fetchLiveGoogleNewsDetailForSymbol: vi.fn(async () => ({ score: null, headlines: [] })),
-  fetchLiveYahooNewsForSymbol: vi.fn(async () => ({ score: null, headlines: [] })),
 }));
 
 // Silence the FII/DII console.warn that our scan emits when the Worker
@@ -248,7 +246,7 @@ describe('batchScan per-symbol news enrichment', () => {
     expect(second.telemetry.newsCacheHits).toBeGreaterThan(0);
   });
 
-  it('falls back to the Moneycontrol index feed when per-symbol fetch fails', async () => {
+  it('falls back to the broad-feed index map when per-symbol fetch fails', async () => {
     const newsFetchFn = vi.fn(async () => { throw new Error('CF Worker 502'); });
 
     const results = await batchScan({
@@ -258,16 +256,16 @@ describe('batchScan per-symbol news enrichment', () => {
       delayMs: 0,
       newsFetchFn,
       marketContext: {
-        newsMap: { ZZZ: -0.25 }, // Moneycontrol-scored; classifies BEARISH
-        headlinesMap: { ZZZ: [{ title: 'profit warning', source: 'moneycontrol' }] },
+        newsMap: { ZZZ: -0.25 }, // broad-feed-scored; classifies BEARISH
+        headlinesMap: { ZZZ: [{ title: 'profit warning', source: 'india' }] },
       },
     });
 
-    // Fall back to Moneycontrol for sentiment, news source stays 'moneycontrol'
+    // Fall back to the broad-feed map for sentiment, news source stays 'india'
     const r = results.find((x) => x.symbol === 'ZZZ');
     expect(r).toBeDefined();
     expect(r.newsScore).toBeCloseTo(-0.25);
-    expect(r.newsSource).toBe('moneycontrol');
+    expect(r.newsSource).toBe('india');
     // Error was counted in telemetry but did not crash the scan
     expect(results.telemetry.newsFetchErrors).toBeGreaterThan(0);
     // The scan still yielded a row for the symbol
@@ -496,14 +494,14 @@ describe('batchScan news fallback chain (Wave 1.5d)', () => {
       expect(r.newsScore).toBeCloseTo(0.35);
       expect(r.newsSource).toBe('stale');
     }
-    // Telemetry: none of the Wave 1.5d fallback counters should fire
-    // because tier 3 succeeded (just with stale data).
+    // Telemetry: none of the fallback counters should fire because
+    // tier 3 succeeded (just with stale data).
     expect(results.telemetry.newsFetched).toBeGreaterThan(0);
     expect(results.telemetry.newsFromFallback).toBe(0);
     expect(results.telemetry.newsUnavailable).toBe(0);
   });
 
-  it('tier 3 UNAVAILABLE → tier 4 Moneycontrol: scan completes with MC sentiment', async () => {
+  it('tier 3 UNAVAILABLE → tier 4 broad-feed: scan completes with broad-feed sentiment', async () => {
     // Worker says it has nothing, not even stale.
     const newsFetchFn = vi.fn(async () => ({
       score: null,
@@ -511,9 +509,9 @@ describe('batchScan news fallback chain (Wave 1.5d)', () => {
       cacheStatus: 'UNAVAILABLE',
       cacheSource: null,
     }));
-    const moneycontrolFn = vi.fn(async () => ({
+    const broadNewsFn = vi.fn(async () => ({
       score: -0.4,
-      headlines: [{ title: 'downgrade', source: 'moneycontrol' }],
+      headlines: [{ title: 'downgrade', source: 'india' }],
     }));
 
     const results = await batchScan({
@@ -522,20 +520,20 @@ describe('batchScan news fallback chain (Wave 1.5d)', () => {
       gateToken: 'test',
       delayMs: 0,
       newsFetchFn,
-      moneycontrolFn,
+      broadNewsFn,
     });
 
     expect(newsFetchFn).toHaveBeenCalled();
-    expect(moneycontrolFn).toHaveBeenCalled();
+    expect(broadNewsFn).toHaveBeenCalled();
     const r = results.find((x) => x.symbol === 'BBB');
     expect(r).toBeDefined();
     expect(r.newsScore).toBeCloseTo(-0.4);
-    expect(r.newsSource).toBe('moneycontrol');
+    expect(r.newsSource).toBe('india');
     expect(results.telemetry.newsFromFallback).toBeGreaterThan(0);
     expect(results.telemetry.newsUnavailable).toBe(0);
   });
 
-  it('tier 3 UNAVAILABLE + no Moneycontrol: scan still yields a row with score=null', async () => {
+  it('tier 3 UNAVAILABLE + no broad-feed: scan still yields a row with score=null', async () => {
     const newsFetchFn = vi.fn(async () => ({
       score: null,
       headlines: [],
@@ -548,7 +546,7 @@ describe('batchScan news fallback chain (Wave 1.5d)', () => {
       gateToken: 'test',
       delayMs: 0,
       newsFetchFn,
-      // No moneycontrolFn, no marketContext.newsMap — tier 4 empty.
+      // No broadNewsFn, no marketContext.newsMap — tier 4 empty.
     });
 
     expect(results.length).toBe(1);
@@ -601,14 +599,14 @@ describe('batchScan news fallback chain (Wave 1.5d)', () => {
     expect(r.newsHeadlines.length).toBeGreaterThan(0);
   });
 
-  it('cold start + Worker throws 502: falls through to Moneycontrol, no crash', async () => {
+  it('cold start + Worker throws 502: falls through to broad-feed, no crash', async () => {
     // Simulate the exact Google News 502 scenario the load-test saw.
     const newsFetchFn = vi.fn(async () => {
       throw new Error('CF Worker upstream 502');
     });
-    const moneycontrolFn = vi.fn(async (sym) => ({
+    const broadNewsFn = vi.fn(async (sym) => ({
       score: sym === 'EEE' ? -0.2 : 0.2,
-      headlines: [{ title: `mc-${sym}`, source: 'moneycontrol' }],
+      headlines: [{ title: `mc-${sym}`, source: 'india' }],
     }));
 
     const results = await batchScan({
@@ -617,13 +615,13 @@ describe('batchScan news fallback chain (Wave 1.5d)', () => {
       gateToken: 'test',
       delayMs: 0,
       newsFetchFn,
-      moneycontrolFn,
+      broadNewsFn,
     });
 
     expect(results.length).toBe(1);
     const r = results[0];
     expect(r.newsScore).toBeCloseTo(-0.2);
-    expect(r.newsSource).toBe('moneycontrol');
+    expect(r.newsSource).toBe('india');
     // Thrown errors get counted AND the fallback ran.
     expect(results.telemetry.newsFetchErrors).toBeGreaterThan(0);
     expect(results.telemetry.newsFromFallback).toBeGreaterThan(0);

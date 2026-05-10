@@ -140,9 +140,9 @@ describe('buildNewsSentimentMap', () => {
     });
   };
 
-  it('builds a sentiment map from mock Moneycontrol fetcher', async () => {
+  it('builds a sentiment map from mock broad-feed fetcher', async () => {
     const map = await buildNewsSentimentMap(universe, {
-      mode: 'moneycontrol',
+      mode: 'india',
       fetchFn: mockFetch,
     });
     expect(map.RELIANCE).toBeGreaterThan(0); // "surges", "strong", "profit"
@@ -153,7 +153,7 @@ describe('buildNewsSentimentMap', () => {
   it('returns empty map on all fetch failures', async () => {
     const failFetch = () => Promise.reject(new Error('network down'));
     const map = await buildNewsSentimentMap(universe, {
-      mode: 'moneycontrol',
+      mode: 'india',
       fetchFn: failFetch,
     });
     expect(map).toEqual({});
@@ -161,7 +161,7 @@ describe('buildNewsSentimentMap', () => {
 
   it('skips unknown symbols', async () => {
     const map = await buildNewsSentimentMap(universe, {
-      mode: 'moneycontrol',
+      mode: 'india',
       fetchFn: mockFetch,
     });
     // UNKNOWN symbol shouldn't appear

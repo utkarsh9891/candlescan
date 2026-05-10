@@ -1,6 +1,6 @@
 /**
  * Unit tests for `worker/cache.js` — the KV-backed cache helpers that
- * back `/market/vix`, `/market/fiidii`, `/news/moneycontrol`,
+ * back `/market/vix`, `/market/fiidii`, `/news/india`,
  * `/news/google` in the Cloudflare Worker.
  *
  * The core coverage targets:
@@ -24,8 +24,8 @@ import {
   vixTtlMs,
   fiidiiKey,
   FIIDII_TTL_MS,
-  moneycontrolKey,
-  moneycontrolTtlMs,
+  indiaNewsKey,
+  indiaNewsTtlMs,
   googleNewsKey,
   GOOGLE_NEWS_TTL_MS,
   GOOGLE_NEWS_STALE_MAX_MS,
@@ -114,13 +114,13 @@ describe('TTL helpers', () => {
     const ts = Date.UTC(2026, 3, 21, 3, 0, 0); // 08:30 IST
     expect(vixTtlMs(ts)).toBe(24 * 60 * 60 * 1000);
   });
-  it('moneycontrolTtlMs is 10min market hours', () => {
+  it('indiaNewsTtlMs is 10min market hours', () => {
     const ts = Date.UTC(2026, 3, 21, 4, 30, 0); // 10:00 IST
-    expect(moneycontrolTtlMs(ts)).toBe(10 * 60 * 1000);
+    expect(indiaNewsTtlMs(ts)).toBe(10 * 60 * 1000);
   });
-  it('moneycontrolTtlMs is 60min off-hours', () => {
+  it('indiaNewsTtlMs is 60min off-hours', () => {
     const ts = Date.UTC(2026, 3, 21, 3, 0, 0); // 08:30 IST
-    expect(moneycontrolTtlMs(ts)).toBe(60 * 60 * 1000);
+    expect(indiaNewsTtlMs(ts)).toBe(60 * 60 * 1000);
   });
 });
 
@@ -137,15 +137,15 @@ describe('key builders', () => {
     const ts = Date.UTC(2026, 3, 21, 5, 0, 0);
     expect(googleNewsKey('RELIANCE', ts)).toBe('google_news:RELIANCE:2026-04-21');
   });
-  it('moneycontrolKey buckets by TTL window', () => {
+  it('indiaNewsKey buckets by TTL window', () => {
     // Two timestamps 5 minutes apart during market hours share the same
     // 10-min bucket.
     const a = Date.UTC(2026, 3, 21, 4, 30, 0); // 10:00 IST
     const b = Date.UTC(2026, 3, 21, 4, 34, 59); // 10:04:59 IST
-    expect(moneycontrolKey(a)).toBe(moneycontrolKey(b));
+    expect(indiaNewsKey(a)).toBe(indiaNewsKey(b));
     // A timestamp in the next bucket differs.
     const c = Date.UTC(2026, 3, 21, 4, 40, 0); // 10:10 IST
-    expect(moneycontrolKey(a)).not.toBe(moneycontrolKey(c));
+    expect(indiaNewsKey(a)).not.toBe(indiaNewsKey(c));
   });
 });
 
