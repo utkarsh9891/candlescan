@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Replace USERNAME with your macOS short user name and REPO with the
+       absolute path to your candlescan repo before symlinking this file
+       into ~/Library/LaunchAgents/ . See scripts/cockpit/README.md
+       for the full install command. -->
+  <key>Label</key>
+  <string>com.candlescan.cockpit</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-d</string>
+    <string>/usr/local/bin/node</string>
+    <string>REPO/scripts/cockpit/index.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPO</string>
+
+  <!-- Auto-start at 09:08 IST every weekday (Mon–Fri = 1..5).
+       The cockpit handles its own scan-loop + exit-monitor pacing
+       and self-terminates after 15:35 IST via SIGTERM from the
+       runtime; relaunch is cheap so we leave KeepAlive off. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key><integer>9</integer>
+      <key>Minute</key><integer>8</integer>
+      <key>Weekday</key><integer>1</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>9</integer>
+      <key>Minute</key><integer>8</integer>
+      <key>Weekday</key><integer>2</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>9</integer>
+      <key>Minute</key><integer>8</integer>
+      <key>Weekday</key><integer>3</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>9</integer>
+      <key>Minute</key><integer>8</integer>
+      <key>Weekday</key><integer>4</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>9</integer>
+      <key>Minute</key><integer>8</integer>
+      <key>Weekday</key><integer>5</integer>
+    </dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/USERNAME/.candlescan/cockpit/logs/launchd-out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/USERNAME/.candlescan/cockpit/logs/launchd-err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>NODE_ENV</key>
+    <string>production</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>

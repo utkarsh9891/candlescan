@@ -15,6 +15,7 @@ const LS_SOURCE_KEY = 'candlescan_data_source';
 const LS_ZERODHA_API_KEY = 'candlescan_zerodha_api_key';
 const LS_ZERODHA_API_SECRET = 'candlescan_zerodha_api_secret';
 const LS_DHAN_CLIENT_ID = 'candlescan_dhan_client_id';
+const LS_COCKPIT_URL = 'candlescan_cockpit_url';
 
 function getDataSource() {
   try { return localStorage.getItem(LS_SOURCE_KEY) || 'yahoo'; } catch { return 'yahoo'; }
@@ -27,6 +28,9 @@ function getSavedApiKey() {
 }
 function getSavedApiSecret() {
   try { return localStorage.getItem(LS_ZERODHA_API_SECRET) || ''; } catch { return ''; }
+}
+function getSavedCockpitUrl() {
+  try { return localStorage.getItem(LS_COCKPIT_URL) || ''; } catch { return ''; }
 }
 
 /** Compact human age — "3h", "2d", "15m" — for the NSE cache summary. */
@@ -54,6 +58,8 @@ export default function SettingsPage({
   const [dataSource, setDataSourceState] = useState(getDataSource);
   const [apiKey, setApiKey] = useState(getSavedApiKey);
   const [apiSecret, setApiSecret] = useState(getSavedApiSecret);
+  const [cockpitUrl, setCockpitUrl] = useState(getSavedCockpitUrl);
+  const [cockpitProbe, setCockpitProbe] = useState({ status: 'idle', msg: '' });
 
   // tokenStatus: 'none' | 'checking' | 'valid' | 'expired'
   const [tokenStatus, setTokenStatus] = useState(() => hasVault() ? 'checking' : 'none');
@@ -646,6 +652,67 @@ export default function SettingsPage({
           </div>
         </div>
       )}
+
+      {/* Cockpit — Mac-side scan/notify daemon URL. Each device stores its
+          own value in localStorage so multiple users / devices can point at
+          their own cockpit instances without colliding. Empty = unset. */}
+      <div style={card}>
+        <div style={sectionTitle}>Cockpit (optional)</div>
+        <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 10, lineHeight: 1.5 }}>
+          Base URL of your Mac-side cockpit (the daemon that runs scans + paper-trade
+          monitoring while your Mac is awake). Leave empty if not using cockpit.
+          Typical: <span style={{ fontFamily: mono, color: '#1a1d26' }}>http://cockpit.local:5174</span>
+        </div>
+        <PasteInput value={cockpitUrl} onChange={setCockpitUrl} placeholder="http://cockpit.local:5174" useMono />
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+          <button type="button"
+            onClick={() => {
+              const trimmed = cockpitUrl.trim().replace(/\/+$/, '');
+              try {
+                if (trimmed) localStorage.setItem(LS_COCKPIT_URL, trimmed);
+                else localStorage.removeItem(LS_COCKPIT_URL);
+              } catch { /* quota */ }
+              setCockpitUrl(trimmed);
+              setCockpitProbe({ status: 'saved', msg: trimmed ? 'Saved' : 'Cleared' });
+            }}
+            disabled={cockpitUrl === getSavedCockpitUrl()}
+            style={{ ...btnPrimary, opacity: cockpitUrl === getSavedCockpitUrl() ? 0.5 : 1 }}>
+            Save
+          </button>
+          <button type="button"
+            onClick={async () => {
+              const url = cockpitUrl.trim().replace(/\/+$/, '');
+              if (!url) { setCockpitProbe({ status: 'err', msg: 'Empty URL' }); return; }
+              setCockpitProbe({ status: 'probing', msg: 'Pinging...' });
+              try {
+                const res = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(3000) });
+                if (res.ok) setCockpitProbe({ status: 'ok', msg: 'Reachable' });
+                else setCockpitProbe({ status: 'err', msg: `HTTP ${res.status}` });
+              } catch (e) {
+                setCockpitProbe({ status: 'err', msg: e.message || 'Unreachable' });
+              }
+            }}
+            disabled={!cockpitUrl.trim() || cockpitProbe.status === 'probing'}
+            style={{ ...btnSecondary, opacity: !cockpitUrl.trim() || cockpitProbe.status === 'probing' ? 0.5 : 1 }}>
+            {cockpitProbe.status === 'probing' ? 'Pinging...' : 'Test'}
+          </button>
+          {getSavedCockpitUrl() && (
+            <a href={getSavedCockpitUrl()} target="_blank" rel="noopener noreferrer"
+              style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>
+              Open
+            </a>
+          )}
+        </div>
+        {cockpitProbe.msg && (
+          <div style={{ fontSize: 12, marginTop: 8,
+            color: cockpitProbe.status === 'ok' ? '#16a34a'
+              : cockpitProbe.status === 'err' ? '#dc2626'
+              : cockpitProbe.status === 'saved' ? '#16a34a'
+              : '#8892a8' }}>
+            {cockpitProbe.msg}
+          </div>
+        )}
+      </div>
 
       {/* About */}
       <div style={card}>
