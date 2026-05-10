@@ -20,6 +20,7 @@ surface on the phone.
   - [`cockpit:config`](#cockpitconfig)
   - [`cockpit:dhan`](#cockpitdhan)
   - [`cockpit:zerodha`](#cockpitzerodha)
+  - [`cockpit:gate`](#cockpitgate)
   - [`cockpit:rotate-topic`](#cockpitrotate-topic)
   - [`cockpit:logs`](#cockpitlogs)
   - [`cockpit:help`](#cockpithelp)
@@ -206,6 +207,28 @@ npm run cockpit:zerodha -- --help             # full help
 Zerodha access tokens expire daily around 06:00 IST. Use `access-token`
 each morning rather than re-running the full setup.
 
+### `cockpit:gate`
+
+```bash
+npm run cockpit:gate                # show status (default)
+npm run cockpit:gate -- set         # set or change passphrase
+npm run cockpit:gate -- clear       # remove gate (decrypts secrets back to plain)
+npm run cockpit:gate -- test        # verify a passphrase
+npm run cockpit:gate -- --help      # full help
+```
+
+Optional passphrase that encrypts ntfy topic + Dhan PIN + Zerodha
+apiSecret/accessToken inside `secrets.json` at rest. mode `0600` only
+guards against other Unix users; the gate guards against Time Machine
+backups, iCloud sync, and `cat secrets.json`.
+
+PBKDF2-SHA256 (200k iter) + AES-256-GCM. Once set, the daemon prompts
+for the passphrase at startup. **Mutually exclusive with launchd
+auto-start** (no TTY for the prompt).
+
+For the full storage model — what's encrypted, what isn't, where each
+field lives — see [`docs/SECRETS.md`](SECRETS.md).
+
 ### `cockpit:rotate-topic`
 
 ```bash
@@ -285,6 +308,41 @@ today. It talks to Yahoo and NSE directly from your Mac. So `worker:keys:rotate`
 is unrelated to cockpit operation; it's only relevant if you also use
 the deployed PWA's premium-tier broker integrations.
 
+## Nomenclature
+
+The system has a few names floating around in casual chat — they all
+refer to the same thing:
+
+| Term | What it actually is |
+|---|---|
+| **Cockpit** | The official name in this codebase. Refers to the whole local-Mac system: scan loop + exit monitor + HTTP server + web UI + management CLI. |
+| Cockpit daemon | The `npm run cockpit` process — the long-running scan + exit monitor + HTTP server. |
+| Cockpit UI | The dark-themed single-page web UI served at `cockpit.local:5174/`. |
+| Autopilot / terminal mode | Informal aliases. Same thing. |
+
+We use **Cockpit** consistently throughout the docs and code (file
+paths, npm scripts, log lines). The other terms are just synonyms.
+
+## Data source — Yahoo / Dhan / Zerodha
+
+The cockpit's scan loop fetches OHLCV from one of three sources,
+configured via `scan.dataSource` in `secrets.json`:
+
+| Source | Status | Latency | Auth | Notes |
+|---|---|---|---|---|
+| `yahoo` (default) | ✅ live | ~1 min delay | none | what ships today |
+| `dhan` | 🚧 planned | real-time | clientId + PIN + TOTP at boot | creds CLI ships today (`cockpit:dhan`); the live OHLCV fetcher lands in the next iteration |
+| `zerodha` | 🚧 planned | real-time | apiKey + apiSecret + daily accessToken | same as above (`cockpit:zerodha`) |
+
+**Today** the scan loop ignores `scan.dataSource` and always uses
+Yahoo. The config field is wired so that storing Dhan/Zerodha creds via
+the CLI commands today is forward setup — when the live fetchers land,
+flipping `scan.dataSource = "dhan"` (or `"zerodha"`) is the only
+change needed in your config.
+
+If the 1-min Yahoo delay is a problem, the live broker fetchers move
+up the priority list — flag it.
+
 ## Configurable knobs (`secrets.json`)
 
 | Path | Default | Purpose |
@@ -299,6 +357,7 @@ the deployed PWA's premium-tier broker integrations.
 | `scan.minConfidence` | `75` | hide signals below this |
 | `scan.timeframe` | `5m` | `1m` / `5m` / `15m` |
 | `exit.intervalSec` | `30` | exit-monitor poll frequency |
+| `scan.dataSource` | `yahoo` | `yahoo` / `dhan` / `zerodha` — only `yahoo` is wired today; Dhan/Zerodha live fetchers planned next |
 | `dhan.clientId` | — | Dhan client ID (set via `cockpit:dhan`) |
 | `dhan.pin` | — | Dhan PIN (file is mode 0600) |
 | `zerodha.apiKey` | — | Zerodha API key |

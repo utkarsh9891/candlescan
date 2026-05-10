@@ -20,6 +20,7 @@ import * as init from './commands/init.mjs';
 import * as config from './commands/config.mjs';
 import * as dhan from './commands/dhan.mjs';
 import * as zerodha from './commands/zerodha.mjs';
+import * as gate from './commands/gate.mjs';
 import * as rotateTopic from './commands/rotate-topic.mjs';
 import * as status from './commands/status.mjs';
 import * as logs from './commands/logs.mjs';
@@ -29,6 +30,7 @@ const COMMANDS = {
   config,
   dhan,
   zerodha,
+  gate,
   'rotate-topic': rotateTopic,
   status,
   logs,
@@ -45,9 +47,10 @@ Usage:
 
 Commands:
   init           First-run wizard — set ntfy topic + scan defaults
-  config         Print current effective config (full; --redacted to mask secrets)
+  config         Print current effective config (redacted; --show-secrets to reveal)
   dhan           Manage Dhan broker creds (clientId + PIN; TOTP at boot)
   zerodha        Manage Zerodha Kite creds (apiKey + apiSecret + accessToken)
+  gate           Manage optional passphrase that encrypts secrets.json fields
   rotate-topic   Generate a new ntfy topic locally — does NOT notify any channel
   status         Show daemon health (secrets / HTTP / launchd / today's P&L)
   logs           Print or follow today's log file

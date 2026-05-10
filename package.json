@@ -23,6 +23,7 @@
     "cockpit:help": "node scripts/cockpit/cli.mjs help",
     "cockpit:dhan": "node scripts/cockpit/cli.mjs dhan",
     "cockpit:zerodha": "node scripts/cockpit/cli.mjs zerodha",
+    "cockpit:gate": "node scripts/cockpit/cli.mjs gate",
     "cockpit:rotate-topic": "node scripts/cockpit/cli.mjs rotate-topic",
 
     "cache:warm": "node scripts/warm-cache.mjs",

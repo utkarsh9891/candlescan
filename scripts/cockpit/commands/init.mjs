@@ -10,8 +10,13 @@
  */
 
 import crypto from 'node:crypto';
-import { ask, choose, confirm } from '../lib/prompts.mjs';
+import { ask, askSecret, choose, confirm } from '../lib/prompts.mjs';
 import { readSecrets, writeSecrets, secretsPath } from '../lib/secrets-rw.mjs';
+import {
+  verifyPassphrase,
+  deriveKey,
+  encryptSensitive,
+} from '../lib/gate.mjs';
 
 export const help = `
 cockpit init — interactive first-run setup
@@ -122,7 +127,22 @@ export async function run() {
     console.log('aborted.');
     return;
   }
-  writeSecrets(next);
+
+  // If a gate is set, re-encrypt sensitive fields (the new ntfy.topic
+  // we just wrote in plain) before persisting.
+  let toWrite = next;
+  if (next.gate?.salt) {
+    console.log('\ngate is set — encrypting sensitive fields.');
+    const passphrase = await askSecret('passphrase to unlock gate');
+    if (!verifyPassphrase(next.gate, passphrase)) {
+      console.log('✗ wrong passphrase — aborting.');
+      return;
+    }
+    const key = deriveKey(next.gate, passphrase);
+    toWrite = encryptSensitive(next, key);
+  }
+
+  writeSecrets(toWrite);
   console.log(`✓ wrote ${secretsPath()} (mode 0600)`);
   console.log('\nNext: npm run cockpit  (or  npm run cockpit:status  to confirm config)');
 }

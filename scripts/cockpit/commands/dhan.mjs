@@ -1,7 +1,8 @@
 /**
  * `cockpit dhan` — interactive Dhan credential setup.
  *
- * Stores: clientId, partnerId (optional), pin (hidden).
+ * Stores: clientId, partnerId (optional), pin (hidden, encrypted at rest
+ * if a cockpit gate is set).
  * NOT stored: TOTP — that's a 30-second time-based code; the cockpit
  * prompts for it interactively at daemon launch when Dhan is configured.
  *
@@ -10,13 +11,18 @@
  *   cockpit dhan show     show stored fields (redacted summary)
  *   cockpit dhan clear    remove all Dhan creds
  *
- * Note: secrets.json is mode 0600 (user-only). The cockpit's scan path
- * does not yet consume these creds — currently scans use anonymous Yahoo.
- * Storing creds here is forward-looking for the planned broker-data path.
+ * If a gate is set (`cockpit:gate set`), this command requires the
+ * passphrase to encrypt the PIN before writing.
  */
 
 import { ask, askSecret, confirm } from '../lib/prompts.mjs';
 import { readSecrets, writeSecrets } from '../lib/secrets-rw.mjs';
+import {
+  verifyPassphrase,
+  deriveKey,
+  encryptSensitive,
+  isEncrypted,
+} from '../lib/gate.mjs';
 
 export const help = `
 cockpit dhan [show | clear] — manage Dhan broker credentials
@@ -25,8 +31,8 @@ cockpit dhan [show | clear] — manage Dhan broker credentials
   cockpit dhan show     show stored fields (redacted summary)
   cockpit dhan clear    remove all Dhan creds from secrets.json
 
-PIN is stored in secrets.json (mode 0600). TOTP is NOT stored — it's
-prompted at daemon launch when Dhan is configured.
+PIN is stored. TOTP is NOT stored — it's prompted at daemon launch.
+If a gate is set (cockpit:gate set), PIN is encrypted at rest.
 `.trim();
 
 export async function run(args) {
@@ -55,6 +61,10 @@ async function setCreds() {
     minLength: 4,
   });
 
+  // Build the unencrypted next state, then run encryptSensitive() if a
+  // gate is set. encryptSensitive() walks the ENCRYPTED_PATHS list —
+  // PIN is included, ntfy + zerodha encrypted fields stay encrypted
+  // (we re-encrypt them too, which is idempotent).
   const next = {
     ...cur,
     dhan: {
@@ -65,7 +75,9 @@ async function setCreds() {
   };
   if (!next.dhan.partnerId) delete next.dhan.partnerId;
 
-  writeSecrets(next);
+  const finalState = await applyGate(next, cur);
+  if (!finalState) return; // wrong passphrase, abort
+  writeSecrets(finalState);
   console.log('\n✓ Dhan creds saved.');
   console.log('  TOTP is prompted at  npm run cockpit  launch (interactive only).');
 }
@@ -80,8 +92,12 @@ async function show() {
   console.log('Dhan creds:');
   console.log(`  clientId:  ${d.clientId || '(unset)'}`);
   if (d.partnerId) console.log(`  partnerId: ${d.partnerId}`);
-  if (d.pin) console.log(`  pin:       <${d.pin.length}-digit, hidden>`);
-  else console.log('  pin:       (unset)');
+  if (d.pin) {
+    const tag = isEncrypted(d.pin) ? '<encrypted at rest>' : `<${d.pin.length}-digit, hidden>`;
+    console.log(`  pin:       ${tag}`);
+  } else {
+    console.log('  pin:       (unset)');
+  }
 }
 
 async function clear() {
@@ -99,4 +115,21 @@ async function clear() {
   delete next.dhan;
   writeSecrets(next);
   console.log('✓ Dhan creds cleared.');
+}
+
+/**
+ * If a gate is set, ask for passphrase, derive key, run encryptSensitive
+ * on the new cfg. Returns the cfg ready to write, or null if the user
+ * entered the wrong passphrase.
+ */
+async function applyGate(nextCfg, _cur) {
+  if (!nextCfg.gate?.salt) return nextCfg;
+  console.log('\ngate is set — PIN will be encrypted at rest.');
+  const passphrase = await askSecret('passphrase to unlock gate');
+  if (!verifyPassphrase(nextCfg.gate, passphrase)) {
+    console.log('✗ wrong passphrase — aborting.');
+    return null;
+  }
+  const key = deriveKey(nextCfg.gate, passphrase);
+  return encryptSensitive(nextCfg, key);
 }

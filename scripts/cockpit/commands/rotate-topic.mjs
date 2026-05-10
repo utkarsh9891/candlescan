@@ -9,8 +9,13 @@
  */
 
 import crypto from 'node:crypto';
-import { confirm } from '../lib/prompts.mjs';
+import { askSecret, confirm } from '../lib/prompts.mjs';
 import { readSecrets, writeSecrets } from '../lib/secrets-rw.mjs';
+import {
+  verifyPassphrase,
+  deriveKey,
+  encryptSensitive,
+} from '../lib/gate.mjs';
 
 export const help = `
 cockpit rotate-topic — generate a new ntfy topic locally (no remote notify)
@@ -48,7 +53,17 @@ export async function run() {
     return;
   }
 
-  const next = { ...cur, ntfy: { ...cur.ntfy, topic: newTopic } };
+  let next = { ...cur, ntfy: { ...cur.ntfy, topic: newTopic } };
+  if (next.gate?.salt) {
+    console.log('\ngate is set — encrypting new topic.');
+    const passphrase = await askSecret('passphrase to unlock gate');
+    if (!verifyPassphrase(next.gate, passphrase)) {
+      console.log('✗ wrong passphrase — aborting.');
+      return;
+    }
+    const key = deriveKey(next.gate, passphrase);
+    next = encryptSensitive(next, key);
+  }
   writeSecrets(next);
   console.log('✓ secrets.json updated.');
   console.log('');

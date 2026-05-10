@@ -86,6 +86,7 @@ Grouped by domain, all sub-commands consistently namespaced as
 | `npm run cockpit:help` | top-level help; `-- <cmd>` for any subcommand |
 | `npm run cockpit:dhan` | manage Dhan broker creds |
 | `npm run cockpit:zerodha` | manage Zerodha Kite creds |
+| `npm run cockpit:gate` | optional passphrase that encrypts secrets.json fields at rest |
 | `npm run cockpit:rotate-topic` | rotate ntfy push topic locally (no remote notify) |
 
 **Local chart cache**
@@ -112,6 +113,7 @@ The main README stays slim. Detail lives in `docs/`:
 | Topic | File |
 |---|---|
 | Cockpit (daemon, CLI, ntfy, paper trades) | [`docs/COCKPIT.md`](docs/COCKPIT.md) |
+| **Secrets — where every key, hash, token lives** | [`docs/SECRETS.md`](docs/SECRETS.md) |
 | Architecture / engine internals / data flow | [`docs/AGENTS.md`](docs/AGENTS.md) |
 | External integrations (Yahoo / Zerodha / Dhan / NSE / Worker) | [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) |
 | Cloudflare Worker ops | [`docs/WORKER_OPS.md`](docs/WORKER_OPS.md) |

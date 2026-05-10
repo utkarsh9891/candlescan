@@ -1,18 +1,19 @@
 /**
  * `cockpit config` — print current effective config.
  *
- * Defaults to FULL output (this is your machine, your secrets file, your
- * terminal). Pass --redacted to mask the ntfy topic + broker secrets
- * before sharing the output (e.g. in a bug report).
+ * Defaults to REDACTED output. Pass --show-secrets to print the full
+ * file (only do this when you actually need the plain values, e.g. when
+ * copying a topic into a password manager).
  */
 
 import { readSecrets, exists, secretsPath } from '../lib/secrets-rw.mjs';
+import { isEncrypted } from '../lib/gate.mjs';
 
 export const help = `
-cockpit config [--redacted] — print current effective config
+cockpit config [--show-secrets] — print current effective config
 
-  cockpit config            full output (default; safe on your own machine)
-  cockpit config --redacted mask ntfy topic + broker secrets for sharing
+  cockpit config                    redacted output (default — safe to share)
+  cockpit config -- --show-secrets  full output, no redaction
 `.trim();
 
 const REDACT_KEYS = new Set(['topic', 'pin', 'apiSecret', 'accessToken']);
@@ -23,7 +24,8 @@ function redact(obj) {
   for (const k of Object.keys(obj)) {
     const v = obj[k];
     if (REDACT_KEYS.has(k) && typeof v === 'string' && v.length > 0) {
-      out[k] = `<${v.length}-char value, redacted>`;
+      const tag = isEncrypted(v) ? '<encrypted at rest>' : `<${v.length}-char value, redacted>`;
+      out[k] = tag;
     } else if (typeof v === 'object') {
       out[k] = redact(v);
     } else {
@@ -40,8 +42,10 @@ export async function run(args) {
     return;
   }
   const c = readSecrets();
-  const isRedacted = args.includes('--redacted') || args.includes('-r');
+  const showFull = args.includes('--show-secrets');
   console.log(`secrets: ${secretsPath()}`);
-  if (isRedacted) console.log('(redacted — safe to share)');
-  console.log(JSON.stringify(isRedacted ? redact(c) : c, null, 2));
+  if (!showFull) {
+    console.log('(redacted — pass --show-secrets to reveal raw values)');
+  }
+  console.log(JSON.stringify(showFull ? c : redact(c), null, 2));
 }

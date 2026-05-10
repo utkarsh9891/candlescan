@@ -12,7 +12,7 @@
  * First-run: see scripts/cockpit/README.md
  */
 
-import { loadConfig, baseUrl, secretsPath } from './config.mjs';
+import { loadConfigInteractive, baseUrl, secretsPath } from './config.mjs';
 import { makeNtfyProvider, notify } from './notify.mjs';
 import log from './log.mjs';
 import { runScan } from './scan.mjs';
@@ -40,7 +40,7 @@ if (cliArgs.length > 0) {
 async function main() {
   let cfg;
   try {
-    cfg = loadConfig();
+    cfg = await loadConfigInteractive();
   } catch (e) {
     log.err(`config: ${e.message}`);
     log.boot(`first-run setup: scripts/cockpit/README.md  (or  npm run cockpit:init)`);
