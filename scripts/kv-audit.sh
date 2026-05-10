@@ -101,8 +101,10 @@ audit_namespace() {
   [[ -z "$id" ]] && { printf "\n%-22s (no binding configured)\n" "$label"; return; }
   printf "\n%-22s id=%s  classification=%s\n" "$label" "$id" "$classification"
 
+  # `|| true` on the assignment so an empty namespace (where grep matches
+  # nothing) doesn't abort the script under set -o pipefail.
   local keys
-  keys=$(list_keys "$id" | grep -oE '"name": "[^"]+"' | sed 's/"name": "//;s/"$//')
+  keys=$(list_keys "$id" | grep -oE '"name": "[^"]+"' | sed 's/"name": "//;s/"$//' || true)
   [[ -z "$keys" ]] && { echo "  (empty)"; return; }
 
   local -a active=() stale=() unknown=()
@@ -124,10 +126,14 @@ audit_namespace() {
   done <<< "$keys"
 
   printf "  active   (%d)\n" "${#active[@]}"
-  for k in "${active[@]}"; do printf "    ✓ %s\n" "$k"; done
+  if (( ${#active[@]} > 0 )); then
+    for k in "${active[@]}"; do printf "    ✓ %s\n" "$k"; done
+  fi
   printf "  stale    (%d)\n" "${#stale[@]}"
-  for k in "${stale[@]}"; do printf "    ✗ %s\n" "$k"; done
-  if [[ ${#unknown[@]} -gt 0 ]]; then
+  if (( ${#stale[@]} > 0 )); then
+    for k in "${stale[@]}"; do printf "    ✗ %s\n" "$k"; done
+  fi
+  if (( ${#unknown[@]} > 0 )); then
     printf "  unknown  (%d) — verify before deleting\n" "${#unknown[@]}"
     for k in "${unknown[@]}"; do printf "    ? %s\n" "$k"; done
   fi
