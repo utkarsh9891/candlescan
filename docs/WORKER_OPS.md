@@ -92,7 +92,7 @@ Only the CF Worker (holding the private key) can decrypt them.
 Run the rotation from the repo root:
 
 ```bash
-npm run worker:keys:rotate     # convenience alias
+npm run worker:rotate-keys     # convenience alias
 # or directly:
 bash scripts/rotate-keys.sh
 ```
@@ -181,7 +181,7 @@ Run the rotation script to generate and deploy the RSA key pair:
 
 ```bash
 cd ..
-npm run worker:keys:rotate
+npm run worker:rotate-keys
 ```
 
 This sets the `GATE_PRIVATE_KEY` secret and stores `GATE_PUBLIC_KEY` in the
@@ -228,8 +228,8 @@ npx wrangler kv key delete --binding RATE_LIMIT "rl:SOME_KEY_HERE"
 ### Audit + clean the `CANDLESCAN_*` KV namespaces
 
 ```bash
-npm run worker:kv:audit            # list active vs stale across all bound namespaces
-npm run worker:kv:audit -- --clean # additionally delete stale keys
+npm run worker:audit-kv            # list active vs stale across all bound namespaces
+npm run worker:audit-kv -- --clean # additionally delete stale keys
 ```
 
 The audit walks both `CANDLESCAN_CONFIG` and `CANDLESCAN_CACHE` and

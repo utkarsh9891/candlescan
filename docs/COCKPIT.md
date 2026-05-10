@@ -295,11 +295,11 @@ There are two distinct security surfaces in the project. They are
 | Where it lives | Cloudflare Worker (`GATE_PASSPHRASE_HASH` secret + `GATE_PUBLIC_KEY` in KV) + browser localStorage vault | `~/.candlescan/cockpit/secrets.json` on your Mac |
 | What it protects | Premium-tier broker access (Zerodha / Dhan via Worker proxy) for the deployed PWA | ntfy topic + (forward-looking) Dhan / Zerodha creds for the local cockpit |
 | Crypto | RSA-OAEP-2048 (vault) + SHA-256 hash (passphrase) | none beyond Unix file permissions (mode 0600) |
-| Configured via | [`scripts/rotate-keys.sh`](../scripts/rotate-keys.sh) → `npm run worker:keys:rotate` | the cockpit CLI (`npm run cockpit:init`, `cockpit:dhan`, etc.) |
+| Configured via | [`scripts/rotate-keys.sh`](../scripts/rotate-keys.sh) → `npm run worker:rotate-keys` | the cockpit CLI (`npm run cockpit:init`, `cockpit:dhan`, etc.) |
 | Required for the cockpit? | **No** — the cockpit talks to Yahoo + NSE directly, no Worker round-trip needed | n/a |
 
 The cockpit does **not** call the PWA's gate-protected Worker endpoints
-today. It talks to Yahoo and NSE directly from your Mac. So `worker:keys:rotate`
+today. It talks to Yahoo and NSE directly from your Mac. So `worker:rotate-keys`
 is unrelated to cockpit operation; it's only relevant if you also use
 the deployed PWA's premium-tier broker integrations.
 

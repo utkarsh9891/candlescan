@@ -36,9 +36,9 @@ gate-protected broker proxying.
 | Secret | Lives in | Format | Encrypted at rest? | Set / rotated by |
 |---|---|---|---|---|
 | **PWA premium passphrase** | your head + password manager | plain | n/a | manual (you remember it) |
-| **PWA premium passphrase hash** (`GATE_PASSPHRASE_HASH`) | Worker secret | SHA-256 hex | yes (CF-managed) | `npm run worker:keys:rotate` |
-| **RSA public key** (`GATE_PUBLIC_KEY`) | Worker KV — `CANDLESCAN_CONFIG` | PEM | no (it's public) | `npm run worker:keys:rotate` |
-| **RSA private key** (`GATE_PRIVATE_KEY`) | Worker secret | PEM | yes (CF-managed) | `npm run worker:keys:rotate` |
+| **PWA premium passphrase hash** (`GATE_PASSPHRASE_HASH`) | Worker secret | SHA-256 hex | yes (CF-managed) | `npm run worker:rotate-keys` |
+| **RSA public key** (`GATE_PUBLIC_KEY`) | Worker KV — `CANDLESCAN_CONFIG` | PEM | no (it's public) | `npm run worker:rotate-keys` |
+| **RSA private key** (`GATE_PRIVATE_KEY`) | Worker secret | PEM | yes (CF-managed) | `npm run worker:rotate-keys` |
 | **Browser-side encrypted vault** (Zerodha / Dhan creds for the PWA) | browser `localStorage` | RSA-OAEP-2048 ciphertext | yes (decryptable only by Worker) | PWA Settings UI |
 | **PWA gate token** (per-device passphrase hash) | browser `localStorage` | SHA-256 hex | no (already a hash) | PWA Settings → Premium Gate |
 | **Cockpit gate config** (`gate.salt` + `gate.verifier`) | `~/.candlescan/cockpit/secrets.json` (Mac) | PBKDF2-SHA256 verifier hex | n/a (verifier, not the passphrase) | `npm run cockpit:gate -- set` |
@@ -63,7 +63,7 @@ they don't talk to each other.
 | Lives in | Cloudflare (Worker secret + KV) + browser localStorage | `~/.candlescan/cockpit/secrets.json` on your Mac |
 | Crypto | RSA-OAEP-2048 (vault) + SHA-256 hash (passphrase) | PBKDF2-SHA256 (verifier) + AES-256-GCM (field encryption) |
 | What it gates | Premium-tier broker access via the Worker for the PWA | Reading sensitive fields out of secrets.json on the Mac |
-| Configured via | `npm run worker:keys:rotate` | `npm run cockpit:gate -- set` |
+| Configured via | `npm run worker:rotate-keys` | `npm run cockpit:gate -- set` |
 | When you'd rotate it | RSA keys aged out / suspect leak / new passphrase | Suspect a backup leak / want a different passphrase |
 | Required for cockpit operation? | **No** — cockpit doesn't call Worker | Optional but recommended; defends against backups |
 
@@ -99,7 +99,7 @@ generate new RSA pair, hash the new passphrase, upload all three to CF,
 clean up local key files.
 
 ```bash
-npm run worker:keys:rotate     # interactive — prompts for the new passphrase
+npm run worker:rotate-keys     # interactive — prompts for the new passphrase
 ```
 
 After rotation, every device using the PWA must re-enter its broker
@@ -226,13 +226,13 @@ ntfy app, unsubscribe from the old.
 
 | What | Command | Side effects |
 |---|---|---|
-| PWA premium passphrase + RSA keys | `npm run worker:keys:rotate` | All users must re-enter Zerodha/Dhan creds in PWA Settings |
+| PWA premium passphrase + RSA keys | `npm run worker:rotate-keys` | All users must re-enter Zerodha/Dhan creds in PWA Settings |
 | Cockpit gate passphrase | `npm run cockpit:gate -- set` | None — encrypted fields stay encrypted with the new key |
 | Remove cockpit gate (decrypt back to plain) | `npm run cockpit:gate -- clear` | secrets.json is plain text again (still mode 0600) |
 | Dhan PIN | `npm run cockpit:dhan` (re-enter all) | TOTP still prompted at next boot |
 | Zerodha access token (daily) | `npm run cockpit:zerodha -- access-token` | None |
 | ntfy topic | `npm run cockpit:rotate-topic` | Resubscribe in ntfy app on phone |
 
-To audit or clean Worker KV state: `npm run worker:kv:audit` (read-only)
-or `npm run worker:kv:audit -- --clean` (deletes stale keys). See
+To audit or clean Worker KV state: `npm run worker:audit-kv` (read-only)
+or `npm run worker:audit-kv -- --clean` (deletes stale keys). See
 [`docs/WORKER_OPS.md`](WORKER_OPS.md).

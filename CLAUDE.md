@@ -50,8 +50,8 @@ Legacy aliases `v1` (→ delivery), `v2` (→ intraday), `classic` (→ delivery
 npm start            # dev server at 127.0.0.1:5173/candlescan/
 npm test             # 561 unit tests (vitest)
 npm run build        # production build → dist/
-npm run simulate:run     # CLI simulation: node scripts/simulate-day.mjs
-npm run cache:charts # warm local chart cache (writes to sibling candlescan-cache repo)
+npm run simulate     # CLI simulation: node scripts/simulate-day.mjs
+npm run cache:warm   # warm local chart cache (writes to sibling candlescan-cache repo)
 npm run cache:sync   # warm + auto-commit + push to candlescan-cache
 ```
 

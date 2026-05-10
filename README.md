@@ -65,7 +65,6 @@ Grouped by domain. All sub-commands follow `<domain>:<verb>`.
 | `npm start` (alias `dev`) | Vite dev server |
 | `npm run build` | production build → `dist/` |
 | `npm run preview` | preview built `dist/` |
-| `npm run pages:deploy` | manual deploy to GitHub Pages (CI runs this on merge) |
 
 **Tests**
 
@@ -79,7 +78,7 @@ Grouped by domain. All sub-commands follow `<domain>:<verb>`.
 
 | Command | Purpose |
 |---|---|
-| `npm run simulate:run` | CLI bar-by-bar trading simulation |
+| `npm run simulate` | CLI bar-by-bar trading simulation |
 
 **Cockpit (Mac scan daemon)**
 
@@ -101,16 +100,16 @@ Grouped by domain. All sub-commands follow `<domain>:<verb>`.
 
 | Command | Purpose |
 |---|---|
-| `npm run cache:warm` | warm the cache for a date range |
-| `npm run cache:warm:charts` | warm only chart OHLCV (subset) |
+| `npm run cache:warm` | quick warm of recent OHLCV (no date range — uses Yahoo's per-timeframe max retention) |
+| `npm run cache:backfill` | explicit date-range backfill (e.g. `-- --from 2026-04-01 --to 2026-04-30`) |
 | `npm run cache:sync` | warm + commit + push to the `candlescan-cache` sibling repo |
 
 **Cloudflare Worker ops**
 
 | Command | Purpose |
 |---|---|
-| `npm run worker:keys:rotate` | rotate Worker RSA keys + gate passphrase hash |
-| `npm run worker:kv:audit` | audit `CANDLESCAN_*` KV namespaces (`-- --clean` to delete stale) |
+| `npm run worker:rotate-keys` | rotate Worker RSA keys + gate passphrase hash |
+| `npm run worker:audit-kv` | audit `CANDLESCAN_*` KV namespaces (`-- --clean` to delete stale) |
 
 CLI docs: pass `--help` to any command, e.g. `npm run cockpit:help -- dhan`.
 

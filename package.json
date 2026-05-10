@@ -7,13 +7,12 @@
     "dev": "bash scripts/start.sh",
     "build": "vite build",
     "preview": "vite preview",
-    "pages:deploy": "bash scripts/deploy-to-pages.sh",
 
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
 
-    "simulate:run": "node scripts/simulate-day.mjs",
+    "simulate": "node scripts/simulate-day.mjs",
 
     "cockpit:start": "node scripts/cockpit/index.mjs",
     "cockpit:stop": "node scripts/cockpit/cli.mjs stop",
@@ -27,12 +26,12 @@
     "cockpit:gate": "node scripts/cockpit/cli.mjs gate",
     "cockpit:rotate-topic": "node scripts/cockpit/cli.mjs rotate-topic",
 
-    "cache:warm": "node scripts/warm-cache.mjs",
-    "cache:warm:charts": "node scripts/warm-chart-cache.mjs",
+    "cache:warm": "node scripts/warm-chart-cache.mjs",
+    "cache:backfill": "node scripts/warm-cache.mjs",
     "cache:sync": "node scripts/sync-cache-repo.mjs",
 
-    "worker:keys:rotate": "bash scripts/rotate-keys.sh",
-    "worker:kv:audit": "bash scripts/kv-audit.sh",
+    "worker:rotate-keys": "bash scripts/rotate-keys.sh",
+    "worker:audit-kv": "bash scripts/kv-audit.sh",
 
     "prepare": "git config core.hooksPath .git-hooks"
   },
