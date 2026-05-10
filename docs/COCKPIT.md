@@ -24,7 +24,6 @@ surface on the phone.
   - [`cockpit:rotate-topic`](#cockpitrotate-topic)
   - [`cockpit:logs`](#cockpitlogs)
   - [`cockpit:help`](#cockpithelp)
-- [Auto-start at 09:08 IST (launchd)](#auto-start-at-0908-ist-launchd)
 - [How this differs from the PWA's gate](#how-this-differs-from-the-pwas-gate)
 - [Configurable knobs (`secrets.json`)](#configurable-knobs-secretsjson)
 - [Files + data layout](#files--data-layout)
@@ -99,14 +98,14 @@ npm run cockpit:init
 npm run cockpit:dhan
 npm run cockpit:zerodha
 
-# 5. Start the daemon.
+# 5. Start the daemon. Run this each morning when you want scanning to begin.
 npm run cockpit
 
-# 6. (optional) Auto-start every weekday at 09:08 IST.
-bash scripts/cockpit/launchd/install.sh
+# 6. Stop it any time:
+npm run cockpit:stop
 ```
 
-After step 6 you should see:
+After step 5 you should see:
 
 - **Terminal**: colored `BOOT` lines + a `NOTIFY` line + per-tick `SCAN`
   lines + per-signal `SIGNAL ★` lines.
@@ -116,10 +115,9 @@ After step 6 you should see:
   same network. Live signals, open positions, closed P&L, SSE-powered
   live event stream.
 
-After step 7 the launchd job fires automatically every weekday morning
-without manual intervention. Holidays are handled by [holidays.mjs][hol].
-
-[hol]: ../scripts/cockpit/lib/holidays.mjs
+Holidays are handled by [holidays.mjs](../scripts/cockpit/lib/holidays.mjs)
+— the scan loop reports market-state and won't generate spurious signals
+on weekends / NSE holidays.
 
 ### PWA setting
 
@@ -165,7 +163,7 @@ Quick health summary, no side effects:
 
 - Is `secrets.json` present and complete?
 - Is the daemon reachable on its configured `host.port` (HTTP `/healthz`)?
-- Is the launchd job loaded?
+- Is the daemon currently running (pid file + pid still alive)?
 - Today's signal / open / closed counts and net P&L from the state file.
 
 Run it any time — pre-flight check, post-mortem after a session, etc.
@@ -223,8 +221,7 @@ guards against other Unix users; the gate guards against Time Machine
 backups, iCloud sync, and `cat secrets.json`.
 
 PBKDF2-SHA256 (200k iter) + AES-256-GCM. Once set, the daemon prompts
-for the passphrase at startup. **Mutually exclusive with launchd
-auto-start** (no TTY for the prompt).
+for the passphrase at startup.
 
 For the full storage model — what's encrypted, what isn't, where each
 field lives — see [`docs/SECRETS.md`](SECRETS.md).
@@ -265,30 +262,28 @@ npm run cockpit:help                   # list all commands
 npm run cockpit:help -- <command>      # help for a specific command
 ```
 
-## Auto-start at 09:08 IST (launchd)
+## Manual launch — no auto-start
+
+The cockpit is started manually each day, whenever you want scanning to
+begin. There's no launchd / cron / systemd integration, deliberately:
+trading hours vary, you might want to start at 09:00 some days and 09:30
+others, and a daemon that auto-launches at a fixed time you have to keep
+in sync becomes its own maintenance burden.
 
 ```bash
-bash scripts/cockpit/launchd/install.sh
+npm run cockpit         # start (foreground)
+npm run cockpit:stop    # SIGTERM, escalates to SIGKILL after 5s
 ```
 
-This:
+`cockpit:stop` reads the pid from `~/.candlescan/cockpit/cockpit.pid`
+(written by the daemon at boot), sends SIGTERM, waits up to 5 seconds for
+graceful shutdown, then SIGKILLs if the process hasn't exited. Safe to run
+even when the cockpit isn't running — it just reports "not running".
 
-- Renders [com.candlescan.cockpit.plist][plist] with your username + repo
-  path + Node path.
-- Loads it via `launchctl bootstrap`.
-- Schedules `pmset wake-from-sleep` at 09:06 IST weekdays so the Mac wakes
-  before the launchd job fires (requires AC power; laptops on battery
-  should set Energy Saver "prevent sleep" during market hours instead).
-
-To uninstall:
-
-```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.candlescan.cockpit.plist
-rm ~/Library/LaunchAgents/com.candlescan.cockpit.plist
-sudo pmset repeat cancel
-```
-
-[plist]: ../scripts/cockpit/launchd/com.candlescan.cockpit.plist
+A double-launch is prevented: if the pidfile exists and that process is
+alive, `npm run cockpit` refuses to start with a clear error pointing you
+at `cockpit:stop`. Stale pidfiles (process crashed, file lingered) are
+auto-cleaned on the next boot.
 
 ## How this differs from the PWA's gate
 
@@ -328,20 +323,62 @@ paths, npm scripts, log lines). The other terms are just synonyms.
 The cockpit's scan loop fetches OHLCV from one of three sources,
 configured via `scan.dataSource` in `secrets.json`:
 
-| Source | Status | Latency | Auth | Notes |
+| Source | Status | Latency | Auth model | Notes |
 |---|---|---|---|---|
-| `yahoo` (default) | ✅ live | ~1 min delay | none | what ships today |
-| `dhan` | 🚧 planned | real-time | clientId + PIN + TOTP at boot | creds CLI ships today (`cockpit:dhan`); the live OHLCV fetcher lands in the next iteration |
-| `zerodha` | 🚧 planned | real-time | apiKey + apiSecret + daily accessToken | same as above (`cockpit:zerodha`) |
+| `yahoo` (default) | ✅ live | ~1 min delay | none | anonymous, no creds, fallback when broker unavailable |
+| `dhan` | ✅ live | real-time | clientId + PIN stored, TOTP prompted at boot | needs `cockpit:dhan` first; needs an interactive TTY for the TOTP prompt at every boot |
+| `zerodha` | ✅ live | real-time | apiKey + apiSecret + daily accessToken | needs `cockpit:zerodha` first; refresh token daily via `cockpit:zerodha -- access-token` |
 
-**Today** the scan loop ignores `scan.dataSource` and always uses
-Yahoo. The config field is wired so that storing Dhan/Zerodha creds via
-the CLI commands today is forward setup — when the live fetchers land,
-flipping `scan.dataSource = "dhan"` (or `"zerodha"`) is the only
-change needed in your config.
+Switch sources by editing `scan.dataSource` in `secrets.json` (or via
+`cockpit:init` re-run). The cockpit talks to each broker's REST API
+directly — **no Cloudflare Worker hop** — so dropping the worker out of
+the cockpit's path entirely is intentional and shipped.
 
-If the 1-min Yahoo delay is a problem, the live broker fetchers move
-up the priority list — flag it.
+### Dhan boot flow
+
+Configured Dhan + dataSource=dhan → at every cockpit boot:
+
+1. Reads `dhan.clientId` + `dhan.pin` from secrets (decrypts via gate
+   if set).
+2. Prompts for the current 6-digit TOTP from your authenticator app.
+3. Exchanges (clientId + pin + TOTP) for a 24-hour access token via
+   `https://auth.dhan.co/app/generateAccessToken`.
+4. Holds the access token in memory for the cockpit's lifetime —
+   never written to disk.
+
+If the cockpit is started non-interactively (`nohup`, anything without
+a TTY) **and** `dataSource=dhan`, boot fails with a clear message.
+The TOTP prompt requires interactive input at every boot.
+
+### Zerodha boot flow
+
+Configured Zerodha + dataSource=zerodha → at every cockpit boot:
+
+1. Reads `zerodha.apiKey` + `zerodha.accessToken` from secrets
+   (decrypts via gate if set).
+2. Validates both are present, errors out cleanly if not.
+3. Uses them on every Kite API call as `Authorization: token <key>:<token>`.
+
+Zerodha access tokens expire daily (around 06:00 IST). Each morning,
+generate a fresh one via the PWA Settings OAuth flow and paste it in:
+
+```bash
+npm run cockpit:zerodha -- access-token
+```
+
+### Instrument-map caching
+
+Both brokers need a symbol → broker-id map for OHLCV calls (Kite uses
+`instrument_token`, Dhan uses `securityId`). The cockpit caches these
+maps to disk on first use:
+
+| Broker | Cache file | TTL | Source |
+|---|---|---|---|
+| Zerodha | `~/.candlescan/cockpit/cache/zerodha-instruments.json` | 24h | `GET https://api.kite.trade/instruments/NSE` (~3 MB CSV) |
+| Dhan | `~/.candlescan/cockpit/cache/dhan-instruments.json` | 7 days | `GET https://images.dhan.co/api-data/api-scrip-master.csv` (~32 MB) |
+
+First boot on a fresh setup spends a few extra seconds downloading +
+parsing. Subsequent boots load instantly from the cache.
 
 ## Configurable knobs (`secrets.json`)
 
@@ -395,12 +432,11 @@ scripts/cockpit/
     exit-monitor.mjs              # SL/target/EOD/trail logic
     prompts.mjs                   # readline + hidden-input helpers
     secrets-rw.mjs                # atomic secrets.json read/write
+    pidfile.mjs                   # claim / release ~/.candlescan/cockpit/cockpit.pid
+    gate.mjs                      # PBKDF2 + AES-GCM cred encryption
   commands/
     init.mjs config.mjs dhan.mjs zerodha.mjs
-    rotate-topic.mjs status.mjs logs.mjs
-  launchd/
-    com.candlescan.cockpit.plist  # template
-    install.sh                    # rendering + bootstrap script
+    gate.mjs rotate-topic.mjs status.mjs logs.mjs stop.mjs
 ```
 
 ## Trade flow walkthrough

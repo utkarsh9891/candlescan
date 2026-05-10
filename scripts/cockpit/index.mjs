@@ -18,6 +18,8 @@ import log from './log.mjs';
 import { runScan } from './scan.mjs';
 import { startServer, makeEventBus } from './lib/server.mjs';
 import { runExitMonitor } from './lib/exit-monitor.mjs';
+import { setupDataSource } from './lib/data-source.mjs';
+import { claimPidFile, removePidFile } from './lib/pidfile.mjs';
 import { dispatch as dispatchCli } from './cli.mjs';
 
 const DEFAULT_EXIT_INTERVAL_SEC = 30;
@@ -38,13 +40,24 @@ if (cliArgs.length > 0) {
 }
 
 async function main() {
+  // Claim the pidfile FIRST, before any other side effects, so a
+  // double-launch fails fast with a clear message before it boots half
+  // the system.
+  try {
+    claimPidFile();
+  } catch (e) {
+    log.err(e.message);
+    process.exit(1);
+  }
+
   let cfg;
   try {
     cfg = await loadConfigInteractive();
   } catch (e) {
     log.err(`config: ${e.message}`);
-    log.boot(`first-run setup: scripts/cockpit/README.md  (or  npm run cockpit:init)`);
+    log.boot(`first-run setup: docs/COCKPIT.md  (or  npm run cockpit:init)`);
     log.boot(`secrets path: ${secretsPath()}`);
+    removePidFile();
     process.exit(1);
   }
 
@@ -53,6 +66,17 @@ async function main() {
       `tf=${cfg.scan.timeframe} conf>=${cfg.scan.minConfidence} interval=${cfg.scan.intervalSec}s`,
   );
   log.boot(`host=${baseUrl(cfg)}`);
+
+  // Resolve the broker data source (Yahoo / Dhan / Zerodha). For Dhan
+  // this prompts for TOTP interactively and exchanges for an in-memory
+  // access token. Failure here aborts boot.
+  let dataSource;
+  try {
+    dataSource = await setupDataSource(cfg);
+  } catch (e) {
+    log.err(`data source: ${e.message}`);
+    process.exit(1);
+  }
 
   const provider = makeNtfyProvider({
     server: cfg.ntfy.server,
@@ -90,7 +114,7 @@ async function main() {
     scanInFlight = true;
     scanCount += 1;
     try {
-      await runScan({ cfg, provider, scanCount, eventBus });
+      await runScan({ cfg, provider, scanCount, eventBus, dataSource });
     } catch (e) {
       log.err(`scan #${scanCount} crashed: ${e.message}`);
     } finally {
@@ -125,6 +149,7 @@ async function main() {
   // ── Graceful shutdown ──
   const shutdown = (sig) => {
     log.boot(`received ${sig} — shutting down`);
+    removePidFile();
     try {
       httpServer.close(() => process.exit(0));
     } catch {
