@@ -46,27 +46,62 @@ npm run cockpit:help   # all commands
 
 Full cockpit docs: [`docs/COCKPIT.md`](docs/COCKPIT.md).
 
-## npm scripts (high-level)
+## npm scripts
+
+Grouped by domain, all sub-commands consistently namespaced as
+`<domain>:<verb>` so they sort and read together.
+
+**Frontend / dev**
 
 | Command | Purpose |
 |---|---|
-| `npm start` | Vite dev server |
-| `npm test` | unit tests (vitest) |
+| `npm start` (alias `dev`) | Vite dev server |
 | `npm run build` | production build → `dist/` |
+| `npm run preview` | preview built `dist/` |
 | `npm run pages` | manual deploy to GitHub Pages (CI runs this on merge) |
+
+**Tests**
+
+| Command | Purpose |
+|---|---|
+| `npm test` | run unit tests once (vitest) |
+| `npm run test:watch` | watch mode |
+| `npm run test:coverage` | with coverage report |
+
+**Simulation**
+
+| Command | Purpose |
+|---|---|
 | `npm run simulate` | CLI bar-by-bar trading simulation |
-| `npm run cache:warm` | warm the chart cache for a date range |
-| `npm run cache:sync` | warm + commit + push to candlescan-cache repo |
-| `npm run cockpit` | start the Mac-side cockpit daemon |
+
+**Cockpit (Mac scan daemon)**
+
+| Command | Purpose |
+|---|---|
+| `npm run cockpit` | start the daemon |
 | `npm run cockpit:init` | interactive first-run setup wizard |
-| `npm run cockpit:dhan` | configure Dhan broker creds (CLI) |
-| `npm run cockpit:zerodha` | configure Zerodha broker creds (CLI) |
-| `npm run cockpit:rotate-topic` | rotate the ntfy push topic locally (no remote notify) |
-| `npm run cockpit:status` | cockpit health summary |
-| `npm run cockpit:logs` | print/follow today's cockpit log |
-| `npm run cockpit:help` | full CLI help |
-| `npm run keys:rotate` | rotate CF Worker RSA keys + gate passphrase hash (PWA premium gate) |
-| `npm run kv:audit` | audit `CANDLESCAN_KV` namespace (active vs stale keys; `--clean` to delete stale) |
+| `npm run cockpit:status` | health summary (secrets / HTTP / launchd / today's P&L) |
+| `npm run cockpit:config` | print effective config (full; `-- --redacted` to mask) |
+| `npm run cockpit:logs` | print or follow today's cockpit log |
+| `npm run cockpit:help` | top-level help; `-- <cmd>` for any subcommand |
+| `npm run cockpit:dhan` | manage Dhan broker creds |
+| `npm run cockpit:zerodha` | manage Zerodha Kite creds |
+| `npm run cockpit:rotate-topic` | rotate ntfy push topic locally (no remote notify) |
+
+**Local chart cache**
+
+| Command | Purpose |
+|---|---|
+| `npm run cache:warm` | warm the cache for a date range |
+| `npm run cache:warm:charts` | warm only chart OHLCV (subset) |
+| `npm run cache:sync` | warm + commit + push to the `candlescan-cache` sibling repo |
+
+**Cloudflare Worker ops**
+
+| Command | Purpose |
+|---|---|
+| `npm run worker:keys:rotate` | rotate Worker RSA keys + gate passphrase hash |
+| `npm run worker:kv:audit` | audit `CANDLESCAN_*` KV namespaces (`-- --clean` to delete stale) |
 
 CLI docs: see `--help` on any command, e.g. `npm run cockpit:help -- dhan`.
 

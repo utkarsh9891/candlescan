@@ -17,8 +17,20 @@
  *   GATE_PRIVATE_KEY — RSA private key PEM for vault decryption
  *
  * KV namespace bindings (in wrangler.toml):
- *   RATE_LIMIT — for IP-based daily counters
- *   CANDLESCAN_KV — for storing GATE_PUBLIC_KEY + rate-hardened cache envelopes
+ *   RATE_LIMIT        — IP-based daily rate-limit counters
+ *
+ * Application KV — preferred layout is two separate bindings, fall back to
+ * legacy single binding while a migration is in progress:
+ *   CANDLESCAN_CONFIG — long-lived config (GATE_PUBLIC_KEY)
+ *   CANDLESCAN_CACHE  — TTL'd caches (instrument maps, daily VIX/FII-DII,
+ *                       news, last-quote)
+ *   CANDLESCAN_KV     — legacy single binding; used as fallback when the
+ *                       split bindings aren't present so the worker keeps
+ *                       running through the migration.
+ *
+ * Resolution helpers below pick the right binding for each use; deletion
+ * of CANDLESCAN_KV is the last step of the migration after data has been
+ * copied into CANDLESCAN_CONFIG.
  */
 
 import {
@@ -37,6 +49,15 @@ import {
   QUOTE_LAST_TTL_MS,
   QUOTE_LAST_STALE_MAX_MS,
 } from './cache.js';
+
+/** Long-lived config (GATE_PUBLIC_KEY etc) — never TTL'd. */
+function configKv(env) {
+  return env.CANDLESCAN_CONFIG || env.CANDLESCAN_KV;
+}
+/** TTL'd cache values (instrument maps, daily aggregates, news, quotes). */
+function cacheKv(env) {
+  return env.CANDLESCAN_CACHE || env.CANDLESCAN_KV;
+}
 
 const ALLOWED_ORIGINS = [
   'https://utkarsh9891.github.io',
@@ -241,10 +262,11 @@ async function handleGateUnlock(request, env, origin) {
     });
   }
 
-  // Retrieve public key from KV
+  // Retrieve public key from KV (config namespace)
   let publicKey = null;
-  if (env.CANDLESCAN_KV) {
-    publicKey = await env.CANDLESCAN_KV.get('GATE_PUBLIC_KEY');
+  const cfgKv = configKv(env);
+  if (cfgKv) {
+    publicKey = await cfgKv.get('GATE_PUBLIC_KEY');
   }
 
   if (!publicKey) {
@@ -267,9 +289,10 @@ async function resolveInstrumentToken(symbol, authHeader, env) {
   const KV_KEY = 'kite_nse_instruments';
   const sym = symbol.toUpperCase();
 
-  // Try KV cache first
-  if (env.CANDLESCAN_KV) {
-    const cached = await env.CANDLESCAN_KV.get(KV_KEY, 'json');
+  // Try KV cache first (cache namespace — TTL'd)
+  const ckv = cacheKv(env);
+  if (ckv) {
+    const cached = await ckv.get(KV_KEY, 'json');
     if (cached && cached[sym]) return cached[sym];
     // If cached but symbol not found, still try a fresh fetch below
     // (in case instrument was recently listed)
@@ -294,10 +317,10 @@ async function resolveInstrumentToken(symbol, authHeader, env) {
     if (tradingsymbol) map[tradingsymbol] = token;
   }
 
-  // Cache in KV for 24h
-  if (env.CANDLESCAN_KV) {
+  // Cache in KV for 24h (cache namespace)
+  if (ckv) {
     try {
-      await env.CANDLESCAN_KV.put(KV_KEY, JSON.stringify(map), { expirationTtl: 86400 });
+      await ckv.put(KV_KEY, JSON.stringify(map), { expirationTtl: 86400 });
     } catch { /* KV write failed — non-fatal */ }
   }
 
@@ -527,9 +550,10 @@ async function handleZerodhaValidate(request, env, origin) {
  */
 async function loadDhanInstrumentMap(env, { forceRefresh = false } = {}) {
   const KV_KEY = 'dhan_nse_instruments';
+  const ckv = cacheKv(env);
 
-  if (!forceRefresh && env.CANDLESCAN_KV) {
-    const cached = await env.CANDLESCAN_KV.get(KV_KEY, 'json');
+  if (!forceRefresh && ckv) {
+    const cached = await ckv.get(KV_KEY, 'json');
     if (cached && Object.keys(cached).length > 0) return cached;
   }
 
@@ -559,8 +583,8 @@ async function loadDhanInstrumentMap(env, { forceRefresh = false } = {}) {
   }
 
   // Cache for 7 days — Dhan adds listings infrequently (weekly at most).
-  if (env.CANDLESCAN_KV) {
-    try { await env.CANDLESCAN_KV.put(KV_KEY, JSON.stringify(map), { expirationTtl: 7 * 86400 }); } catch { /* ok */ }
+  if (ckv) {
+    try { await ckv.put(KV_KEY, JSON.stringify(map), { expirationTtl: 7 * 86400 }); } catch { /* ok */ }
   }
 
   return map;
@@ -694,7 +718,7 @@ async function handleIndiaNews(request, env, origin) {
 
   try {
     const result = await kvCacheFlow({
-      kv: env.CANDLESCAN_KV,
+      kv: cacheKv(env),
       key,
       ttlMs,
       staleMaxMs: INDIA_NEWS_STALE_MAX_MS,
@@ -794,7 +818,7 @@ async function handleQuoteLast(request, env, origin) {
 
   try {
     const result = await kvCacheFlow({
-      kv: env.CANDLESCAN_KV,
+      kv: cacheKv(env),
       key,
       ttlMs: QUOTE_LAST_TTL_MS,
       staleMaxMs: QUOTE_LAST_STALE_MAX_MS,
@@ -866,7 +890,7 @@ async function handleVixFetch(request, env, origin) {
   const key = vixKey(nowMs);
   try {
     const result = await kvCacheFlow({
-      kv: env.CANDLESCAN_KV,
+      kv: cacheKv(env),
       key,
       ttlMs: vixTtlMs(nowMs),
       staleMaxMs: VIX_STALE_MAX_MS,
@@ -951,7 +975,7 @@ async function handleFiiDiiFetch(request, env, origin) {
   const key = fiidiiKey(nowMs);
   try {
     const result = await kvCacheFlow({
-      kv: env.CANDLESCAN_KV,
+      kv: cacheKv(env),
       key,
       ttlMs: FIIDII_TTL_MS,
       staleMaxMs: FIIDII_STALE_MAX_MS,

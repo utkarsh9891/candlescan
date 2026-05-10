@@ -87,7 +87,7 @@ node scripts/warm-cache.mjs --from 2026-03-12 --to 2026-05-09 --skip-existing
 To warm a single index for one timeframe (faster, smaller scope):
 
 ```bash
-npm run cache:charts -- 5m --index "NIFTY SMALLCAP 100"
+npm run cache:warm:charts -- 5m --index "NIFTY SMALLCAP 100"
 ```
 
 To warm + auto-commit + push to the cache repo in one step:
