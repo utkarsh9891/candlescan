@@ -10,6 +10,7 @@
  */
 
 import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 import { ask, askSecret, choose, confirm } from '../lib/prompts.mjs';
 import { readSecrets, writeSecrets, secretsPath } from '../lib/secrets-rw.mjs';
 import {
@@ -17,6 +18,34 @@ import {
   deriveKey,
   encryptSensitive,
 } from '../lib/gate.mjs';
+
+const DEFAULT_PORT = 5174;
+
+/**
+ * Pick a sensible default cockpit hostname:
+ *   1. Mac's current LocalHostName via `scutil --get LocalHostName` →
+ *      e.g. "macbook" → "macbook.local". This is the Bonjour name your
+ *      phone resolves over mDNS — no IP needed, no manual rename needed.
+ *   2. Fallback to "cockpit.local" if scutil isn't available (non-macOS,
+ *      or the system call fails for any reason).
+ *
+ * Sanitises the LocalHostName to RFC-952-ish hostname chars; if the
+ * result is empty after sanitisation, falls back to "cockpit.local".
+ */
+function detectHostname() {
+  try {
+    const raw = execSync('scutil --get LocalHostName', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+    const safe = raw.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (safe) return `${safe}.local`;
+  } catch {
+    /* scutil missing / errored — fall through */
+  }
+  return 'cockpit.local';
+}
 
 export const help = `
 cockpit init — interactive first-run setup
@@ -60,16 +89,13 @@ export async function run() {
     }
   }
 
-  // ── host ──
-  const hostName = await ask('cockpit hostname (Mac mDNS name or LAN IP)', {
-    defaultValue: cur.host?.name || 'cockpit.local',
-    required: true,
-  });
-  const portRaw = await ask('cockpit HTTP port', {
-    defaultValue: String(cur.host?.port || 5174),
-    required: true,
-    validate: (v) => (Number.isFinite(+v) && +v > 0 && +v < 65536) ? null : 'invalid port',
-  });
+  // ── host: not prompted — auto-detect mDNS name + use default port ──
+  // Editing host.name / host.port directly in secrets.json is the escape
+  // hatch for anything non-standard.
+  const hostName = cur.host?.name || detectHostname();
+  const port = cur.host?.port || DEFAULT_PORT;
+  console.log(`\nhost: http://${hostName}:${port}  (auto-detected from your Mac's LocalHostName)`);
+  console.log('  edit secrets.json directly if you need a different host or port.\n');
 
   // ── scan ──
   const engine = await choose('engine', [
@@ -107,7 +133,7 @@ export async function run() {
 
   const next = {
     ...cur,
-    host: { name: hostName, port: +portRaw },
+    host: { name: hostName, port },
     ntfy: { ...(cur.ntfy || {}), topic },
     scan: {
       engine,
