@@ -16,8 +16,8 @@ describe('transport', () => {
   });
 
   it('cfUrl preserves query strings', () => {
-    expect(cfUrl('/news/google?symbol=RELIANCE')).toBe(
-      `${CF_WORKER_URL}/news/google?symbol=RELIANCE`
+    expect(cfUrl('/quote/last?symbol=RELIANCE')).toBe(
+      `${CF_WORKER_URL}/quote/last?symbol=RELIANCE`
     );
   });
 

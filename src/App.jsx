@@ -92,19 +92,6 @@ export default function App() {
     try { localStorage.setItem('candlescan_novice_mode', String(noviceMode)); } catch { /* quota */ }
   }, [noviceMode]);
 
-  // News enrichment — premium-gated. When OFF (or gate locked), batch scans
-  // skip per-symbol Worker calls to Google + Yahoo and rely solely on the
-  // index-wide Moneycontrol baseline. Default ON for premium users.
-  const [newsEnrichEnabled, setNewsEnrichEnabled] = useState(() => {
-    try {
-      const v = localStorage.getItem('candlescan_news_enabled');
-      return v == null ? true : v === 'true';
-    } catch { return true; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem('candlescan_news_enabled', String(newsEnrichEnabled)); } catch { /* quota */ }
-  }, [newsEnrichEnabled]);
-
   useEffect(() => {
     try { localStorage.setItem('candlescan_engine', engineVersion); } catch { /* quota */ }
     // Reset signal filters when engine changes (different category sets)
@@ -223,7 +210,7 @@ export default function App() {
     runScan(s);
     setView('main');
   }, [runScan, setView]);
-  const scheduledChecks = useScheduledChecks({ dataSource, nseIndex, newsEnrichEnabled });
+  const scheduledChecks = useScheduledChecks({ dataSource, nseIndex });
 
   // Merge broad NIFTY 500 universe + current index for homepage search
   const searchSymbols = useMemo(() => {
@@ -352,7 +339,6 @@ export default function App() {
             }}
             scheduledChecks={scheduledChecks}
             onOpenSettings={() => setView('settings')}
-            newsEnrichEnabled={newsEnrichEnabled}
           />
         ) : (
           <BatchScanPage
@@ -370,7 +356,6 @@ export default function App() {
             debugMode={debugMode}
             scheduledChecks={scheduledChecks}
             onOpenSettings={() => setView('settings')}
-            newsEnrichEnabled={newsEnrichEnabled}
           />
         )}
       </div>
@@ -410,8 +395,6 @@ export default function App() {
           onRemoveCustomIndex={handleRemoveCustomIndex}
           tickerSymbol={tickerSymbol}
           onTickerSymbolChange={handleTickerSymbolChange}
-          newsEnrichEnabled={newsEnrichEnabled}
-          onNewsEnrichEnabledChange={setNewsEnrichEnabled}
         />
       )}
 

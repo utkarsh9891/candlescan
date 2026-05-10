@@ -7,7 +7,7 @@
  *   - /gate/unlock endpoint to retrieve RSA public key
  *   - /zerodha/historical endpoint for proxied Kite API calls
  *   - KV-backed stale-on-upstream-fail caches for /market/vix, /market/fiidii,
- *     /news/india, /news/google (see `worker/cache.js`)
+ *     /news/india, /quote/last (see `worker/cache.js`)
  *
  * Deploy:
  *   cd worker && npx wrangler deploy
@@ -33,9 +33,9 @@ import {
   indiaNewsKey,
   indiaNewsTtlMs,
   INDIA_NEWS_STALE_MAX_MS,
-  googleNewsKey,
-  GOOGLE_NEWS_TTL_MS,
-  GOOGLE_NEWS_STALE_MAX_MS,
+  quoteLastKey,
+  QUOTE_LAST_TTL_MS,
+  QUOTE_LAST_STALE_MAX_MS,
 } from './cache.js';
 
 const ALLOWED_ORIGINS = [
@@ -128,7 +128,7 @@ async function checkRateLimit(request, env, { keyPrefix = 'rl', dailyLimit = DAI
 
 /**
  * Gate-or-public-rate-limit guard for the cached read-only endpoints
- * (/news/india, /news/google, /market/vix, /market/fiidii). Returns:
+ * (/news/india, /quote/last, /market/vix, /market/fiidii). Returns:
  *   - null when the request is allowed to proceed
  *   - a Response (403/429) when it should be rejected
  *
@@ -177,7 +177,7 @@ async function publicEndpointGuard(request, env, origin) {
 // Gate-token holders bypass.
 const PUBLIC_RATE_LIMITED_PATHS = new Set([
   '/news/india',
-  '/news/google',
+  '/quote/last',
   '/market/vix',
   '/market/fiidii',
 ]);
@@ -719,61 +719,67 @@ async function handleIndiaNews(request, env, origin) {
 }
 
 /**
- * Fetch + parse the Google News RSS feed for a given symbol.
- * Throws on upstream 5xx/429/network — `kvCacheFlow` catches and
- * falls back to stale cache or the "unavailable" sentinel.
+ * Fetch the latest 1m candle for a symbol from Yahoo's /v8/chart endpoint
+ * and extract a quote-shaped response. Replaces /v7/finance/quote which
+ * Yahoo locked behind a crumb-cookie wall (returns Unauthorized to plain
+ * GETs). /v8/chart still works for OHLCV without auth.
+ *
+ * Returns `{symbol, last, prevClose, dayHigh, dayLow, fetchedAt}`. No
+ * bid/ask — /v8 doesn't carry them. Throws on upstream 5xx/429 so
+ * `kvCacheFlow` can route to stale or the unavailable sentinel.
  */
-async function fetchGoogleNewsUpstream(symbol) {
-  const q = encodeURIComponent(`${symbol} stock NSE`);
-  const feedUrl = `https://news.google.com/rss/search?q=${q}&hl=en-IN&gl=IN&ceid=IN:en`;
-  const resp = await fetch(feedUrl, {
+async function fetchQuoteLastUpstream(symbol) {
+  const yahooSym = `${symbol}.NS`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1m&range=1d`;
+  const resp = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
   });
-  // Treat 5xx + 429 as "upstream failed" so the stale branch kicks in.
-  // 4xx other than 429 is a hard fail — propagate so the caller sees it.
   if (!resp.ok) {
-    const err = new Error(`Google RSS HTTP ${resp.status}`);
+    const err = new Error(`Yahoo /v8/chart HTTP ${resp.status}`);
     err.upstreamStatus = resp.status;
     throw err;
   }
-  const xml = await resp.text();
-  const items = [];
-  const rawItems = xml.split(/<item[\s>]/i).slice(1);
-  for (const raw of rawItems) {
-    let title = '';
-    const t = raw.match(/<title>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i);
-    if (t) title = (t[1] || t[2] || '').trim();
-    let description = '';
-    const d = raw.match(/<description>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/description>/i);
-    if (d) description = (d[1] || d[2] || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    let pubDate = '';
-    const pd = raw.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
-    if (pd) pubDate = pd[1].trim();
-    let link = '';
-    const lk = raw.match(/<link>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/link>/i);
-    if (lk) link = (lk[1] || lk[2] || '').trim();
-    if (title) items.push({ title, description, pubDate, link });
+  const data = await resp.json().catch(() => ({}));
+  const r = data?.chart?.result?.[0];
+  if (!r) {
+    throw new Error('Yahoo /v8/chart returned no result');
   }
-  return { symbol, items, count: items.length, fetchedAt: new Date().toISOString() };
+  const meta = r.meta || {};
+  const closes = r.indicators?.quote?.[0]?.close || [];
+  // Last non-null close in the 1m series; falls back to regularMarketPrice
+  // from meta when the most recent candle is still forming (close=null).
+  let last = null;
+  for (let i = closes.length - 1; i >= 0; i--) {
+    if (closes[i] != null) { last = closes[i]; break; }
+  }
+  if (last == null && Number.isFinite(meta.regularMarketPrice)) {
+    last = meta.regularMarketPrice;
+  }
+  return {
+    symbol,
+    last,
+    prevClose: Number.isFinite(meta.chartPreviousClose) ? meta.chartPreviousClose : null,
+    dayHigh: Number.isFinite(meta.regularMarketDayHigh) ? meta.regularMarketDayHigh : null,
+    dayLow: Number.isFinite(meta.regularMarketDayLow) ? meta.regularMarketDayLow : null,
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 /**
- * Handle /news/google — per-symbol Google News RSS proxy.
- * Browser calls this for top-N ranked candidates after phase 3 to
- * get per-stock news context. One HTTP call per symbol — the browser
- * is expected to batch this (parallel Promise.all) rather than loop.
+ * Handle /quote/last — last-candle-close quote proxy. Replaces the
+ * dropped /v7/finance/quote (Yahoo locked it behind crumb auth in 2025).
  *
- * Response: { items: [{title, description}, ...], symbol, count }
- * Client parses + scores via newsSentiment.scoreText.
+ * Used by the PaperTradingPage P&L refresh and the single-stock scanner
+ * detail view. The 30s KV cache (`quoteLastKey`) absorbs polling bursts
+ * so K active trades polled every 5s collapse to one upstream call per
+ * symbol per 30s window — keeps Yahoo's egress-IP rate-limit healthy.
  *
- * Cache behaviour:
- *   - Key `google_news:${symbol}:${YYYY-MM-DD}` in KV.
- *   - Fresh window 4h, stale window 24h.
- *   - On upstream 502/timeout/429 with no cache: returns HTTP 200 with
- *     `{headlines:[], score:null, source:'unavailable'}` so the caller
- *     doesn't retry pointlessly. X-Cache header = UNAVAILABLE in that case.
+ * Cache: `quote_last:${symbol}:${30s-bucket}`, 30s fresh / 5min stale.
+ * No bid/ask — Yahoo's /v8/chart doesn't carry them. Caller (yahooQuote.js)
+ * preserves the legacy {bid: null, ask: null, last: ...} shape so the UI
+ * gracefully shows last-trade price when bid/ask is unavailable.
  */
-async function handleGoogleNewsForSymbol(request, env, origin) {
+async function handleQuoteLast(request, env, origin) {
   const url = new URL(request.url);
   const rawSym = url.searchParams.get('symbol') || '';
   const symbol = rawSym.replace(/[^A-Za-z0-9&-]/g, '').slice(0, 24);
@@ -784,21 +790,21 @@ async function handleGoogleNewsForSymbol(request, env, origin) {
   }
 
   const nowMs = Date.now();
-  const key = googleNewsKey(symbol, nowMs);
+  const key = quoteLastKey(symbol, nowMs);
 
   try {
     const result = await kvCacheFlow({
       kv: env.CANDLESCAN_KV,
       key,
-      ttlMs: GOOGLE_NEWS_TTL_MS,
-      staleMaxMs: GOOGLE_NEWS_STALE_MAX_MS,
-      fetchFresh: () => fetchGoogleNewsUpstream(symbol),
+      ttlMs: QUOTE_LAST_TTL_MS,
+      staleMaxMs: QUOTE_LAST_STALE_MAX_MS,
+      fetchFresh: () => fetchQuoteLastUpstream(symbol),
       unavailablePayload: () => ({
         symbol,
-        items: [],
-        headlines: [],
-        score: null,
-        count: 0,
+        last: null,
+        prevClose: null,
+        dayHigh: null,
+        dayLow: null,
         fetchedAt: new Date().toISOString(),
         source: 'unavailable',
       }),
@@ -814,11 +820,11 @@ async function handleGoogleNewsForSymbol(request, env, origin) {
         ...corsHeaders(origin),
         ...cacheHeaders({ status: result.status, key: result.key, ageMs: result.ageMs ?? 0, cacheSource: sourceTag }),
         'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=600', // 10 min edge cache on top of KV
+        'Cache-Control': 'public, max-age=30', // edge cache matches KV TTL
       },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: `Google News fetch failed: ${err?.message || err}` }), {
+    return new Response(JSON.stringify({ error: `Quote fetch failed: ${err?.message || err}` }), {
       status: 502, headers: { ...corsHeaders(origin), ...cacheHeaders({ status: 'MISS', key }), 'Content-Type': 'application/json' },
     });
   }
@@ -1298,12 +1304,12 @@ export default {
       return handleIndiaNews(request, env, origin);
     }
 
-    // Google News per-symbol proxy — called for deep lookup on the top
-    // ranked candidates after phase 3 so the news layer gets per-stock
-    // depth beyond what the broad-feed map provides.
+    // Last-candle quote proxy — replaces the dropped /v7/finance/quote
+    // (Yahoo locked it behind crumb auth in 2025). Used by PaperTradingPage
+    // P&L refresh + scanner detail view. KV-cached 30s.
     // Takes ?symbol=RELIANCE (sanitized to alphanumeric + -).
-    if (path === '/news/google') {
-      return handleGoogleNewsForSymbol(request, env, origin);
+    if (path === '/quote/last') {
+      return handleQuoteLast(request, env, origin);
     }
 
     // India VIX live fetch — browser calls this at scan start to get

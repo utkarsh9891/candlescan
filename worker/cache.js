@@ -11,7 +11,7 @@
  * can be unit-tested under Vitest with a small in-memory KV stub.
  *
  * Used by `/market/vix`, `/market/fiidii`, `/news/india`,
- * `/news/google` in `worker/index.js`.
+ * `/quote/last` in `worker/index.js`.
  */
 
 // ───────────────────────────────────────────────────────────
@@ -202,7 +202,7 @@ export function cacheHeaders({ status, key, ageMs, cacheSource }) {
 
 /**
  * Orchestrate the "KV hit → upstream fetch → stale fallback" flow that
- * `/market/vix`, `/market/fiidii`, `/news/india`, `/news/google`
+ * `/market/vix`, `/market/fiidii`, `/news/india`, `/quote/last`
  * all share.
  *
  * @param {object} opts
@@ -297,9 +297,12 @@ export function indiaNewsTtlMs(nowMs = Date.now()) {
 // Up to 4h old snapshot is servable on upstream fail.
 export const INDIA_NEWS_STALE_MAX_MS = 4 * 60 * 60 * 1000;
 
-// Google News — 4h fresh, 24h stale max.
-export const GOOGLE_NEWS_TTL_MS = 4 * 60 * 60 * 1000;
-export const GOOGLE_NEWS_STALE_MAX_MS = 24 * 60 * 60 * 1000;
+// Quote-last (Yahoo /v8 last-candle proxy for paper-trading P&L refresh).
+// 30s fresh window absorbs polling bursts so a page that refreshes every
+// 5s for 3 active trades collapses to one upstream call per symbol per 30s.
+// 5min stale window covers brief Yahoo upstream hiccups.
+export const QUOTE_LAST_TTL_MS = 30 * 1000;
+export const QUOTE_LAST_STALE_MAX_MS = 5 * 60 * 1000;
 
 // ───────────────────────────────────────────────────────────
 // Key builders
@@ -316,6 +319,9 @@ export function indiaNewsKey(nowMs = Date.now()) {
   const hourBucket = Math.floor(nowMs / ttlMs);
   return `india_news_rss:${hourBucket}`;
 }
-export function googleNewsKey(symbol, nowMs = Date.now()) {
-  return `google_news:${symbol}:${istDateString(nowMs)}`;
+export function quoteLastKey(symbol, nowMs = Date.now()) {
+  // 30s window bucket — collapses rapid PaperTrading polls to one
+  // upstream call per symbol per cache window.
+  const windowBucket = Math.floor(nowMs / QUOTE_LAST_TTL_MS);
+  return `quote_last:${symbol}:${windowBucket}`;
 }

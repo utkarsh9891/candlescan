@@ -3,7 +3,7 @@
  *   - /market/vix         → handleVixFetch
  *   - /market/fiidii      → handleFiiDiiFetch
  *   - /news/india         → handleIndiaNews
- *   - /news/google        → handleGoogleNewsForSymbol
+ *   - /quote/last         → handleQuoteLast
  *
  * Rather than stand up a real Cloudflare Worker, we import the
  * module's default `fetch` export and call it with synthetic Request
@@ -279,95 +279,106 @@ describe('handleIndiaNews', () => {
 });
 
 // ───────────────────────────────────────────────────────────
-// /news/google
+// /quote/last  (last-candle quote proxy — replaces /v7/finance/quote)
 // ───────────────────────────────────────────────────────────
-describe('handleGoogleNewsForSymbol', () => {
+describe('handleQuoteLast', () => {
+  // Build a minimal Yahoo /v8/chart response that fetchQuoteLastUpstream
+  // can parse. The interesting fields are meta.* and indicators.quote[0].close.
+  function makeChartResp({ closes, meta = {} }) {
+    return jsonResp({
+      chart: {
+        result: [{
+          meta: {
+            regularMarketPrice: meta.regularMarketPrice ?? null,
+            chartPreviousClose: meta.chartPreviousClose ?? null,
+            regularMarketDayHigh: meta.regularMarketDayHigh ?? null,
+            regularMarketDayLow: meta.regularMarketDayLow ?? null,
+          },
+          indicators: { quote: [{ close: closes }] },
+        }],
+      },
+    });
+  }
+
   it('400 on missing symbol', async () => {
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/google'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last'), { CANDLESCAN_KV: kv });
     expect(resp.status).toBe(400);
   });
 
-  it('MISS → upstream fetch → 200 with X-Cache-Source=miss', async () => {
-    globalThis.fetch = vi.fn(async () => new Response(
-      '<rss><channel><item><title>RELIANCE stock up 2%</title><description>Rally</description><pubDate>Mon, 21 Apr 2026 10:00:00 GMT</pubDate></item></channel></rss>',
-      { status: 200 },
-    ));
+  it('MISS → upstream fetch → 200 with last-candle close + dayHigh/Low/prevClose', async () => {
+    globalThis.fetch = vi.fn(async () => makeChartResp({
+      closes: [100, 101, 102.5],
+      meta: { regularMarketDayHigh: 103, regularMarketDayLow: 99.5, chartPreviousClose: 99 },
+    }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/google?symbol=RELIANCE'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=RELIANCE'), { CANDLESCAN_KV: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('MISS');
-    expect(resp.headers.get('X-Cache-Source')).toBe('miss');
     const body = await resp.json();
-    expect(body.count).toBe(1);
+    expect(body.last).toBe(102.5);
+    expect(body.dayHigh).toBe(103);
+    expect(body.dayLow).toBe(99.5);
+    expect(body.prevClose).toBe(99);
   });
 
-  it('HIT on second call uses cache (no second upstream fetch)', async () => {
-    const fetchMock = vi.fn(async () => new Response(
-      '<rss><channel><item><title>TCS results</title></item></channel></rss>',
-      { status: 200 },
-    ));
+  it('falls back to meta.regularMarketPrice when latest 1m close is null (still-forming candle)', async () => {
+    globalThis.fetch = vi.fn(async () => makeChartResp({
+      closes: [100, 101, null], // most recent candle still forming
+      meta: { regularMarketPrice: 101.4 },
+    }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=TCS'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    // Last non-null close in series is 101 — that wins over meta fallback
+    expect(body.last).toBe(101);
+  });
+
+  it('returns meta.regularMarketPrice when ALL closes are null (cold session)', async () => {
+    globalThis.fetch = vi.fn(async () => makeChartResp({
+      closes: [null, null, null],
+      meta: { regularMarketPrice: 555 },
+    }));
+    const kv = makeKvStub();
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=INFY'), { CANDLESCAN_KV: kv });
+    const body = await resp.json();
+    expect(body.last).toBe(555);
+  });
+
+  it('HIT on second call within 30s window uses cache', async () => {
+    const fetchMock = vi.fn(async () => makeChartResp({ closes: [100], meta: {} }));
     globalThis.fetch = fetchMock;
     const kv = makeKvStub();
-    await worker.fetch(makeRequest('/news/google?symbol=TCS'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const resp2 = await worker.fetch(makeRequest('/news/google?symbol=TCS'), { CANDLESCAN_KV: kv });
+    const resp2 = await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(resp2.headers.get('X-Cache')).toBe('HIT');
-    expect(resp2.headers.get('X-Cache-Source')).toBe('fresh');
   });
 
-  it('STALE fallback when upstream 502s + cache exists', async () => {
-    const kv = makeKvStub();
-    const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-    const key = `google_news:INFY:${today}`;
-    // 5h-old entry: past 4h TTL, within 24h staleMax
-    kv.store.set(key, JSON.stringify({
-      value: { symbol: 'INFY', items: [{ title: 'Infy Q4' }], count: 1 },
-      writtenAt: Date.now() - 5 * 60 * 60 * 1000,
-    }));
-    globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
-    const resp = await worker.fetch(makeRequest('/news/google?symbol=INFY'), { CANDLESCAN_KV: kv });
-    expect(resp.status).toBe(200);
-    expect(resp.headers.get('X-Cache')).toBe('STALE');
-    expect(resp.headers.get('X-Cache-Source')).toBe('stale');
-    const body = await resp.json();
-    expect(body.items[0].title).toBe('Infy Q4');
-  });
-
-  it('UNAVAILABLE sentinel (HTTP 200) when upstream fails + no cache', async () => {
+  it('UNAVAILABLE sentinel when upstream 502s + no cache', async () => {
     globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/google?symbol=NONEXIST'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=NONEXIST'), { CANDLESCAN_KV: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('UNAVAILABLE');
-    expect(resp.headers.get('X-Cache-Source')).toBe('unavailable');
     const body = await resp.json();
     expect(body.source).toBe('unavailable');
-    expect(body.items).toEqual([]);
-    expect(body.score).toBeNull();
+    expect(body.last).toBeNull();
   });
 
-  it('exposes X-Cache* headers via Access-Control-Expose-Headers', async () => {
-    globalThis.fetch = vi.fn(async () => new Response('<rss></rss>', { status: 200 }));
+  it('hits Yahoo /v8/finance/chart with .NS suffix and 1m/1d params', async () => {
+    let calledUrl = '';
+    globalThis.fetch = vi.fn(async (url) => {
+      calledUrl = String(url);
+      return makeChartResp({ closes: [100], meta: {} });
+    });
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/google?symbol=INFY'), { CANDLESCAN_KV: kv });
-    const expose = resp.headers.get('Access-Control-Expose-Headers') || '';
-    expect(expose).toContain('X-Cache');
-    expect(expose).toContain('X-Cache-Age');
-    expect(expose).toContain('X-Cache-Key');
-    expect(expose).toContain('X-Cache-Source');
-  });
-
-  it('extracts <link> from Google RSS items', async () => {
-    globalThis.fetch = vi.fn(async () => new Response(
-      '<rss><channel><item><title>HDFC up 3%</title><description>Rally</description><link>https://news.google.com/rss/articles/abc123</link></item></channel></rss>',
-      { status: 200 },
-    ));
-    const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/google?symbol=HDFC'), { CANDLESCAN_KV: kv });
-    const body = await resp.json();
-    expect(body.items[0].link).toBe('https://news.google.com/rss/articles/abc123');
+    await worker.fetch(makeRequest('/quote/last?symbol=RELIANCE'), { CANDLESCAN_KV: kv });
+    expect(calledUrl).toMatch(/v8\/finance\/chart/);
+    expect(calledUrl).toMatch(/RELIANCE\.NS/);
+    expect(calledUrl).toMatch(/interval=1m/);
+    expect(calledUrl).toMatch(/range=1d/);
   });
 });
 
@@ -477,21 +488,23 @@ describe('publicEndpointGuard — DOS protection on /news/* + /market/*', () => 
 // Write-budget micro-cache
 // ───────────────────────────────────────────────────────────
 describe('write-dedupe micro-cache', () => {
-  it('does not write twice for two near-simultaneous /news/google cache misses on the same symbol', async () => {
+  it('does not write twice for two near-simultaneous /quote/last cache misses on the same symbol', async () => {
     // Two concurrent requests for the same symbol — first writes,
     // second is still in the 30s dedupe window → should skip.
     const kv = makeKvStub();
     let fetchCount = 0;
     globalThis.fetch = vi.fn(async () => {
       fetchCount++;
-      return new Response('<rss><channel><item><title>X</title></item></channel></rss>', { status: 200 });
+      return new Response(JSON.stringify({
+        chart: { result: [{ meta: {}, indicators: { quote: [{ close: [100] }] } }] },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
 
-    await worker.fetch(makeRequest('/news/google?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
     // Manually clear KV so the next call counts as a miss again BUT dedupe
     // map still says "we wrote this key 0s ago".
     kv.store.clear();
-    await worker.fetch(makeRequest('/news/google?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
 
     // Only 1 KV write should have happened — the second miss was deduped.
     expect(kv.writeCount()).toBe(1);

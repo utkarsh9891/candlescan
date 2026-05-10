@@ -14,214 +14,7 @@ import { computeRiskScore as computeRiskScoreDefault } from './risk.js';
 import { filterStock, regimeGate, rankScore, sizeMultiplier } from './tradeDecision.js';
 import { classifyNewsSentiment, classifyInstitutionalFlow, liquidityTier } from './marketContext.js';
 import { getSector } from './sectorMap.js';
-import { fetchLiveGoogleNewsDetailForSymbol } from './marketContextLive.js';
-import { getCachedNews, setCachedNews } from './newsCacheLocal.js';
 import { isTokenExpiredError } from './brokerErrors.js';
-
-// Per-(symbol, hour) cache for the Google News per-symbol fetches. Keeps
-// us from re-hitting the Worker during back-to-back scans within the same
-// hour — the CF Worker has its own KV cache layer so this is belt-and-
-// braces, but it also cuts cold-start latency materially on the 2nd scan.
-const NEWS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-const newsCache = new Map(); // key: `${symbol}:${hour}`, value: { fetchedAt, score, headlines }
-
-/** Exported for tests only — clears the per-symbol in-memory news cache. */
-export function _resetBatchScanNewsCache() {
-  newsCache.clear();
-}
-
-/** Hour bucket for cache keys. Uses local epoch hour — good enough given TTL. */
-function currentHourBucket() {
-  return Math.floor(Date.now() / NEWS_CACHE_TTL_MS);
-}
-
-/**
- * Tiny semaphore — used to cap concurrent per-symbol news fetches.
- * The outer scan may run with concurrency=8 (BatchScanPage, NoviceMode);
- * we keep news at most `newsConcurrency` in flight to stay well under
- * the Worker's rate-limit budget and avoid starving the chart fetches.
- */
-function createSemaphore(max) {
-  let active = 0;
-  const queue = [];
-  const drain = () => {
-    if (active >= max || queue.length === 0) return;
-    active++;
-    const next = queue.shift();
-    next();
-  };
-  return {
-    async acquire() {
-      if (active < max) {
-        active++;
-        return;
-      }
-      await new Promise((resolve) => queue.push(resolve));
-    },
-    release() {
-      active = Math.max(0, active - 1);
-      drain();
-    },
-  };
-}
-
-/**
- * Four-tier news fallback chain. Never throws — on any failure it
- * returns a sentinel so the caller can fall back to the index-wide
- * broad-feed map. Telemetry counters are updated in place.
- *
- * Tiers, in order:
- *   1. In-memory hour cache   — fastest, scoped to this JS context.
- *   2. localStorage cache     — survives page reload; TTL 4h market / 12h off.
- *   3. Worker fetch (Google)  — reads `X-Cache` header:
- *        HIT | MISS            → fresh Google News, store in both caches.
- *        STALE                 → KV-served stale; store, mark `source: 'stale'`.
- *        UNAVAILABLE           → Worker has nothing; fall to tier 4.
- *   4. Broad-feed fallback    — supplied by caller as `broadNewsFn(symbol)`
- *                               or derived from the index-wide newsMap. When
- *                               present, returns `{score, source: 'india'}`.
- *                               When missing, returns `{score: null, source: 'none'}`
- *                               so the scan continues without a news veto.
- *
- * @param {string} symbol  uppercase NSE symbol (no .NS)
- * @param {Object} opts
- * @param {Function} [opts.newsFetchFn]   override Google fetcher (tests)
- * @param {Function} [opts.broadNewsFn]   override broad-feed fallback (tests)
- * @param {Object} opts.telemetry         batchScan telemetry object
- * @param {Object} [opts.newsSem]         semaphore for concurrency cap
- * @param {AbortSignal} [opts.signal]
- * @param {boolean} [opts.newsEnrichEnabled=true] when false, skip the per-symbol
- *   Worker tier (Google) and rely solely on the index-wide broad-feed
- *   fallback. This is the below-premium path: still gets a sentiment
- *   signal for stocks the daily sweep happened to mention, but no
- *   per-symbol Worker calls are issued.
- * @returns {Promise<{score: number|null, headlines: Array, source: string}>}
- */
-async function fetchPerSymbolNews(symbol, {
-  newsFetchFn,
-  broadNewsFn,
-  telemetry,
-  newsSem,
-  signal,
-  newsEnrichEnabled = true,
-}) {
-  const none = { score: null, headlines: [], source: 'none' };
-  if (!symbol) return none;
-  if (signal?.aborted) return none;
-
-  // ── Tier 1: in-memory hour cache ──────────────────────────────────
-  const hour = currentHourBucket();
-  const key = `${symbol}:${hour}`;
-  const hit = newsCache.get(key);
-  if (hit) {
-    telemetry.newsCacheHits++;
-    return hit;
-  }
-
-  // ── Tier 2: localStorage cache ────────────────────────────────────
-  // Survives page reload; TTL-bucketed by the helper (4h/12h). Promote
-  // a hit back into the in-memory cache so sibling symbols / later
-  // candidates in the same scan skip the disk lookup.
-  const diskHit = getCachedNews(symbol);
-  if (diskHit && (diskHit.score != null || (diskHit.headlines || []).length > 0)) {
-    const value = {
-      score: diskHit.score,
-      headlines: diskHit.headlines || [],
-      source: diskHit.source || 'google',
-    };
-    newsCache.set(key, value);
-    telemetry.newsFromCache++;
-    return value;
-  }
-
-  // ── Tier 3: Worker fetch (Google) ────────────────────────────────
-  // Premium-gated: when news enrichment is disabled (gate locked or user-
-  // turned-off in Settings), skip the Worker call entirely and fall
-  // straight to the index-wide broad-feed baseline. The broad-feed map
-  // is built once at scan start and is free, so non-premium users still
-  // get sentiment for stocks the daily sweep happened to mention.
-  if (newsEnrichEnabled) {
-    if (newsSem) await newsSem.acquire();
-    try {
-      if (signal?.aborted) return none;
-      // Re-check in-memory cache after acquiring — a concurrent scanner
-      // may have filled it while we were waiting on the semaphore.
-      const hitAfter = newsCache.get(key);
-      if (hitAfter) {
-        telemetry.newsCacheHits++;
-        return hitAfter;
-      }
-
-      const googleFetcher = newsFetchFn || fetchLiveGoogleNewsDetailForSymbol;
-
-      let resolved = null;
-      let resolvedSource = null;
-
-      telemetry.newsFetched++;
-      let gres = null;
-      try {
-        gres = await googleFetcher(symbol);
-      } catch {
-        telemetry.newsFetchErrors++;
-      }
-      const gStatus = String(gres?.cacheStatus || '').toUpperCase();
-      if (gres && gres.score != null && gStatus !== 'UNAVAILABLE') {
-        resolved = gres;
-        resolvedSource = gStatus === 'STALE' ? 'stale' : 'google';
-      }
-
-      if (resolved) {
-        const value = {
-          score: resolved.score,
-          headlines: resolved.headlines || [],
-          source: resolvedSource,
-        };
-        newsCache.set(key, value);
-        if (newsCache.size > 4096) {
-          const firstKey = newsCache.keys().next().value;
-          if (firstKey !== undefined) newsCache.delete(firstKey);
-        }
-        // Persist only fresh results — STALE entries get served to the
-        // current scan but not re-cached, so the next scan refetches
-        // once upstream recovers.
-        if (resolvedSource === 'google') {
-          setCachedNews(symbol, { ...value });
-        }
-        return value;
-      }
-      // Worker UNAVAILABLE / empty — fall through to tier 4 below.
-    } finally {
-      if (newsSem) newsSem.release();
-    }
-  }
-
-  // ── Tier 4: broad-feed baseline ───────────────────────────────────
-  // Always available, no auth required. The cheap free path — index-wide
-  // RSS map (Moneycontrol + LiveMint + ET + Business Standard merged at
-  // the Worker), string-matched to the symbol. Imperfect (matches by
-  // company name / symbol literal in the headline) but free, and the
-  // only sentiment source available below the premium gate.
-  try {
-    if (broadNewsFn) {
-      const mc = await broadNewsFn(symbol);
-      if (mc && mc.score != null) {
-        telemetry.newsFromFallback++;
-        return {
-          score: mc.score,
-          headlines: mc.headlines || [],
-          source: 'india',
-        };
-      }
-    }
-  } catch {
-    // Broad-feed fallback never throws into the scan — silently
-    // coalesce into the "unavailable" branch below.
-  }
-
-  // No news at any tier — scan continues without a sentiment signal.
-  telemetry.newsUnavailable++;
-  return none;
-}
 
 const ACTION_RANK = {
   'STRONG BUY': 5,
@@ -369,11 +162,7 @@ export async function batchScan({
   onResult, // optional: called per-stock as results arrive (for progressive rendering)
   signal,
   fetchFn, // optional: custom fetch function (e.g. fetchDhanOHLCV) — defaults to Yahoo
-  newsFetchFn, // optional: override for per-symbol Google news fetch (tests)
-  newsConcurrency = 6, // cap on parallel per-symbol news fetches (Worker rate-limit)
-  broadNewsFn, // optional: tier-4 fallback used when the Worker is UNAVAILABLE (tests)
   flowFetchFn, // optional: override for the CF Worker fetch inside fetchFlowClass (tests)
-  newsEnrichEnabled = true, // when false, skip per-symbol Worker news tiers (premium gate locked)
 }) {
   // Use provided engine functions or fall back to defaults
   const detectPatterns = engineFns?.detectPatterns || detectPatternsDefault;
@@ -392,10 +181,6 @@ export async function batchScan({
   // still throw but we only latch the first broker so the UI gets a
   // single stable banner. Outer loop bails after the current chunk.
   let tokenError = null;
-
-  // Shared semaphore across the whole scan caps per-symbol news fetches
-  // at newsConcurrency even when the outer scan uses a wider chunk size.
-  const newsSem = createSemaphore(Math.max(1, newsConcurrency));
 
   // ── Telemetry ────────────────────────────────────────────────────
   // Tracked for the lifetime of this scan and surfaced via the
@@ -416,20 +201,11 @@ export async function batchScan({
     retriesPerformed: 0,   // count of retry attempts
     retriesRecovered: 0,   // retries that ultimately succeeded
     retriesFailed: 0,      // retries that gave up after max attempts
-    // Per-symbol news fetches (Phase A P1 #7). `newsFetched` counts the
-    // Worker calls we actually made; `newsCacheHits` counts candidates
-    // that resolved from the per-(symbol, hour) cache with no network call.
-    newsFetched: 0,
-    newsCacheHits: 0,
-    newsFetchErrors: 0,
-    // Telemetry for the 4-tier news fallback chain.
-    // `newsFromCache` counts localStorage hits (tier 2).
-    // `newsFromFallback` counts broad-feed tier-4 resolutions when the
-    //   Worker reported UNAVAILABLE or the fetcher errored.
-    // `newsUnavailable` counts candidates that ended with score=null
-    //   at every tier — the scan proceeds without a news veto for them.
-    newsFromCache: 0,
-    newsFromFallback: 0,
+    // News telemetry. After the Google tier-3 drop the news layer is
+    // single-tier: index-wide broad-feed map fetched once at scan start
+    // (in marketContext.newsMap). Per candidate we either resolve from
+    // that map (`newsResolved++`) or have nothing to attach (`newsUnavailable++`).
+    newsResolved: 0,
     newsUnavailable: 0,
     // FII/DII flow (P1 #6 follow-up). `flowClass` is the classification
     // string consumed by sizeMultiplier; `flowSource` tells the dev
@@ -525,15 +301,16 @@ export async function batchScan({
           // Mixes live market context (VIX, flow, news map) with
           // per-stock derived values (sector, news sentiment, liquidity).
           const cleanSym = String(displaySymbol).toUpperCase().replace(/\.NS$/, '');
-          // Index-wide broad-feed map — used as the fallback when the
-          // per-symbol Google News fetch fails or returns nothing.
+          // Index-wide broad-feed map — only news source for the engine
+          // since the per-symbol Google tier was dropped (Google was
+          // rate-limiting CF egress to UNAVAILABLE on every call).
           const indexNewsScore = marketContext?.newsMap?.[cleanSym] ?? null;
-          let newsScore = indexNewsScore;
-          let sentiment = classifyNewsSentiment(newsScore);
+          const newsScore = indexNewsScore;
+          const sentiment = classifyNewsSentiment(newsScore);
           // Headlines that drove this symbol's sentiment — surfaced in UI
           // so the trader can see WHY the news layer said bullish/bearish.
-          let headlines = marketContext?.headlinesMap?.[cleanSym] || [];
-          let newsSource = indexNewsScore != null ? 'india' : null;
+          const headlines = marketContext?.headlinesMap?.[cleanSym] || [];
+          const newsSource = indexNewsScore != null ? 'india' : null;
           // Liquidity tier from the average bar volume over recent trading
           const recentVols = candles.slice(-60).map((c) => c.v || 0);
           const avgPerBarVol = recentVols.length
@@ -575,55 +352,16 @@ export async function batchScan({
             opts: { barIndex: todayBarIndex, indexDirection: indexDirection || null, sym: cleanSym, stockDayOpen },
           });
 
-          // ── PHASE 2a.5: per-symbol news enrichment (candidates only) ──
-          // Only symbols that actually produced a tradeable signal get a
-          // per-symbol Google News fetch. That keeps Worker traffic to
-          // the ~5% of the universe that matters, vs hitting every symbol.
-          //
-          // Full 4-tier fallback chain lives in fetchPerSymbolNews:
-          //   in-memory → localStorage → Worker (HIT/STALE/UNAVAILABLE)
-          //             → broad-feed (below, auto-derived from the
-          //               caller's marketContext when not explicitly
-          //               injected via `broadNewsFn`).
+          // ── PHASE 2a.5: news telemetry bookkeeping (candidates only) ──
+          // News scoring is single-tier now (broad-feed map fetched once
+          // at scan start in marketContext.newsMap). The actual values
+          // are already populated above from the index-wide map; here we
+          // just count whether each candidate ended up with a news signal
+          // or not so the UI can show meaningful diagnostics.
           const isCandidate = risk.direction && risk.action && risk.action !== 'NO TRADE';
           if (isCandidate) {
-            // Auto-build the tier-4 fallback from the index-wide newsMap
-            // when the caller didn't inject a test override. The closure
-            // captures `indexNewsScore` + `headlines` which were already
-            // computed above from the index-wide marketContext.
-            const broadFn = broadNewsFn || (indexNewsScore != null
-              ? async () => ({ score: indexNewsScore, headlines })
-              : null);
-            const enrich = await fetchPerSymbolNews(cleanSym, {
-              newsFetchFn, broadNewsFn: broadFn,
-              telemetry, newsSem, signal, newsEnrichEnabled,
-            });
-            if (enrich && enrich.score != null) {
-              if (enrich.source === 'india') {
-                // Tier-4 fell back to the broad-feed map. Use its score
-                // directly; it already reflects the index-wide signal.
-                newsScore = enrich.score;
-                newsSource = 'india';
-                if (enrich.headlines?.length) headlines = enrich.headlines;
-              } else {
-                // Per-symbol Worker tier (Google, fresh or stale) wins
-                // over the index-wide broad-feed signal; if both exist
-                // we average them (matches enrichWithGoogleNews semantics
-                // in marketContextLive.js).
-                newsScore = indexNewsScore != null
-                  ? (indexNewsScore + enrich.score) / 2
-                  : enrich.score;
-                if (enrich.headlines?.length) {
-                  headlines = enrich.headlines;
-                }
-                // `source` propagates which tier resolved: 'google',
-                // 'stale', or 'both' when blended with the index map.
-                const baseSource = enrich.source || 'google';
-                newsSource = indexNewsScore != null ? 'both' : baseSource;
-              }
-              sentiment = classifyNewsSentiment(newsScore);
-              stockContext.sentiment = sentiment;
-            }
+            if (newsScore != null) telemetry.newsResolved++;
+            else telemetry.newsUnavailable++;
           }
 
           // ── PHASE 2b: regime gate (post-pattern) ──

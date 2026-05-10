@@ -142,7 +142,6 @@ describe('buildNewsSentimentMap', () => {
 
   it('builds a sentiment map from mock broad-feed fetcher', async () => {
     const map = await buildNewsSentimentMap(universe, {
-      mode: 'india',
       fetchFn: mockFetch,
     });
     expect(map.RELIANCE).toBeGreaterThan(0); // "surges", "strong", "profit"
@@ -161,7 +160,6 @@ describe('buildNewsSentimentMap', () => {
 
   it('skips unknown symbols', async () => {
     const map = await buildNewsSentimentMap(universe, {
-      mode: 'india',
       fetchFn: mockFetch,
     });
     // UNKNOWN symbol shouldn't appear

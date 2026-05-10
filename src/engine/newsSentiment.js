@@ -8,23 +8,13 @@
  * news is per-stock/per-event and introduces genuine cross-sectional
  * differentiation.
  *
- * Sources (both free, both toggleable):
+ * Source (free):
  *
- *   1. Broad Indian RSS — Moneycontrol + LiveMint + Economic Times +
- *      Business Standard market-wide feeds that mention specific
- *      stocks in their headlines. Single multi-feed fetch returns
- *      ~80-120 items covering the most actively-discussed stocks.
- *
- *   2. Google News RSS — per-stock query results. More targeted but
- *      requires one fetch per symbol. Only used for stocks that
- *      appear in the technical candidate list (top 20-30 ranked).
- *
- * Strategy:
- *   - Default mode: broad-feed only (broad, cheap). Matches
- *     headlines against the NIFTY TOTAL MARKET symbol universe;
- *     ~80-120 symbols get sentiment per scan typically.
- *   - Deep mode:  broad-feed + per-symbol Google News for the
- *     top N candidates that passed phases 1-3 of tradeDecision.
+ *   Broad Indian RSS — Moneycontrol + LiveMint + Economic Times
+ *   market-wide feeds that mention specific stocks in their headlines.
+ *   Single multi-feed fetch returns ~80-120 items covering the most
+ *   actively-discussed stocks. Matches headlines against the caller's
+ *   symbol universe.
  *
  * Sentiment scoring:
  *   Keyword-based. Crude but deterministic and free. Counts
@@ -233,81 +223,20 @@ export async function fetchIndianBroadFeedSentiment(symbolUniverse, { fetchFn } 
   return out;
 }
 
-/**
- * Fetch and score per-symbol Google News RSS for a single stock.
- * Used for deep lookup on top ranked candidates.
- *
- * @param {string} symbol  e.g. "RELIANCE"
- * @param {{fetchFn?: Function, maxAgeMs?: number}} [opts]
- * @returns {Promise<number | null>}  score in [-1, +1] or null if no data
- */
-export async function fetchGoogleNewsSentimentForSymbol(symbol, { fetchFn, maxAgeMs = 7 * 24 * 3600 * 1000 } = {}) {
-  if (!symbol) return null;
-  const f = fetchFn || globalThis.fetch;
-  const q = encodeURIComponent(`${symbol} stock NSE`);
-  const url = `https://news.google.com/rss/search?q=${q}&hl=en-IN&gl=IN&ceid=IN:en`;
-  try {
-    const res = await f(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    if (!res.ok) return null;
-    const xml = await res.text();
-    const items = parseRssItems(xml);
-    const cutoff = Date.now() - maxAgeMs;
-    const recent = items.filter((item) => {
-      if (!item.pubDate) return true;
-      const t = Date.parse(item.pubDate);
-      return !isNaN(t) && t >= cutoff;
-    });
-    if (!recent.length) return null;
-    // Average score of recent headlines
-    const scores = recent.map((it) => scoreText(it.title + ' ' + it.description));
-    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-    return Math.max(-1, Math.min(1, avg));
-  } catch {
-    return null;
-  }
-}
-
 // ─── Merged fetcher (the main entry point) ─────────────────────────
 
 /**
- * Build a full symbol → sentiment score map for a scan.
- *
- * Modes:
- *   - 'india'  : fetch only the broad Indian feeds (fast, broad)
- *   - 'google' : fetch only per-symbol Google News (slow, targeted)
- *   - 'both'   : fetch broad-feeds first, then top-N deep via Google
+ * Build a full symbol → sentiment score map for a scan. Wraps
+ * `fetchIndianBroadFeedSentiment` so the call site (warm-news script) can
+ * stay agnostic about which broad-feed publishers we're using on any
+ * given day. The Google per-symbol mode that used to live here was
+ * dropped — Google's RSS rate-limited Cloudflare egress to UNAVAILABLE
+ * on every call, so the tier was pure latency for zero signal.
  *
  * @param {Set<string>} symbolUniverse
- * @param {{
- *   mode?: 'india' | 'google' | 'both',
- *   deepSymbols?: string[],
- *   fetchFn?: Function,
- * }} [opts]
+ * @param {{fetchFn?: Function}} [opts]
  * @returns {Promise<Record<string, number>>}
  */
 export async function buildNewsSentimentMap(symbolUniverse, opts = {}) {
-  const mode = opts.mode || 'india';
-  const merged = {};
-
-  if (mode === 'india' || mode === 'both') {
-    const broadScores = await fetchIndianBroadFeedSentiment(symbolUniverse, opts);
-    Object.assign(merged, broadScores);
-  }
-
-  if (mode === 'google' || mode === 'both') {
-    const deepSymbols = opts.deepSymbols || [];
-    for (const sym of deepSymbols) {
-      const score = await fetchGoogleNewsSentimentForSymbol(sym, opts);
-      if (score != null) {
-        // If both sources have a score, average them
-        if (merged[sym] != null) {
-          merged[sym] = (merged[sym] + score) / 2;
-        } else {
-          merged[sym] = score;
-        }
-      }
-    }
-  }
-
-  return merged;
+  return fetchIndianBroadFeedSentiment(symbolUniverse, opts);
 }

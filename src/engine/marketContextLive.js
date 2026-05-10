@@ -262,150 +262,36 @@ export function clearMarketContextCache() {
 }
 
 /**
- * Deep news lookup (headlines + score) for a single symbol via
- * Google News RSS. Used by the single-stock scanner screen so the
- * stock detail view can show the same news card that the batch
- * scanner shows on its result cards.
+ * Per-symbol news lookup for the single-stock scanner detail view.
+ * Hits the same broad-feed map (`/news/india`) the batch scan uses but
+ * scopes the universe to the one symbol — which means the headlines
+ * returned are exactly those that mention this stock today.
  *
- * Returns a shape identical to the batch path — caller can drop
- * `headlines` straight into the existing "RECENT NEWS" UI block.
+ * Cheap because the underlying broad-feed is cached at the worker
+ * (10min market hours / 60min off-hours) and re-used across calls in
+ * this module's 10-min in-flight cache. No per-symbol Worker fetch.
+ *
+ * Returns the same shape as the old Google-backed lookup so call sites
+ * (useStockScan.js) don't need to change.
  *
  * @param {string} symbol  e.g. "RELIANCE"
  * @returns {Promise<{
  *   score: number|null,
- *   headlines: Array<{title, description, score, source}>
+ *   headlines: Array<{title, description, score, source, publisher}>
  * }>}
  */
-export async function fetchLiveGoogleNewsDetailForSymbol(symbol) {
-  if (!symbol) return { score: null, headlines: [], cacheStatus: null };
+export async function fetchLiveBroadFeedForSymbol(symbol) {
+  if (!symbol) return { score: null, headlines: [] };
   const clean = String(symbol).toUpperCase().replace(/\.NS$/, '');
   try {
-    const res = await fetch(`${CF_WORKER_URL}/news/google?symbol=${encodeURIComponent(clean)}`, {
-      headers: { Accept: 'application/json' },
-    });
-    // Worker now sets `X-Cache: HIT|STALE|MISS|UNAVAILABLE` (PR #198).
-    // Surface it so the batchScan fallback chain can branch on stale /
-    // unavailable upstream without a second network round trip.
-    const cacheStatus = typeof res?.headers?.get === 'function'
-      ? (res.headers.get('X-Cache') || null)
-      : null;
-    const cacheSource = typeof res?.headers?.get === 'function'
-      ? (res.headers.get('X-Cache-Source') || null)
-      : null;
-    if (!res.ok) {
-      return { score: null, headlines: [], cacheStatus, cacheSource };
-    }
-    const data = await res.json();
-    const items = data.items || [];
-    if (!items.length) return { score: null, headlines: [], cacheStatus, cacheSource };
-    // Cutoff recent items only (5 days) — identical to the score-only path
-    const cutoff = Date.now() - 5 * 24 * 3600 * 1000;
-    const scored = [];
-    for (const item of items) {
-      if (item.pubDate) {
-        const t = Date.parse(item.pubDate);
-        if (!isNaN(t) && t < cutoff) continue;
-      }
-      const text = `${item.title || ''} ${item.description || ''}`;
-      const s = scoreText(text);
-      scored.push({
-        title: item.title || '',
-        description: (item.description || '').slice(0, 200),
-        score: Math.round(s * 100) / 100,
-        source: 'google',
-        url: item.link || '',
-      });
-    }
-    if (!scored.length) return { score: null, headlines: [], cacheStatus, cacheSource };
-    const avg = scored.reduce((a, b) => a + b.score, 0) / scored.length;
-    // Sort by most impactful first, cap to top 5 (matches batch UI behaviour)
-    const headlines = scored
-      .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
-      .slice(0, 5);
+    const { scoreMap, headlinesMap } = await fetchLiveNews(new Set([clean]));
     return {
-      score: Math.max(-1, Math.min(1, avg)),
-      headlines,
-      cacheStatus,
-      cacheSource,
+      score: scoreMap[clean] ?? null,
+      headlines: headlinesMap[clean] || [],
     };
   } catch {
-    return { score: null, headlines: [], cacheStatus: null };
+    return { score: null, headlines: [] };
   }
-}
-
-/**
- * Deep news lookup for a single symbol via Google News RSS.
- * The broad Indian feeds are wide-net — they mention roughly the top
- * 50-120 most-discussed stocks each day. For symbols that passed
- * technical filters but weren't in those headlines, this
- * endpoint fetches per-symbol Google News and scores the results.
- *
- * @param {string} symbol  e.g. "RELIANCE"
- * @returns {Promise<number | null>}  sentiment in [-1, +1] or null
- */
-export async function fetchLiveGoogleNewsForSymbol(symbol) {
-  if (!symbol) return null;
-  const clean = String(symbol).toUpperCase().replace(/\.NS$/, '');
-  try {
-    const res = await fetch(`${CF_WORKER_URL}/news/google?symbol=${encodeURIComponent(clean)}`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const items = data.items || [];
-    if (!items.length) return null;
-    // Average score across recent headlines (cutoff: 5 days)
-    const cutoff = Date.now() - 5 * 24 * 3600 * 1000;
-    const scores = [];
-    for (const item of items) {
-      if (item.pubDate) {
-        const t = Date.parse(item.pubDate);
-        if (!isNaN(t) && t < cutoff) continue;
-      }
-      const s = scoreText(`${item.title || ''} ${item.description || ''}`);
-      scores.push(s);
-    }
-    if (!scores.length) return null;
-    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-    return Math.max(-1, Math.min(1, avg));
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Enrich a news map with deep Google News lookups for a list of symbols.
- * Called after phase-3 ranking to give the top-N candidates per-stock
- * news depth. Fetches in parallel (Promise.all) — browser is responsible
- * for the concurrency limit by only passing the top-N.
- *
- * Merges with existing newsMap: if a symbol already has a broad-feed
- * score, the two are averaged. Otherwise the Google score becomes the
- * new entry.
- *
- * @param {Record<string, number>} existingMap  from fetchLiveNews
- * @param {string[]} symbolsToEnrich            typically top 10-20 ranked
- * @returns {Promise<Record<string, number>>}   merged map
- */
-export async function enrichWithGoogleNews(existingMap, symbolsToEnrich) {
-  if (!symbolsToEnrich?.length) return existingMap || {};
-  const merged = { ...(existingMap || {}) };
-  const results = await Promise.all(
-    symbolsToEnrich.map(async (sym) => ({
-      sym: String(sym).toUpperCase().replace(/\.NS$/, ''),
-      score: await fetchLiveGoogleNewsForSymbol(sym),
-    }))
-  );
-  for (const { sym, score } of results) {
-    if (score == null) continue;
-    if (merged[sym] != null) {
-      // Average broad-feed + Google for a balanced signal
-      merged[sym] = (merged[sym] + score) / 2;
-    } else {
-      merged[sym] = score;
-    }
-  }
-  return merged;
 }
 
 /**
