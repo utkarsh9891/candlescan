@@ -47,6 +47,11 @@ const ALLOWED_ORIGINS = [
 ];
 
 const DAILY_LIMIT = 20;
+// Higher cap for the cached read-only endpoints (/news/*, /market/*) so a
+// single legit user comfortably handles 5-10 scans/day × ~5 endpoint hits
+// per scan, but a runaway script can't drain CF Workers' free 100k/day
+// budget. Gate-token holders bypass entirely.
+const PUBLIC_DAILY_LIMIT = 100;
 
 function corsHeaders(origin) {
   const allowed = ALLOWED_ORIGINS.some((o) => origin?.startsWith(o));
@@ -97,24 +102,85 @@ async function validateGateToken(request, env) {
 /**
  * IP-based rate limiting via KV.
  * Returns { allowed: boolean, remaining: number }.
+ *
+ * `keyPrefix` namespaces independent counters so the proxy limit
+ * (`rl:`) doesn't share a budget with the cached-endpoint limit
+ * (`prl:`). `dailyLimit` controls how many requests an IP gets per
+ * UTC day before hitting 429.
  */
-async function checkRateLimit(request, env) {
-  if (!env.RATE_LIMIT) return { allowed: true, remaining: DAILY_LIMIT }; // KV not bound, skip
+async function checkRateLimit(request, env, { keyPrefix = 'rl', dailyLimit = DAILY_LIMIT } = {}) {
+  if (!env.RATE_LIMIT) return { allowed: true, remaining: dailyLimit }; // KV not bound, skip
 
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
   const ipHash = await sha256(ip);
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const key = `rl:${ipHash.slice(0, 16)}:${today}`;
+  const key = `${keyPrefix}:${ipHash.slice(0, 16)}:${today}`;
 
   const current = parseInt(await env.RATE_LIMIT.get(key) || '0', 10);
-  if (current >= DAILY_LIMIT) {
+  if (current >= dailyLimit) {
     return { allowed: false, remaining: 0 };
   }
 
   // Increment — fire-and-forget to avoid blocking the response
   await env.RATE_LIMIT.put(key, String(current + 1), { expirationTtl: 86400 });
-  return { allowed: true, remaining: DAILY_LIMIT - current - 1 };
+  return { allowed: true, remaining: dailyLimit - current - 1 };
 }
+
+/**
+ * Gate-or-public-rate-limit guard for the cached read-only endpoints
+ * (/news/india, /news/google, /market/vix, /market/fiidii). Returns:
+ *   - null when the request is allowed to proceed
+ *   - a Response (403/429) when it should be rejected
+ *
+ * Behaviour:
+ *   - Valid gate token → bypass entirely (premium path).
+ *   - Invalid gate token → 403.
+ *   - No gate token + under PUBLIC_DAILY_LIMIT → allow, increment counter.
+ *   - No gate token + over limit → 429.
+ *
+ * This is what stops a bored attacker draining CF Workers' free
+ * 100k/day request budget by curl-spamming `/news/india` from a single IP.
+ */
+async function publicEndpointGuard(request, env, origin) {
+  const auth = await validateGateToken(request, env);
+  if (auth === false) {
+    return new Response(JSON.stringify({ error: 'Invalid gate token' }), {
+      status: 403,
+      headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+    });
+  }
+  if (auth === true) return null; // premium bypass
+
+  const { allowed, remaining } = await checkRateLimit(request, env, {
+    keyPrefix: 'prl',
+    dailyLimit: PUBLIC_DAILY_LIMIT,
+  });
+  if (!allowed) {
+    return new Response(
+      JSON.stringify({ error: 'Daily limit exceeded for public endpoint. Unlock premium for unlimited access.' }),
+      {
+        status: 429,
+        headers: {
+          ...corsHeaders(origin),
+          'Content-Type': 'application/json',
+          'X-RateLimit-Remaining': '0',
+        },
+      }
+    );
+  }
+  return null;
+}
+
+// Routes guarded by publicEndpointGuard. Each is cheap (KV-cached, single
+// upstream fetch on miss), but unauthenticated callers can still drain the
+// CF Workers free-tier budget by spamming them, so we cap at PUBLIC_DAILY_LIMIT.
+// Gate-token holders bypass.
+const PUBLIC_RATE_LIMITED_PATHS = new Set([
+  '/news/india',
+  '/news/google',
+  '/market/vix',
+  '/market/fiidii',
+]);
 
 /**
  * Decrypt an RSA-OAEP + AES-GCM hybrid-encrypted vault blob.
@@ -540,9 +606,15 @@ async function handleDhanInstruments(request, env, origin) {
 }
 
 /**
- * Broad Indian news RSS map — Moneycontrol + LiveMint + Economic Times +
- * Business Standard merged into a single payload. Each item carries the
- * publisher tag so the client can attribute headlines in the UI.
+ * Broad Indian news RSS map — Moneycontrol + LiveMint + Economic Times
+ * merged into a single payload. Each item carries the publisher tag so
+ * the client can attribute headlines in the UI.
+ *
+ * Per-feed `ua` overrides the default User-Agent — Moneycontrol returns
+ * empty bodies to the default `candlescan-proxy` UA when called from
+ * Cloudflare egress IPs, so we send Googlebot which they whitelist for
+ * indexing. (Business Standard was previously in the list but blocked
+ * with HTTP 403 even on Googlebot — dropped to keep the feed list clean.)
  *
  * Throws if every feed fetch fails (so `kvCacheFlow` can route to the
  * stale fallback). Per-feed failure is non-fatal — we still return what
@@ -550,29 +622,31 @@ async function handleDhanInstruments(request, env, origin) {
  *
  * Returns `{ items, count, fetchedAt }` on success.
  */
+const DEFAULT_NEWS_UA = 'Mozilla/5.0 (candlescan-proxy)';
+const GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+
 const INDIA_NEWS_FEEDS = [
   // Moneycontrol — daily-discussed buzz + macro/markets context
-  { url: 'https://www.moneycontrol.com/rss/buzzingstocks.xml', publisher: 'Moneycontrol' },
-  { url: 'https://www.moneycontrol.com/rss/MCtopnews.xml', publisher: 'Moneycontrol' },
-  { url: 'https://www.moneycontrol.com/rss/marketreports.xml', publisher: 'Moneycontrol' },
-  { url: 'https://www.moneycontrol.com/rss/business.xml', publisher: 'Moneycontrol' },
+  // (Googlebot UA — default UA gets empty bodies from CF egress)
+  { url: 'https://www.moneycontrol.com/rss/buzzingstocks.xml', publisher: 'Moneycontrol', ua: GOOGLEBOT_UA },
+  { url: 'https://www.moneycontrol.com/rss/MCtopnews.xml', publisher: 'Moneycontrol', ua: GOOGLEBOT_UA },
+  { url: 'https://www.moneycontrol.com/rss/marketreports.xml', publisher: 'Moneycontrol', ua: GOOGLEBOT_UA },
+  { url: 'https://www.moneycontrol.com/rss/business.xml', publisher: 'Moneycontrol', ua: GOOGLEBOT_UA },
   // LiveMint — markets section
   { url: 'https://www.livemint.com/rss/markets', publisher: 'LiveMint' },
   // Economic Times — stocks-in-news + broader markets
   { url: 'https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms', publisher: 'Economic Times' },
   { url: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms', publisher: 'Economic Times' },
-  // Business Standard — markets/stocks
-  { url: 'https://www.business-standard.com/rss/markets-stocks-10612.rss', publisher: 'Business Standard' },
 ];
 
 async function fetchIndiaNewsUpstream() {
   const items = [];
   let anySuccess = false;
   let lastErr = null;
-  for (const { url, publisher } of INDIA_NEWS_FEEDS) {
+  for (const { url, publisher, ua } of INDIA_NEWS_FEEDS) {
     try {
       const resp = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (candlescan-proxy)' },
+        headers: { 'User-Agent': ua || DEFAULT_NEWS_UA },
       });
       if (!resp.ok) {
         lastErr = new Error(`${publisher} ${url} HTTP ${resp.status}`);
@@ -1202,6 +1276,15 @@ export default {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders(origin) });
     }
 
+    // Public-endpoint guard — caps unauthenticated callers at
+    // PUBLIC_DAILY_LIMIT/day on the cached read-only routes so a runaway
+    // script can't drain the CF Workers free-tier 100k/day budget.
+    // Gate-token holders bypass entirely.
+    if (PUBLIC_RATE_LIMITED_PATHS.has(path)) {
+      const limited = await publicEndpointGuard(request, env, origin);
+      if (limited) return limited;
+    }
+
     // Dhan instrument master — called once by client on token connect
     if (path === '/dhan/instruments') {
       return handleDhanInstruments(request, env, origin);
@@ -1209,9 +1292,8 @@ export default {
 
     // Broad Indian news RSS proxy — browser calls this during live scan
     // to build a symbol-sentiment map. We merge multiple Indian publisher
-    // feeds (Moneycontrol, LiveMint, Economic Times, Business Standard)
-    // into a single payload; the browser parses and scores via
-    // newsSentiment.js.
+    // feeds (Moneycontrol, LiveMint, Economic Times) into a single payload;
+    // the browser parses and scores via newsSentiment.js.
     if (path === '/news/india') {
       return handleIndiaNews(request, env, origin);
     }
