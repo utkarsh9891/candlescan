@@ -77,7 +77,7 @@ describe('handleVixFetch', () => {
       chart: { result: [{ indicators: { quote: [{ close: [11.5, 12.1, 12.9] }] } }] },
     }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('MISS');
     expect(resp.headers.get('X-Cache-Key')).toMatch(/^nse_vix_daily:\d{4}-\d{2}-\d{2}$/);
@@ -93,10 +93,10 @@ describe('handleVixFetch', () => {
     }));
     globalThis.fetch = fetchMock;
     const kv = makeKvStub();
-    await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_CACHE: kv });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     // Second call — should be a HIT
-    const resp2 = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_KV: kv });
+    const resp2 = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_CACHE: kv });
     expect(resp2.headers.get('X-Cache')).toBe('HIT');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -114,7 +114,7 @@ describe('handleVixFetch', () => {
     }));
     // Upstream 502
     globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
-    const resp = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_CACHE: kv });
     // During market hours TTL=1h, so a 2h-old entry is stale → should be returned as STALE.
     // Off-hours TTL=24h, so a 2h-old entry is HIT.
     const cacheStatus = resp.headers.get('X-Cache');
@@ -128,7 +128,7 @@ describe('handleVixFetch', () => {
   it('UNAVAILABLE → 502 when upstream fails + no cache', async () => {
     globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/market/vix'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(502);
     expect(resp.headers.get('X-Cache')).toBe('UNAVAILABLE');
   });
@@ -154,7 +154,7 @@ describe('handleFiiDiiFetch', () => {
       ]);
     });
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('MISS');
     const body = await resp.json();
@@ -178,9 +178,9 @@ describe('handleFiiDiiFetch', () => {
     });
     globalThis.fetch = fetchMock;
     const kv = makeKvStub();
-    await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_CACHE: kv });
     const cbBefore = fetchMock.mock.calls.length;
-    const resp2 = await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_KV: kv });
+    const resp2 = await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_CACHE: kv });
     expect(resp2.headers.get('X-Cache')).toBe('HIT');
     expect(fetchMock.mock.calls.length).toBe(cbBefore);
   });
@@ -194,7 +194,7 @@ describe('handleFiiDiiFetch', () => {
       writtenAt: Date.now() - 7 * 60 * 60 * 1000,
     }));
     globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
-    const resp = await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/market/fiidii'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('STALE');
     const body = await resp.json();
@@ -212,7 +212,7 @@ describe('handleIndiaNews', () => {
       { status: 200, headers: { 'Content-Type': 'application/xml' } },
     ));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('MISS');
     const body = await resp.json();
@@ -234,7 +234,7 @@ describe('handleIndiaNews', () => {
       );
     });
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_CACHE: kv });
     const body = await resp.json();
     const publishers = new Set(body.items.map((it) => it.publisher));
     expect(publishers.has('Moneycontrol')).toBe(true);
@@ -255,7 +255,7 @@ describe('handleIndiaNews', () => {
       return new Response('<rss><channel><item><title>x</title></item></channel></rss>', { status: 200 });
     });
     const kv = makeKvStub();
-    await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_CACHE: kv });
 
     const mcCalls = sentUserAgents.filter((c) => c.url.includes('moneycontrol.com'));
     expect(mcCalls.length).toBeGreaterThan(0);
@@ -269,7 +269,7 @@ describe('handleIndiaNews', () => {
   it('UNAVAILABLE sentinel when all feeds 502 + no cache', async () => {
     globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(200); // UNAVAILABLE returns 200 so callers don't retry
     expect(resp.headers.get('X-Cache')).toBe('UNAVAILABLE');
     const body = await resp.json();
@@ -302,7 +302,7 @@ describe('handleQuoteLast', () => {
 
   it('400 on missing symbol', async () => {
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/quote/last'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(400);
   });
 
@@ -312,7 +312,7 @@ describe('handleQuoteLast', () => {
       meta: { regularMarketDayHigh: 103, regularMarketDayLow: 99.5, chartPreviousClose: 99 },
     }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/quote/last?symbol=RELIANCE'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=RELIANCE'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('MISS');
     const body = await resp.json();
@@ -328,7 +328,7 @@ describe('handleQuoteLast', () => {
       meta: { regularMarketPrice: 101.4 },
     }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/quote/last?symbol=TCS'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=TCS'), { CANDLESCAN_CACHE: kv });
     const body = await resp.json();
     // Last non-null close in series is 101 — that wins over meta fallback
     expect(body.last).toBe(101);
@@ -340,7 +340,7 @@ describe('handleQuoteLast', () => {
       meta: { regularMarketPrice: 555 },
     }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/quote/last?symbol=INFY'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=INFY'), { CANDLESCAN_CACHE: kv });
     const body = await resp.json();
     expect(body.last).toBe(555);
   });
@@ -349,9 +349,9 @@ describe('handleQuoteLast', () => {
     const fetchMock = vi.fn(async () => makeChartResp({ closes: [100], meta: {} }));
     globalThis.fetch = fetchMock;
     const kv = makeKvStub();
-    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_CACHE: kv });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const resp2 = await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
+    const resp2 = await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_CACHE: kv });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(resp2.headers.get('X-Cache')).toBe('HIT');
   });
@@ -359,7 +359,7 @@ describe('handleQuoteLast', () => {
   it('UNAVAILABLE sentinel when upstream 502s + no cache', async () => {
     globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 }));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/quote/last?symbol=NONEXIST'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/quote/last?symbol=NONEXIST'), { CANDLESCAN_CACHE: kv });
     expect(resp.status).toBe(200);
     expect(resp.headers.get('X-Cache')).toBe('UNAVAILABLE');
     const body = await resp.json();
@@ -374,7 +374,7 @@ describe('handleQuoteLast', () => {
       return makeChartResp({ closes: [100], meta: {} });
     });
     const kv = makeKvStub();
-    await worker.fetch(makeRequest('/quote/last?symbol=RELIANCE'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/quote/last?symbol=RELIANCE'), { CANDLESCAN_CACHE: kv });
     expect(calledUrl).toMatch(/v8\/finance\/chart/);
     expect(calledUrl).toMatch(/RELIANCE\.NS/);
     expect(calledUrl).toMatch(/interval=1m/);
@@ -389,7 +389,7 @@ describe('handleIndiaNews — link extraction', () => {
       { status: 200 },
     ));
     const kv = makeKvStub();
-    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_KV: kv });
+    const resp = await worker.fetch(makeRequest('/news/india'), { CANDLESCAN_CACHE: kv });
     const body = await resp.json();
     expect(body.items[0].link).toBe('https://www.moneycontrol.com/news/business/reliance-q4-12345.html');
   });
@@ -500,11 +500,11 @@ describe('write-dedupe micro-cache', () => {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
 
-    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_CACHE: kv });
     // Manually clear KV so the next call counts as a miss again BUT dedupe
     // map still says "we wrote this key 0s ago".
     kv.store.clear();
-    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_KV: kv });
+    await worker.fetch(makeRequest('/quote/last?symbol=HDFCBANK'), { CANDLESCAN_CACHE: kv });
 
     // Only 1 KV write should have happened — the second miss was deduped.
     expect(kv.writeCount()).toBe(1);

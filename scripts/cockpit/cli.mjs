@@ -24,6 +24,7 @@ import * as gate from './commands/gate.mjs';
 import * as rotateTopic from './commands/rotate-topic.mjs';
 import * as status from './commands/status.mjs';
 import * as logs from './commands/logs.mjs';
+import * as stop from './commands/stop.mjs';
 
 const COMMANDS = {
   init,
@@ -34,6 +35,7 @@ const COMMANDS = {
   'rotate-topic': rotateTopic,
   status,
   logs,
+  stop,
 };
 
 const TOP_HELP = `
@@ -52,8 +54,9 @@ Commands:
   zerodha        Manage Zerodha Kite creds (apiKey + apiSecret + accessToken)
   gate           Manage optional passphrase that encrypts secrets.json fields
   rotate-topic   Generate a new ntfy topic locally — does NOT notify any channel
-  status         Show daemon health (secrets / HTTP / launchd / today's P&L)
+  status         Show daemon health (secrets / HTTP / today's P&L)
   logs           Print or follow today's log file
+  stop           Gracefully stop the running cockpit daemon
 
 Setup files:
   ~/.candlescan/cockpit/secrets.json       managed by these commands (mode 0600)

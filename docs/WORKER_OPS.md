@@ -101,7 +101,7 @@ This single command bundles all three things you used to do separately:
 1. Generate a new RSA-2048 key pair
 2. Prompt for the premium passphrase → SHA-256 → upload as `GATE_PASSPHRASE_HASH` Worker secret
 3. Upload private key as `GATE_PRIVATE_KEY` Worker secret
-4. Upload public key to `CANDLESCAN_KV` as `GATE_PUBLIC_KEY` (used by the browser)
+4. Upload public key to `CANDLESCAN_CONFIG` KV as `GATE_PUBLIC_KEY` (served to the browser via `/gate/unlock`)
 5. Clean up local key files
 
 Granular flow (e.g. just changing the passphrase without rotating keys) isn't wired up — re-running the bundled script is fine because it's idempotent and rotating both is the safer default.
@@ -141,20 +141,12 @@ This opens a browser window. Log in with your Cloudflare account and authorize W
 ```bash
 cd worker
 
-# Rate limiting namespace
-npx wrangler kv namespace create RATE_LIMIT
-
-# App data namespace (stores public key, etc.)
-npx wrangler kv namespace create CANDLESCAN_KV
+npx wrangler kv namespace create RATE_LIMIT          # per-IP daily counters
+npx wrangler kv namespace create CANDLESCAN_CONFIG   # GATE_PUBLIC_KEY (long-lived)
+npx wrangler kv namespace create CANDLESCAN_CACHE    # TTL'd caches: instrument maps, daily VIX/FII-DII, news, last-quote
 ```
 
-Each command will output something like:
-```
-{ binding = "RATE_LIMIT", id = "abc123def456..." }
-{ binding = "CANDLESCAN_KV", id = "xyz789..." }
-```
-
-Copy the `id` values.
+Each command prints a binding block — copy the `id` values.
 
 ### Step 3: Update wrangler.toml
 
@@ -166,8 +158,12 @@ binding = "RATE_LIMIT"
 id = "PASTE_RATE_LIMIT_ID_HERE"
 
 [[kv_namespaces]]
-binding = "CANDLESCAN_KV"
-id = "PASTE_CANDLESCAN_KV_ID_HERE"
+binding = "CANDLESCAN_CONFIG"
+id = "PASTE_CONFIG_ID_HERE"
+
+[[kv_namespaces]]
+binding = "CANDLESCAN_CACHE"
+id = "PASTE_CACHE_ID_HERE"
 ```
 
 ### Step 4: Set the passphrase hash
@@ -189,7 +185,7 @@ npm run worker:keys:rotate
 ```
 
 This sets the `GATE_PRIVATE_KEY` secret and stores `GATE_PUBLIC_KEY` in the
-`CANDLESCAN_KV` namespace.
+`CANDLESCAN_CONFIG` namespace.
 
 ### Step 6: Deploy
 
@@ -236,9 +232,8 @@ npm run worker:kv:audit            # list active vs stale across all bound names
 npm run worker:kv:audit -- --clean # additionally delete stale keys
 ```
 
-The audit walks every bound KV namespace from `wrangler.toml` —
-`CANDLESCAN_CONFIG`, `CANDLESCAN_CACHE`, and the legacy `CANDLESCAN_KV`
-— and classifies each key against the allowlists in
+The audit walks both `CANDLESCAN_CONFIG` and `CANDLESCAN_CACHE` and
+classifies each key against the allowlists in
 [`scripts/kv-audit.sh`](../scripts/kv-audit.sh):
 
 - `CONFIG_EXACT` — long-lived config (currently: `GATE_PUBLIC_KEY`)
@@ -246,49 +241,11 @@ The audit walks every bound KV namespace from `wrangler.toml` —
   `dhan_nse_instruments`)
 - `CACHE_PREFIXES` — TTL'd cache by prefix (`nse_fiidii_daily:`,
   `nse_vix_daily:`, `india_news:`, `quote_last:`)
-- `STALE_EXACT` / `STALE_PREFIXES` — known leftovers (e.g. `yahoo_news:*`
-  from the removed `/news/yahoo` endpoint, `TEST_KEY`)
+- `STALE_EXACT` / `STALE_PREFIXES` — known leftovers from removed
+  endpoints
 
 **When you add a new KV key in `worker/index.js`, register it under the
 appropriate allowlist** so it isn't flagged as stale.
-
-### Split the legacy KV namespace
-
-The worker prefers `CANDLESCAN_CONFIG` for long-lived config and
-`CANDLESCAN_CACHE` for TTL'd cache values, falling back to `CANDLESCAN_KV`
-when those bindings aren't present. The split is purely operational —
-clearer auditing, and you can wipe the cache namespace any time without
-risking config loss.
-
-To migrate from the legacy single namespace:
-
-```bash
-cd worker
-
-# 1. Create the two new namespaces.
-npx wrangler kv namespace create CANDLESCAN_CONFIG
-npx wrangler kv namespace create CANDLESCAN_CACHE
-# Copy the printed ids.
-
-# 2. Edit worker/wrangler.toml — uncomment the two CANDLESCAN_CONFIG /
-#    CANDLESCAN_CACHE blocks and paste the ids.
-
-# 3. Migrate GATE_PUBLIC_KEY (the only long-lived key worth copying;
-#    TTL'd caches will rebuild on miss).
-LEGACY_ID=$(awk '/CANDLESCAN_KV/{f=1} f && /^id/{gsub(/[" ]/,"",$3); print $3; exit}' wrangler.toml)
-CONFIG_ID=$(awk '/CANDLESCAN_CONFIG/{f=1} f && /^id/{gsub(/[" ]/,"",$3); print $3; exit}' wrangler.toml)
-KEY_PEM=$(npx wrangler kv key get --namespace-id="$LEGACY_ID" --remote GATE_PUBLIC_KEY)
-echo "$KEY_PEM" | npx wrangler kv key put --namespace-id="$CONFIG_ID" --remote GATE_PUBLIC_KEY -
-
-# 4. Deploy. The worker will start writing new keys to CACHE/CONFIG,
-#    keep reading from the legacy fallback for any not-yet-migrated keys.
-npx wrangler deploy
-
-# 5. (Optional, after a few days) Clear the legacy namespace and remove
-#    its binding from wrangler.toml. Re-run audit + clean to confirm
-#    nothing valuable is left behind first.
-npm run worker:kv:audit
-```
 
 ---
 
@@ -444,7 +401,7 @@ The Worker proxies Dhan HQ Data API calls for premium users.
 
 ### Dhan instrument resolution
 - Dhan uses numeric `securityId` instead of symbol names
-- Instrument mapping is pre-cached in `CANDLESCAN_KV` as `dhan_nse_instruments` (175KB JSON, ~9472 NSE symbols)
+- Instrument mapping is pre-cached in `CANDLESCAN_CACHE` as `dhan_nse_instruments` (175KB JSON, ~9472 NSE symbols)
 - Worker looks up `securityId` from KV by symbol name
 - The 32MB Dhan scrip master CSV is too large for CF Workers — never download it at runtime
 
@@ -488,4 +445,4 @@ npx wrangler kv key put \
 |------|------|---------|
 | `GATE_PASSPHRASE_HASH` | Secret | SHA-256 hex of the premium passphrase |
 | `GATE_PRIVATE_KEY` | Secret | RSA private key PEM for vault decryption |
-| `GATE_PUBLIC_KEY` | KV (`CANDLESCAN_KV`) | RSA public key served to authenticated users |
+| `GATE_PUBLIC_KEY` | KV (`CANDLESCAN_CONFIG`) | RSA public key served to authenticated users |

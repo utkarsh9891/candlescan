@@ -16,6 +16,7 @@
     "simulate": "node scripts/simulate-day.mjs",
 
     "cockpit": "node scripts/cockpit/index.mjs",
+    "cockpit:stop": "node scripts/cockpit/cli.mjs stop",
     "cockpit:init": "node scripts/cockpit/cli.mjs init",
     "cockpit:status": "node scripts/cockpit/cli.mjs status",
     "cockpit:config": "node scripts/cockpit/cli.mjs config",

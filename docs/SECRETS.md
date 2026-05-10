@@ -37,7 +37,7 @@ gate-protected broker proxying.
 |---|---|---|---|---|
 | **PWA premium passphrase** | your head + password manager | plain | n/a | manual (you remember it) |
 | **PWA premium passphrase hash** (`GATE_PASSPHRASE_HASH`) | Worker secret | SHA-256 hex | yes (CF-managed) | `npm run worker:keys:rotate` |
-| **RSA public key** (`GATE_PUBLIC_KEY`) | Worker KV — `CANDLESCAN_CONFIG` (or legacy `CANDLESCAN_KV`) | PEM | no (it's public) | `npm run worker:keys:rotate` |
+| **RSA public key** (`GATE_PUBLIC_KEY`) | Worker KV — `CANDLESCAN_CONFIG` | PEM | no (it's public) | `npm run worker:keys:rotate` |
 | **RSA private key** (`GATE_PRIVATE_KEY`) | Worker secret | PEM | yes (CF-managed) | `npm run worker:keys:rotate` |
 | **Browser-side encrypted vault** (Zerodha / Dhan creds for the PWA) | browser `localStorage` | RSA-OAEP-2048 ciphertext | yes (decryptable only by Worker) | PWA Settings UI |
 | **PWA gate token** (per-device passphrase hash) | browser `localStorage` | SHA-256 hex | no (already a hash) | PWA Settings → Premium Gate |
@@ -90,7 +90,7 @@ Storage:
 |---|---|---|
 | `GATE_PASSPHRASE_HASH` | Worker secret | SHA-256 hex of the passphrase. CF stores secrets encrypted at rest. |
 | `GATE_PRIVATE_KEY` | Worker secret | RSA-2048 private key PEM. Same CF-managed encryption. |
-| `GATE_PUBLIC_KEY` | Worker KV (`CANDLESCAN_CONFIG`, falls back to legacy `CANDLESCAN_KV`) | Served to the browser via `/gate/unlock` so the PWA can encrypt new vault data. |
+| `GATE_PUBLIC_KEY` | Worker KV (`CANDLESCAN_CONFIG`) | Served to the browser via `/gate/unlock` so the PWA can encrypt new vault data. |
 | Browser vault blob | localStorage | RSA-OAEP ciphertext containing Zerodha apiKey/secret/accessToken (or Dhan equivalents). |
 | Browser gate token | localStorage | SHA-256 hex of the passphrase. Sent as `X-Gate-Token` header. |
 
@@ -135,8 +135,8 @@ embedded auth tag). Verifier comparison is constant-time. Salt is
 16 bytes. Implementation: [`scripts/cockpit/lib/gate.mjs`](../scripts/cockpit/lib/gate.mjs).
 
 Once a gate is set, the cockpit daemon prompts for the passphrase on
-startup (max 3 attempts). **Mutually exclusive with launchd auto-start**
-because launchd has no TTY for the prompt — pick one or the other.
+startup (max 3 attempts). The cockpit launches manually (no auto-start
+infrastructure), so this is just an extra step in your morning startup.
 
 ```bash
 npm run cockpit:gate            # show status (default)

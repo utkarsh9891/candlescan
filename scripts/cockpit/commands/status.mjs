@@ -3,22 +3,21 @@
  *
  * Checks:
  *   - secrets.json present + key fields filled
- *   - HTTP server reachable on cfg.host (cockpit currently running?)
- *   - launchd job loaded?
+ *   - cockpit daemon running (pid file + HTTP /healthz)
  *   - today's signal + trade count from the state file
  */
 
-import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { readSecrets, exists, secretsPath } from '../lib/secrets-rw.mjs';
+import { readPidFile, isPidAlive } from '../lib/pidfile.mjs';
 
 export const help = `
-cockpit status — quick health summary
+cockpit status — quick health summary (no side effects)
 
-Checks secrets file, daemon reachability (HTTP /healthz), launchd
-registration, and today's state file. No side effects.
+Reports secrets state, whether the daemon is running, and today's
+signals / trades / P&L.
 `.trim();
 
 const STATE_DIR = path.join(os.homedir(), '.candlescan', 'cockpit', 'state');
@@ -52,33 +51,24 @@ export async function run() {
   if (cur.dhan?.clientId) console.log(`    dhan:  configured (clientId=${cur.dhan.clientId})`);
   if (cur.zerodha?.apiKey) console.log(`    zerodha: configured (apiKey=${cur.zerodha.apiKey.slice(0, 6)}…)`);
 
-  // ── 2. HTTP reachability ──
-  const url = `http://${cur.host.name}:${cur.host.port}/healthz`;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-    if (res.ok) {
-      console.log(`✓ daemon:   reachable at ${url}`);
-    } else {
-      console.log(`✗ daemon:   ${url} → HTTP ${res.status}`);
+  // ── 2. daemon (pid file + HTTP) ──
+  const pid = readPidFile();
+  if (pid !== null && isPidAlive(pid)) {
+    console.log(`✓ daemon:   running (pid ${pid})`);
+    const url = `http://${cur.host.name}:${cur.host.port}/healthz`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) console.log(`            HTTP reachable at ${url}`);
+      else console.log(`            ⚠ HTTP ${res.status} at ${url}`);
+    } catch (e) {
+      console.log(`            ⚠ HTTP unreachable at ${url} (${e.message.split('\n')[0]})`);
     }
-  } catch (e) {
-    console.log(`✗ daemon:   ${url} unreachable (${e.message.split('\n')[0]})`);
-    console.log('    start with:  npm run cockpit');
+  } else {
+    console.log('· daemon:   not running');
+    console.log('  start with:  npm run cockpit');
   }
 
-  // ── 3. launchd ──
-  const domain = `gui/${process.getuid()}`;
-  try {
-    const out = execSync(`launchctl print ${domain}/com.candlescan.cockpit`, {
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).toString();
-    const stateLine = out.split('\n').find((l) => l.trim().startsWith('state'));
-    console.log(`✓ launchd:  registered (${stateLine?.trim() || 'state unknown'})`);
-  } catch {
-    console.log('· launchd:  not registered (run scripts/cockpit/launchd/install.sh to enable auto-start)');
-  }
-
-  // ── 4. today's state ──
+  // ── 3. today's state ──
   const day = todayIst();
   const stateFile = path.join(STATE_DIR, `${day}.json`);
   if (fs.existsSync(stateFile)) {

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# KV audit — list keys across CANDLESCAN_CONFIG, CANDLESCAN_CACHE, and
-# the legacy CANDLESCAN_KV (during migration), classify each as active
-# / stale / unknown based on what worker/index.js actually uses, and
-# optionally clean up stale entries with --clean.
+# KV audit — list keys across CANDLESCAN_CONFIG and CANDLESCAN_CACHE,
+# classify each as active / stale / unknown based on what
+# worker/index.js actually uses, and optionally clean up stale entries
+# with --clean.
 #
 # Usage:
 #   bash scripts/kv-audit.sh                 # list + classify, no writes
@@ -18,12 +18,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # ── Allowlists, mirrored from worker/index.js ────────────────────────
 
-# Long-lived config (lives in CANDLESCAN_CONFIG, falls back to CANDLESCAN_KV)
+# Long-lived config (lives in CANDLESCAN_CONFIG)
 CONFIG_EXACT=(
   "GATE_PUBLIC_KEY"
 )
 
-# TTL'd caches (live in CANDLESCAN_CACHE, fall back to CANDLESCAN_KV)
+# TTL'd caches (live in CANDLESCAN_CACHE)
 CACHE_EXACT=(
   "kite_nse_instruments"
   "dhan_nse_instruments"
@@ -33,14 +33,6 @@ CACHE_PREFIXES=(
   "nse_vix_daily:"
   "india_news:"
   "quote_last:"
-)
-
-# Known stale (left behind by removed endpoints).
-STALE_EXACT=(
-  "TEST_KEY"
-)
-STALE_PREFIXES=(
-  "yahoo_news:"   # /news/yahoo endpoint dropped in commit history
 )
 
 CLEAN=false
@@ -53,7 +45,6 @@ for arg in "$@"; do
 done
 
 # ── Discover bindings + ids from wrangler.toml ───────────────────────
-# Each binding is independent — present some / all and we'll audit each.
 
 extract_id() {
   local binding="$1"
@@ -68,7 +59,6 @@ extract_id() {
 
 CONFIG_ID=$(extract_id "CANDLESCAN_CONFIG")
 CACHE_ID=$(extract_id "CANDLESCAN_CACHE")
-LEGACY_ID=$(extract_id "CANDLESCAN_KV")
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -89,53 +79,34 @@ is_active_in() {
   fi
   return 1
 }
-is_stale() {
-  local name="$1"
-  for e in "${STALE_EXACT[@]}"; do [[ "$name" == "$e" ]] && return 0; done
-  for p in "${STALE_PREFIXES[@]}"; do [[ "$name" == "$p"* ]] && return 0; done
-  return 1
-}
 
 audit_namespace() {
-  local label="$1" id="$2" classification="$3"  # classification = "config"|"cache"|"mixed"
+  local label="$1" id="$2" classification="$3"  # "config" | "cache"
   [[ -z "$id" ]] && { printf "\n%-22s (no binding configured)\n" "$label"; return; }
-  printf "\n%-22s id=%s  classification=%s\n" "$label" "$id" "$classification"
+  printf "\n%-22s id=%s\n" "$label" "$id"
 
-  # `|| true` on the assignment so an empty namespace (where grep matches
-  # nothing) doesn't abort the script under set -o pipefail.
+  # `|| true` so an empty namespace (where grep matches nothing) doesn't
+  # abort the script under set -o pipefail.
   local keys
   keys=$(list_keys "$id" | grep -oE '"name": "[^"]+"' | sed 's/"name": "//;s/"$//' || true)
   [[ -z "$keys" ]] && { echo "  (empty)"; return; }
 
-  local -a active=() stale=() unknown=()
+  local -a active=() stale=()
   while IFS= read -r name; do
-    if is_stale "$name"; then
-      stale+=("$name"); continue
+    if is_active_in "$name" "$classification"; then
+      active+=("$name")
+    else
+      stale+=("$name")
     fi
-    case "$classification" in
-      config) is_active_in "$name" config && active+=("$name") || unknown+=("$name") ;;
-      cache)  is_active_in "$name" cache  && active+=("$name") || unknown+=("$name") ;;
-      mixed)
-        if is_active_in "$name" config || is_active_in "$name" cache; then
-          active+=("$name")
-        else
-          unknown+=("$name")
-        fi
-        ;;
-    esac
   done <<< "$keys"
 
-  printf "  active   (%d)\n" "${#active[@]}"
+  printf "  active  (%d)\n" "${#active[@]}"
   if (( ${#active[@]} > 0 )); then
     for k in "${active[@]}"; do printf "    ✓ %s\n" "$k"; done
   fi
-  printf "  stale    (%d)\n" "${#stale[@]}"
+  printf "  stale   (%d)\n" "${#stale[@]}"
   if (( ${#stale[@]} > 0 )); then
     for k in "${stale[@]}"; do printf "    ✗ %s\n" "$k"; done
-  fi
-  if (( ${#unknown[@]} > 0 )); then
-    printf "  unknown  (%d) — verify before deleting\n" "${#unknown[@]}"
-    for k in "${unknown[@]}"; do printf "    ? %s\n" "$k"; done
   fi
   if [[ "$CLEAN" == true && ${#stale[@]} -gt 0 ]]; then
     printf "  deleting %d stale key(s)...\n" "${#stale[@]}"
@@ -150,9 +121,8 @@ audit_namespace() {
 # ── Run ──────────────────────────────────────────────────────────────
 
 echo "auditing CANDLESCAN_* KV namespaces..."
-audit_namespace "CANDLESCAN_CONFIG"  "$CONFIG_ID"  "config"
-audit_namespace "CANDLESCAN_CACHE"   "$CACHE_ID"   "cache"
-audit_namespace "CANDLESCAN_KV (legacy)" "$LEGACY_ID" "mixed"
+audit_namespace "CANDLESCAN_CONFIG" "$CONFIG_ID" "config"
+audit_namespace "CANDLESCAN_CACHE"  "$CACHE_ID"  "cache"
 
 if [[ "$CLEAN" != true ]]; then
   echo ""

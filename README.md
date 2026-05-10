@@ -8,48 +8,55 @@ Pages, Cloudflare Worker proxy for broker APIs.
 
 > **Educational only — not financial advice.**
 
-**Live**: https://utkarsh9891.github.io/candlescan/
+**Live:** https://utkarsh9891.github.io/candlescan/
 
-## What's here
+---
 
-| Surface | Where it lives | What it does |
+## Three runtimes
+
+| Surface | Runs on | What it does |
 |---|---|---|
-| **PWA** | live URL above | mobile-first scanner: single-stock, batch index, simulation, paper trading, charts |
-| **Cockpit** | Mac-side daemon | runs scans + paper-trade exit monitor while your phone sleeps; pushes notifications via ntfy |
-| **Worker** | Cloudflare | proxies Yahoo / Zerodha / Dhan / NSE; quote / news; gate auth for premium |
-| **CLI** | `scripts/` | simulation, walk-forward, cache warming, replay-reference-trades |
+| **PWA** | your phone / browser | mobile-first scanner: single-stock, batch index, simulation, paper trading, charts |
+| **Cockpit** | your Mac (manual launch) | runs the scan loop + paper-trade exit monitor while your phone sleeps; pushes notifications via ntfy |
+| **Worker** | Cloudflare edge | proxies Yahoo / Zerodha / Dhan / NSE for the PWA; handles gate auth |
+
+The cockpit talks directly to brokers; it doesn't go through the Worker.
+
+---
 
 ## Quick start
 
 ```bash
 npm install
-npm start            # Vite dev → http://127.0.0.1:5173/candlescan/
-npm test             # 597 unit tests (vitest)
-npm run build        # production build → dist/
-```
+npm start              # Vite dev → http://127.0.0.1:5173/candlescan/
+npm test               # 597 unit tests (vitest)
+npm run build          # production build → dist/
 
-Demo mode (no network):
-
-```bash
-npm start
-# open http://127.0.0.1:5173/candlescan/?simulate=1
+# Demo mode (no network):
+#   open  http://127.0.0.1:5173/candlescan/?simulate=1
 ```
 
 Cockpit (Mac scan daemon, optional):
 
 ```bash
 npm run cockpit:init   # interactive first-run setup
-npm run cockpit        # start the daemon
+npm run cockpit        # start the daemon (manual; run when you want to)
+npm run cockpit:stop   # gracefully stop the daemon
 npm run cockpit:status # health check
-npm run cockpit:help   # all commands
+npm run cockpit:help   # full CLI help
 ```
 
-Full cockpit docs: [`docs/COCKPIT.md`](docs/COCKPIT.md).
+There's no auto-start — start the cockpit yourself each morning at whatever
+time you want to begin scanning. Stop it with `cockpit:stop` (sends SIGTERM,
+escalates to SIGKILL after 5s if it doesn't exit).
+
+Full cockpit reference: [`docs/COCKPIT.md`](docs/COCKPIT.md).
+
+---
 
 ## npm scripts
 
-Grouped by domain, all sub-commands consistently namespaced as
-`<domain>:<verb>` so they sort and read together.
+Grouped by domain. All sub-commands follow `<domain>:<verb>`.
 
 **Frontend / dev**
 
@@ -79,9 +86,10 @@ Grouped by domain, all sub-commands consistently namespaced as
 | Command | Purpose |
 |---|---|
 | `npm run cockpit` | start the daemon |
+| `npm run cockpit:stop` | stop the daemon (SIGTERM, escalates to SIGKILL) |
+| `npm run cockpit:status` | health summary (secrets / daemon / today's P&L) |
 | `npm run cockpit:init` | interactive first-run setup wizard |
-| `npm run cockpit:status` | health summary (secrets / HTTP / launchd / today's P&L) |
-| `npm run cockpit:config` | print effective config (full; `-- --redacted` to mask) |
+| `npm run cockpit:config` | print effective config (redacted; `-- --show-secrets` to reveal) |
 | `npm run cockpit:logs` | print or follow today's cockpit log |
 | `npm run cockpit:help` | top-level help; `-- <cmd>` for any subcommand |
 | `npm run cockpit:dhan` | manage Dhan broker creds |
@@ -104,7 +112,9 @@ Grouped by domain, all sub-commands consistently namespaced as
 | `npm run worker:keys:rotate` | rotate Worker RSA keys + gate passphrase hash |
 | `npm run worker:kv:audit` | audit `CANDLESCAN_*` KV namespaces (`-- --clean` to delete stale) |
 
-CLI docs: see `--help` on any command, e.g. `npm run cockpit:help -- dhan`.
+CLI docs: pass `--help` to any command, e.g. `npm run cockpit:help -- dhan`.
+
+---
 
 ## Documentation
 
@@ -113,7 +123,7 @@ The main README stays slim. Detail lives in `docs/`:
 | Topic | File |
 |---|---|
 | Cockpit (daemon, CLI, ntfy, paper trades) | [`docs/COCKPIT.md`](docs/COCKPIT.md) |
-| **Secrets — where every key, hash, token lives** | [`docs/SECRETS.md`](docs/SECRETS.md) |
+| Secrets — where every key, hash, token lives | [`docs/SECRETS.md`](docs/SECRETS.md) |
 | Architecture / engine internals / data flow | [`docs/AGENTS.md`](docs/AGENTS.md) |
 | External integrations (Yahoo / Zerodha / Dhan / NSE / Worker) | [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) |
 | Cloudflare Worker ops | [`docs/WORKER_OPS.md`](docs/WORKER_OPS.md) |
@@ -123,20 +133,23 @@ The main README stays slim. Detail lives in `docs/`:
 
 Repo-wide rules and project identity live in [`CLAUDE.md`](CLAUDE.md).
 
+---
+
 ## Tech stack
 
 React 18 (hooks, no Redux) · Vite 6 · custom SVG charts (no Chart.js / D3) ·
-plain JSX (no TypeScript) · inline styles (no CSS files) · Vitest 4 · PWA
-via `vite-plugin-pwa` · Hono on Node for the cockpit HTTP server ·
-Cloudflare Workers (Wrangler) for the proxy.
+plain JSX (no TypeScript) · inline styles (no CSS files) · Vitest 4 · PWA via
+`vite-plugin-pwa` · Hono on Node for the cockpit HTTP server · Cloudflare
+Workers (Wrangler) for the proxy.
 
-## Versioning
+---
+
+## Versioning + license
 
 CI auto-tags every merge to `main`. Default is **patch**; apply
-`release:minor` or `release:major` label on the PR **before merging** to
-bump higher. `package.json` has no `version` field — it comes from
-`git describe --tags` at build time. Full rules: [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md).
-
-## License
+`release:minor` or `release:major` label on the PR **before merging** to bump
+higher. `package.json` has no `version` field — it comes from
+`git describe --tags` at build time. Full rules:
+[`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md).
 
 MIT — see [`LICENSE`](LICENSE).

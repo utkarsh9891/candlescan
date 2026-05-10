@@ -17,20 +17,10 @@
  *   GATE_PRIVATE_KEY — RSA private key PEM for vault decryption
  *
  * KV namespace bindings (in wrangler.toml):
- *   RATE_LIMIT        — IP-based daily rate-limit counters
- *
- * Application KV — preferred layout is two separate bindings, fall back to
- * legacy single binding while a migration is in progress:
- *   CANDLESCAN_CONFIG — long-lived config (GATE_PUBLIC_KEY)
- *   CANDLESCAN_CACHE  — TTL'd caches (instrument maps, daily VIX/FII-DII,
- *                       news, last-quote)
- *   CANDLESCAN_KV     — legacy single binding; used as fallback when the
- *                       split bindings aren't present so the worker keeps
- *                       running through the migration.
- *
- * Resolution helpers below pick the right binding for each use; deletion
- * of CANDLESCAN_KV is the last step of the migration after data has been
- * copied into CANDLESCAN_CONFIG.
+ *   RATE_LIMIT         — IP-based daily rate-limit counters
+ *   CANDLESCAN_CONFIG  — long-lived config (GATE_PUBLIC_KEY)
+ *   CANDLESCAN_CACHE   — TTL'd caches (instrument maps, daily VIX/FII-DII,
+ *                        news, last-quote)
  */
 
 import {
@@ -50,14 +40,6 @@ import {
   QUOTE_LAST_STALE_MAX_MS,
 } from './cache.js';
 
-/** Long-lived config (GATE_PUBLIC_KEY etc) — never TTL'd. */
-function configKv(env) {
-  return env.CANDLESCAN_CONFIG || env.CANDLESCAN_KV;
-}
-/** TTL'd cache values (instrument maps, daily aggregates, news, quotes). */
-function cacheKv(env) {
-  return env.CANDLESCAN_CACHE || env.CANDLESCAN_KV;
-}
 
 const ALLOWED_ORIGINS = [
   'https://utkarsh9891.github.io',
@@ -264,7 +246,7 @@ async function handleGateUnlock(request, env, origin) {
 
   // Retrieve public key from KV (config namespace)
   let publicKey = null;
-  const cfgKv = configKv(env);
+  const cfgKv = env.CANDLESCAN_CONFIG;
   if (cfgKv) {
     publicKey = await cfgKv.get('GATE_PUBLIC_KEY');
   }
@@ -290,7 +272,7 @@ async function resolveInstrumentToken(symbol, authHeader, env) {
   const sym = symbol.toUpperCase();
 
   // Try KV cache first (cache namespace — TTL'd)
-  const ckv = cacheKv(env);
+  const ckv = env.CANDLESCAN_CACHE;
   if (ckv) {
     const cached = await ckv.get(KV_KEY, 'json');
     if (cached && cached[sym]) return cached[sym];
@@ -550,7 +532,7 @@ async function handleZerodhaValidate(request, env, origin) {
  */
 async function loadDhanInstrumentMap(env, { forceRefresh = false } = {}) {
   const KV_KEY = 'dhan_nse_instruments';
-  const ckv = cacheKv(env);
+  const ckv = env.CANDLESCAN_CACHE;
 
   if (!forceRefresh && ckv) {
     const cached = await ckv.get(KV_KEY, 'json');
@@ -718,7 +700,7 @@ async function handleIndiaNews(request, env, origin) {
 
   try {
     const result = await kvCacheFlow({
-      kv: cacheKv(env),
+      kv: env.CANDLESCAN_CACHE,
       key,
       ttlMs,
       staleMaxMs: INDIA_NEWS_STALE_MAX_MS,
@@ -818,7 +800,7 @@ async function handleQuoteLast(request, env, origin) {
 
   try {
     const result = await kvCacheFlow({
-      kv: cacheKv(env),
+      kv: env.CANDLESCAN_CACHE,
       key,
       ttlMs: QUOTE_LAST_TTL_MS,
       staleMaxMs: QUOTE_LAST_STALE_MAX_MS,
@@ -890,7 +872,7 @@ async function handleVixFetch(request, env, origin) {
   const key = vixKey(nowMs);
   try {
     const result = await kvCacheFlow({
-      kv: cacheKv(env),
+      kv: env.CANDLESCAN_CACHE,
       key,
       ttlMs: vixTtlMs(nowMs),
       staleMaxMs: VIX_STALE_MAX_MS,
@@ -975,7 +957,7 @@ async function handleFiiDiiFetch(request, env, origin) {
   const key = fiidiiKey(nowMs);
   try {
     const result = await kvCacheFlow({
-      kv: cacheKv(env),
+      kv: env.CANDLESCAN_CACHE,
       key,
       ttlMs: FIIDII_TTL_MS,
       staleMaxMs: FIIDII_STALE_MAX_MS,
