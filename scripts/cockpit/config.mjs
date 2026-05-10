@@ -108,7 +108,7 @@ export function baseUrl(cfg) {
  * Like loadConfig() but additionally:
  *   - if a gate is set, prompts for the passphrase and decrypts sensitive
  *     fields in memory (file on disk stays encrypted)
- *   - errors out clearly if a gate is set + stdin is not a TTY (launchd case)
+ *   - errors out clearly if a gate is set + stdin is not a TTY
  *
  * Use this from interactive entrypoints (the daemon). Management commands
  * that just edit the file should use loadConfig() — they handle gate
@@ -121,7 +121,7 @@ export async function loadConfigInteractive() {
   if (!process.stdin.isTTY) {
     throw new Error(
       'gate is set but stdin is not a TTY. Run the daemon interactively ' +
-        '(npm run cockpit) or remove the gate (npm run cockpit:gate -- clear).',
+        '(npm run cockpit:start) or remove the gate (npm run cockpit:gate -- clear).',
     );
   }
 

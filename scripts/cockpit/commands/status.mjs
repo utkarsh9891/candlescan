@@ -65,7 +65,7 @@ export async function run() {
     }
   } else {
     console.log('· daemon:   not running');
-    console.log('  start with:  npm run cockpit');
+    console.log('  start with:  npm run cockpit:start');
   }
 
   // ── 3. today's state ──

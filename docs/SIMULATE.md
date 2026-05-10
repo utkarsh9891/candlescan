@@ -23,7 +23,7 @@ node scripts/simulate-day.mjs 1d \
   --confidence 75 --max-positions 3 --max-trades 2
 ```
 
-`npm run simulate -- ...` is the npm wrapper for the same script. Pick any NSE trading day for `--date` — if the chart cache already has bars for that date, the run is near-instant; otherwise it falls back to Yahoo and warms the cache as it goes.
+`npm run simulate:run -- ...` is the npm wrapper for the same script. Pick any NSE trading day for `--date` — if the chart cache already has bars for that date, the run is near-instant; otherwise it falls back to Yahoo and warms the cache as it goes.
 
 ## Walk-forward (Mar 12 → today)
 

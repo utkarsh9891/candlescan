@@ -12,7 +12,7 @@
  *   npm run cockpit:logs         npm run cockpit:config       npm run cockpit:help
  *
  * The daemon entrypoint is `scripts/cockpit/index.mjs` (run via
- * `npm run cockpit`). This file ONLY runs management commands; it does
+ * `npm run cockpit:start`). This file ONLY runs management commands; it does
  * NOT start the daemon, so any subcommand that completes returns control.
  */
 
@@ -42,7 +42,7 @@ const TOP_HELP = `
 CandleScan Cockpit — management CLI
 
 Usage:
-  npm run cockpit                  Start the daemon (scan + exit-monitor + http)
+  npm run cockpit:start                  Start the daemon (scan + exit-monitor + http)
   npm run cockpit:<cmd>            Run a management command
   node scripts/cockpit/cli.mjs <cmd> [args]   (direct invocation)
   node scripts/cockpit/cli.mjs help [cmd]     Show help for any command

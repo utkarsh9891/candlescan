@@ -13,9 +13,10 @@
  *   cockpit gate clear          remove the gate (decrypts secrets back to plain)
  *   cockpit gate test           verify a passphrase without changing state
  *
- * Once a gate is set, `npm run cockpit` prompts for the passphrase at
- * startup. Launchd-started cockpits cannot prompt — they exit with a
- * clear error. Pick one: gate (interactive) or launchd auto-start.
+ * Once a gate is set, `npm run cockpit:start` prompts for the passphrase
+ * at startup (max 3 attempts). The cockpit launches manually anyway —
+ * no auto-start infrastructure to clash with — so this is just an extra
+ * step in your morning startup.
  */
 
 import { askSecret, confirm } from '../lib/prompts.mjs';
@@ -37,8 +38,7 @@ apiSecret/accessToken at rest in secrets.json. Defends against:
   - Other processes / shoulder-surfing reading the file
   - Mode 0600 alone doesn't help against any of those.
 
-Once set, the daemon prompts for the passphrase at startup. Launchd
-auto-start cannot prompt — gate and launchd are mutually exclusive.
+Once set, the daemon prompts for the passphrase at startup (max 3 attempts).
 
   cockpit gate         show status (default)
   cockpit gate set     set or change the passphrase
@@ -103,7 +103,6 @@ async function setGate() {
   writeSecrets(next);
   console.log('✓ gate set; existing secrets encrypted.');
   console.log('  daemon will now prompt for passphrase at startup.');
-  console.log('  ⚠ launchd auto-start will not work while a gate is set (no TTY).');
 }
 
 async function clearGate() {

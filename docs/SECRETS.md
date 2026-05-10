@@ -25,7 +25,7 @@ secrets. Wherever this doc says "where it lives", it's one of these:
 |---|---|---|
 | **PWA** | The deployed React app at `utkarsh9891.github.io/candlescan/` | User's browser (mobile or desktop) |
 | **Worker** | The Cloudflare Worker proxy `candlescan-proxy.utkarsh-dev.workers.dev` | Cloudflare's edge |
-| **Cockpit** | The Mac-side scan + paper-trade daemon (sometimes called "autopilot" or "terminal mode" — it's all the same thing) | Your Mac, started with `npm run cockpit` |
+| **Cockpit** | The Mac-side scan + paper-trade daemon (sometimes called "autopilot" or "terminal mode" — it's all the same thing) | Your Mac, started with `npm run cockpit:start` |
 
 The Cockpit talks directly to Yahoo + NSE — it does not go through the
 Worker. The PWA goes through the Worker for CORS reasons and for
