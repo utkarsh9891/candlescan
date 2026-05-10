@@ -33,6 +33,23 @@ function getSavedCockpitUrl() {
   try { return localStorage.getItem(LS_COCKPIT_URL) || ''; } catch { return ''; }
 }
 
+// "Simple" cockpit URL form = `http://<hostname>.local:5174` — matches the
+// default install (mDNS hostname + default port). Anything else (LAN IP,
+// custom port, custom domain) drops to advanced mode where the user edits
+// the full URL directly.
+const SIMPLE_COCKPIT_PATTERN = /^http:\/\/([a-z0-9-]+)\.local:5174$/i;
+function isSimpleCockpitUrl(url) {
+  return SIMPLE_COCKPIT_PATTERN.test(url || '');
+}
+function extractCockpitHostname(url) {
+  const m = SIMPLE_COCKPIT_PATTERN.exec(url || '');
+  return m ? m[1] : '';
+}
+function buildSimpleCockpitUrl(hostname) {
+  const safe = (hostname || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  return safe ? `http://${safe}.local:5174` : '';
+}
+
 /** Compact human age — "3h", "2d", "15m" — for the NSE cache summary. */
 function formatAge(ms) {
   if (!ms || ms < 0) return '0m';
@@ -59,6 +76,14 @@ export default function SettingsPage({
   const [apiKey, setApiKey] = useState(getSavedApiKey);
   const [apiSecret, setApiSecret] = useState(getSavedApiSecret);
   const [cockpitUrl, setCockpitUrl] = useState(getSavedCockpitUrl);
+  const [cockpitMode, setCockpitMode] = useState(() => {
+    const u = getSavedCockpitUrl();
+    return !u || isSimpleCockpitUrl(u) ? 'simple' : 'advanced';
+  });
+  const [cockpitHostnameField, setCockpitHostnameField] = useState(() => {
+    const u = getSavedCockpitUrl();
+    return extractCockpitHostname(u) || (u ? '' : 'cockpit');
+  });
   const [cockpitProbe, setCockpitProbe] = useState({ status: 'idle', msg: '' });
 
   // tokenStatus: 'none' | 'checking' | 'valid' | 'expired'
@@ -655,15 +680,94 @@ export default function SettingsPage({
 
       {/* Cockpit — Mac-side scan/notify daemon URL. Each device stores its
           own value in localStorage so multiple users / devices can point at
-          their own cockpit instances without colliding. Empty = unset. */}
+          their own cockpit instances without colliding. Empty = unset.
+          Simple mode shows just the editable hostname inside fixed
+          http://<…>.local:5174 chrome (matches the default install).
+          Advanced mode lets the user paste a full URL for non-mDNS /
+          non-default-port setups. */}
       <div style={card}>
         <div style={sectionTitle}>Cockpit (optional)</div>
         <div style={{ fontSize: 12, color: '#4a5068', marginBottom: 10, lineHeight: 1.5 }}>
-          Base URL of your Mac-side cockpit (the daemon that runs scans + paper-trade
+          Mac-side cockpit URL (the daemon that runs scans + paper-trade
           monitoring while your Mac is awake). Leave empty if not using cockpit.
-          Typical: <span style={{ fontFamily: mono, color: '#1a1d26' }}>http://cockpit.local:5174</span>
         </div>
-        <PasteInput value={cockpitUrl} onChange={setCockpitUrl} placeholder="http://cockpit.local:5174" useMono />
+
+        {/* Mode toggle — pill-style, takes minimal space */}
+        <div style={{ display: 'inline-flex', marginBottom: 12, border: '1px solid #e2e5eb', borderRadius: 6, overflow: 'hidden' }}>
+          <button type="button"
+            onClick={() => {
+              setCockpitMode('simple');
+              const h = extractCockpitHostname(cockpitUrl) || cockpitHostnameField || 'cockpit';
+              setCockpitHostnameField(h);
+              if (!isSimpleCockpitUrl(cockpitUrl)) setCockpitUrl(buildSimpleCockpitUrl(h));
+            }}
+            style={{
+              padding: '6px 12px', fontSize: 11, fontWeight: 600,
+              background: cockpitMode === 'simple' ? '#2563eb' : '#fff',
+              color: cockpitMode === 'simple' ? '#fff' : '#4a5068',
+              border: 'none', cursor: 'pointer',
+            }}>
+            Simple
+          </button>
+          <button type="button"
+            onClick={() => setCockpitMode('advanced')}
+            style={{
+              padding: '6px 12px', fontSize: 11, fontWeight: 600,
+              background: cockpitMode === 'advanced' ? '#2563eb' : '#fff',
+              color: cockpitMode === 'advanced' ? '#fff' : '#4a5068',
+              border: 'none', cursor: 'pointer',
+              borderLeft: '1px solid #e2e5eb',
+            }}>
+            Advanced
+          </button>
+        </div>
+
+        {cockpitMode === 'simple' ? (
+          <>
+            <div style={{
+              display: 'flex', alignItems: 'stretch', marginBottom: 6,
+              border: '1px solid #e2e5eb', borderRadius: 8, background: '#fff',
+              fontFamily: mono, fontSize: 13, overflow: 'hidden',
+            }}>
+              <span style={{
+                padding: '10px 0 10px 12px', color: '#8892a8',
+                userSelect: 'none', whiteSpace: 'nowrap',
+              }}>http://</span>
+              <input
+                type="text"
+                value={cockpitHostnameField}
+                onChange={(e) => {
+                  const safe = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+                  setCockpitHostnameField(safe);
+                  setCockpitUrl(buildSimpleCockpitUrl(safe));
+                }}
+                placeholder="cockpit"
+                aria-label="cockpit hostname"
+                style={{
+                  flex: 1, minWidth: 60, padding: '10px 4px',
+                  border: 'none', outline: 'none', fontFamily: mono, fontSize: 13,
+                  background: 'transparent', color: '#1a1d26',
+                }}
+              />
+              <span style={{
+                padding: '10px 12px 10px 0', color: '#8892a8',
+                userSelect: 'none', whiteSpace: 'nowrap',
+              }}>.local:5174</span>
+            </div>
+            <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10, lineHeight: 1.5 }}>
+              Enter just your Mac's mDNS hostname (the value of <code style={{ fontFamily: mono }}>scutil --get LocalHostName</code>).
+              Default install uses <code style={{ fontFamily: mono }}>cockpit</code>. Switch to Advanced for LAN IP or custom port.
+            </div>
+          </>
+        ) : (
+          <>
+            <PasteInput value={cockpitUrl} onChange={setCockpitUrl} placeholder="http://192.168.1.x:5174" useMono />
+            <div style={{ fontSize: 11, color: '#8892a8', marginBottom: 10, lineHeight: 1.5 }}>
+              Full URL — use this only if you've changed <code style={{ fontFamily: mono }}>host.name</code> or <code style={{ fontFamily: mono }}>host.port</code> in your cockpit secrets.json (LAN IP, custom port, etc.).
+            </div>
+          </>
+        )}
+
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
           <button type="button"
             onClick={() => {
