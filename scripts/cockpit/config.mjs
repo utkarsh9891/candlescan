@@ -31,6 +31,7 @@ import {
   decryptSensitive,
 } from './lib/gate.mjs';
 import { askSecret } from './lib/prompts.mjs';
+import * as keychain from './lib/keychain.mjs';
 
 const SECRETS_PATH = path.join(os.homedir(), '.candlescan', 'cockpit', 'secrets.json');
 
@@ -124,6 +125,29 @@ export async function loadConfigInteractive() {
   const cfg = loadConfig();
   if (!cfg.gate?.salt) return { cfg, gateKey: null };
 
+  // ── Path 1: passphrase cached in macOS Keychain ──
+  // Read attempt may pop a Keychain access dialog the first time; user
+  // clicks "Always Allow" once and subsequent boots are prompt-free.
+  if (keychain.isAvailable()) {
+    const cached = keychain.getPassphrase();
+    if (cached != null) {
+      if (verifyPassphrase(cfg.gate, cached)) {
+        process.stdout.write('Gate passphrase loaded from macOS Keychain (no prompt).\n');
+        const gateKey = deriveKey(cfg.gate, cached);
+        return { cfg: decryptSensitive(cfg, gateKey), gateKey };
+      }
+      // Cached value doesn't match the current gate — almost certainly
+      // means the gate was rotated since the cache was set. Fall through
+      // to the typed prompt so the user isn't locked out.
+      process.stdout.write(
+        '⚠ Keychain has a cached passphrase but it does NOT match the current gate.\n' +
+        '  Falling back to typed prompt. After confirming, refresh the cache:\n' +
+        '    npm run cockpit:gate -- cache\n',
+      );
+    }
+  }
+
+  // ── Path 2: typed prompt (existing behavior) ──
   if (!process.stdin.isTTY) {
     throw new Error(
       'gate is set but stdin is not a TTY. Run the daemon interactively ' +
