@@ -28,22 +28,23 @@ import {
   encryptSensitive,
   decryptSensitive,
 } from '../lib/gate.mjs';
+import * as keychain from '../lib/keychain.mjs';
 
 export const help = `
-cockpit gate <set | clear | test | status>
+cockpit gate <set | clear | test | status | cache | uncache>
 
-Optional passphrase that encrypts ntfy topic + Dhan PIN + Zerodha
-apiSecret/accessToken at rest in secrets.json. Defends against:
-  - Time Machine + iCloud + Dropbox backups copying the file
-  - Other processes / shoulder-surfing reading the file
-  - Mode 0600 alone doesn't help against any of those.
+Passphrase that encrypts ntfy topic + Dhan PIN + Dhan access token +
+Zerodha apiSecret + Zerodha access token at rest in secrets.json.
+Required for storing broker creds. Defends against backups, sync,
+shoulder-surfing — mode 0600 alone doesn't.
 
-Once set, the daemon prompts for the passphrase at startup (max 3 attempts).
-
-  cockpit gate         show status (default)
-  cockpit gate set     set or change the passphrase
-  cockpit gate clear   remove the gate (decrypts secrets back to plain)
-  cockpit gate test    verify a passphrase without changing anything
+  cockpit gate           show status (default)
+  cockpit gate set       set or change the passphrase
+  cockpit gate clear     remove the gate (decrypts secrets back to plain)
+  cockpit gate test      verify a passphrase without changing state
+  cockpit gate cache     cache the passphrase in macOS Keychain so the
+                         daemon reads it at boot — skips the typed prompt
+  cockpit gate uncache   remove the cached passphrase from macOS Keychain
 `.trim();
 
 export async function run(args) {
@@ -51,6 +52,8 @@ export async function run(args) {
   if (sub === 'set' || sub === 'change') return setGate();
   if (sub === 'clear' || sub === 'remove') return clearGate();
   if (sub === 'test' || sub === 'verify') return testGate();
+  if (sub === 'cache') return cacheToKeychain();
+  if (sub === 'uncache') return uncacheFromKeychain();
   if (sub === 'status' || !sub) return statusGate();
   console.log(`unknown subcommand: ${sub}`);
   console.log(help);
@@ -64,6 +67,13 @@ async function statusGate() {
   } else {
     console.log('gate: NOT SET');
     console.log('  (sensitive fields stored plain; secrets.json is mode 0600)');
+  }
+  if (keychain.isAvailable()) {
+    const cached = keychain.isCached();
+    console.log(`keychain cache: ${cached ? 'PRESENT' : 'absent'} (service: ${keychain.serviceName()})`);
+    if (cached) {
+      console.log('  daemon will read the passphrase from Keychain at boot and skip the typed prompt.');
+    }
   }
 }
 
@@ -139,6 +149,54 @@ async function testGate() {
     console.log('✓ passphrase correct.');
   } else {
     console.log('✗ passphrase incorrect.');
+    process.exit(1);
+  }
+}
+
+async function cacheToKeychain() {
+  if (!keychain.isAvailable()) {
+    console.error('✗ macOS Keychain not available on this platform.');
+    process.exit(1);
+  }
+  const cur = readSecrets();
+  if (!cur.gate?.salt) {
+    console.error('✗ no gate set — nothing to cache.');
+    console.error('  Set one first:  npm run cockpit:gate -- set');
+    process.exit(1);
+  }
+  console.log('Enter the gate passphrase. It will be verified, then stored in macOS Keychain');
+  console.log('under service "' + keychain.serviceName() + '" so future cockpit:start boots');
+  console.log('skip the passphrase prompt.');
+  console.log('');
+  const pass = await askSecret('passphrase');
+  if (!verifyPassphrase(cur.gate, pass)) {
+    console.error('✗ wrong passphrase — not caching.');
+    process.exit(1);
+  }
+  if (keychain.setPassphrase(pass)) {
+    console.log('✓ passphrase cached in macOS Keychain.');
+    console.log('  First boot may pop a "node wants access" dialog — click "Always Allow"');
+    console.log('  (Touch ID confirms) to skip future prompts.');
+  } else {
+    console.error('✗ Keychain write failed.');
+    process.exit(1);
+  }
+}
+
+async function uncacheFromKeychain() {
+  if (!keychain.isAvailable()) {
+    console.error('✗ macOS Keychain not available on this platform.');
+    process.exit(1);
+  }
+  if (!keychain.isCached()) {
+    console.log('nothing cached — already uncached.');
+    return;
+  }
+  if (keychain.deletePassphrase()) {
+    console.log('✓ cached passphrase removed from macOS Keychain.');
+    console.log('  Next cockpit:start will prompt for the passphrase again.');
+  } else {
+    console.error('✗ Keychain delete failed.');
     process.exit(1);
   }
 }

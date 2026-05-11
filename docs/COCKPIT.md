@@ -212,6 +212,9 @@ npm run cockpit:gate                # show status (default)
 npm run cockpit:gate -- set         # set or change passphrase
 npm run cockpit:gate -- clear       # remove gate (decrypts secrets back to plain)
 npm run cockpit:gate -- test        # verify a passphrase
+npm run cockpit:gate -- cache       # cache passphrase in macOS Keychain
+                                    #   → daemon reads it at boot, skips typing
+npm run cockpit:gate -- uncache     # remove cached passphrase from Keychain
 npm run cockpit:gate -- --help      # full help
 ```
 

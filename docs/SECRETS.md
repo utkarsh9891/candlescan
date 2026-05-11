@@ -42,7 +42,7 @@ gate-protected broker proxying.
 | **Browser-side encrypted vault** (Zerodha / Dhan creds for the PWA) | browser `localStorage` | RSA-OAEP-2048 ciphertext | yes (decryptable only by Worker) | PWA Settings UI |
 | **PWA gate token** (per-device passphrase hash) | browser `localStorage` | SHA-256 hex | no (already a hash) | PWA Settings → Premium Gate |
 | **Cockpit gate config** (`gate.salt` + `gate.verifier`) | `~/.candlescan/cockpit/secrets.json` (Mac) | PBKDF2-SHA256 verifier hex | n/a (verifier, not the passphrase) | `npm run cockpit:gate -- set` |
-| **Cockpit gate passphrase** | your head + password manager | plain | n/a | `npm run cockpit:gate -- set` |
+| **Cockpit gate passphrase** | your head + password manager (optionally cached in macOS Keychain) | plain | n/a | `npm run cockpit:gate -- set`; cache with `cockpit:gate -- cache` |
 | **ntfy topic** | `~/.candlescan/cockpit/secrets.json` (Mac) | random hex string | yes if cockpit gate set | `cockpit:init` / `cockpit:rotate-topic` |
 | **Dhan client ID** | `~/.candlescan/cockpit/secrets.json` (Mac) | plain string | no (not a secret per se) | `npm run cockpit:dhan` |
 | **Dhan PIN** | `~/.candlescan/cockpit/secrets.json` (Mac) | plain | yes if cockpit gate set | `npm run cockpit:dhan` |
@@ -134,9 +134,18 @@ Crypto: PBKDF2-SHA256 (200k iterations) → AES-256-GCM (12-byte IV,
 embedded auth tag). Verifier comparison is constant-time. Salt is
 16 bytes. Implementation: [`scripts/cockpit/lib/gate.mjs`](../scripts/cockpit/lib/gate.mjs).
 
-Once a gate is set, the cockpit daemon prompts for the passphrase on
-startup (max 3 attempts). The cockpit launches manually (no auto-start
-infrastructure), so this is just an extra step in your morning startup.
+Once a gate is set, the cockpit daemon needs the passphrase on startup
+to decrypt the encrypted fields in `secrets.json`. Two paths:
+
+1. **macOS Keychain cache (recommended).** Run
+   `npm run cockpit:gate -- cache` once; the daemon then reads the
+   passphrase from your login Keychain at every subsequent boot — Touch
+   ID confirms the read on first use, no typing. Removable any time with
+   `cockpit:gate -- uncache`. If the gate is rotated, the cache is
+   detected as stale and the daemon falls back to the typed prompt with
+   a clear message.
+2. **Typed prompt (default).** Without a Keychain cache, the daemon
+   prompts on startup, up to 3 attempts.
 
 ```bash
 npm run cockpit:gate            # show status (default)
