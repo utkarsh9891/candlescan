@@ -50,9 +50,9 @@ async function main() {
     process.exit(1);
   }
 
-  let cfg;
+  let cfg, gateKey;
   try {
-    cfg = await loadConfigInteractive();
+    ({ cfg, gateKey } = await loadConfigInteractive());
   } catch (e) {
     log.err(`config: ${e.message}`);
     log.boot(`first-run setup: docs/COCKPIT.md  (or  npm run cockpit:init)`);
@@ -67,12 +67,14 @@ async function main() {
   );
   log.boot(`host=${baseUrl(cfg)}`);
 
-  // Resolve the broker data source (Yahoo / Dhan / Zerodha). For Dhan
-  // this prompts for TOTP interactively and exchanges for an in-memory
-  // access token. Failure here aborts boot.
+  // Resolve the broker data source (Yahoo / Dhan / Zerodha). Dhan reuses
+  // a cached access token if one is on disk and still within its 24h
+  // validity window; only re-prompts for TOTP when the cache is stale.
+  // gateKey is needed to re-encrypt freshly-minted tokens before
+  // persisting them back to secrets.json.
   let dataSource;
   try {
-    dataSource = await setupDataSource(cfg);
+    dataSource = await setupDataSource(cfg, gateKey);
   } catch (e) {
     log.err(`data source: ${e.message}`);
     process.exit(1);

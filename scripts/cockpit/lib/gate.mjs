@@ -118,6 +118,7 @@ export function mapStrings(obj, fn) {
 export const ENCRYPTED_PATHS = [
   ['ntfy', 'topic'],
   ['dhan', 'pin'],
+  ['dhan', 'accessToken'],
   ['zerodha', 'apiSecret'],
   ['zerodha', 'accessToken'],
 ];
