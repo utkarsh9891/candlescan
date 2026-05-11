@@ -46,8 +46,8 @@ gate-protected broker proxying.
 | **ntfy topic** | `~/.candlescan/cockpit/secrets.json` (Mac) | random hex string | yes if cockpit gate set | `cockpit:init` / `cockpit:rotate-topic` |
 | **Dhan client ID** | `~/.candlescan/cockpit/secrets.json` (Mac) | plain string | no (not a secret per se) | `npm run cockpit:dhan` |
 | **Dhan PIN** | `~/.candlescan/cockpit/secrets.json` (Mac) | plain | yes if cockpit gate set | `npm run cockpit:dhan` |
-| **Dhan TOTP** | NEVER stored | n/a | n/a | prompted at daemon launch |
-| **Dhan access token (cockpit)** | in-memory only on the Mac | string | n/a (never written to disk) | derived at boot from clientId + PIN + TOTP |
+| **Dhan TOTP** | NEVER stored | n/a | n/a | prompted at daemon launch — only when the cached access token is missing / expired |
+| **Dhan access token (cockpit, daily)** | `~/.candlescan/cockpit/secrets.json` (Mac) | encrypted (cockpit gate) | **always — gate is required** | written at first boot's TOTP exchange; reused for the rest of its ~24h window; refreshed when expired |
 | **Zerodha API key** | `~/.candlescan/cockpit/secrets.json` (Mac) | plain | no (key is public-ish) | `npm run cockpit:zerodha` |
 | **Zerodha API secret** | `~/.candlescan/cockpit/secrets.json` (Mac) | plain | yes if cockpit gate set | `npm run cockpit:zerodha` |
 | **Zerodha access token (cockpit, daily)** | `~/.candlescan/cockpit/secrets.json` (Mac) | plain | yes if cockpit gate set | `npm run cockpit:zerodha -- access-token` daily |

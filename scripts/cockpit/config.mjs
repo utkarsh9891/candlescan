@@ -110,13 +110,19 @@ export function baseUrl(cfg) {
  *     fields in memory (file on disk stays encrypted)
  *   - errors out clearly if a gate is set + stdin is not a TTY
  *
- * Use this from interactive entrypoints (the daemon). Management commands
- * that just edit the file should use loadConfig() — they handle gate
- * verification themselves where they need it.
+ * Returns { cfg, gateKey } where gateKey is the derived AES key Buffer
+ * (held in memory for the lifetime of the process) or null when no gate
+ * is configured. Callers that need to persist runtime updates back to
+ * secrets.json — like caching Dhan's daily access token — must use
+ * gateKey to re-encrypt the new value at write time.
+ *
+ * Use this from interactive entrypoints (the daemon). Management
+ * commands that just edit the file should use loadConfig() — they
+ * handle gate verification themselves where they need it.
  */
 export async function loadConfigInteractive() {
   const cfg = loadConfig();
-  if (!cfg.gate?.salt) return cfg;
+  if (!cfg.gate?.salt) return { cfg, gateKey: null };
 
   if (!process.stdin.isTTY) {
     throw new Error(
@@ -129,8 +135,8 @@ export async function loadConfigInteractive() {
   for (let attempts = 0; attempts < 3; attempts++) {
     const pass = await askSecret('passphrase');
     if (verifyPassphrase(cfg.gate, pass)) {
-      const key = deriveKey(cfg.gate, pass);
-      return decryptSensitive(cfg, key);
+      const gateKey = deriveKey(cfg.gate, pass);
+      return { cfg: decryptSensitive(cfg, gateKey), gateKey };
     }
     process.stdout.write(`  ✗ wrong passphrase (${attempts + 1}/3)\n`);
   }

@@ -107,6 +107,22 @@ async function show() {
   } else {
     console.log('  pin:       (unset)');
   }
+  // Cached access token from previous boot's TOTP login (populated at
+  // daemon runtime, not by this command).
+  if (d.accessToken) {
+    const tag = isEncrypted(d.accessToken) ? '<encrypted at rest>' : `<${d.accessToken.length}-char, plain>`;
+    let exp = '(no expiry recorded)';
+    if (typeof d.accessTokenExpiresAt === 'number') {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const minsLeft = Math.floor((d.accessTokenExpiresAt - nowSec) / 60);
+      const iso = new Date(d.accessTokenExpiresAt * 1000).toISOString();
+      exp = minsLeft > 0 ? `${iso} (${Math.floor(minsLeft / 60)}h ${minsLeft % 60}m left)` : `${iso} (expired)`;
+    }
+    console.log(`  accessToken: ${tag}`);
+    console.log(`    expires:   ${exp}`);
+  } else {
+    console.log(`  accessToken: (not yet cached — runs at first cockpit:start with TOTP)`);
+  }
 }
 
 async function clear() {

@@ -338,13 +338,23 @@ the cockpit's path entirely is intentional and shipped.
 
 Configured Dhan + dataSource=dhan → at every cockpit boot:
 
-1. Reads `dhan.clientId` + `dhan.pin` from secrets (decrypts via gate
-   if set).
-2. Prompts for the current 6-digit TOTP from your authenticator app.
-3. Exchanges (clientId + pin + TOTP) for a 24-hour access token via
-   `https://auth.dhan.co/app/generateAccessToken`.
-4. Holds the access token in memory for the cockpit's lifetime —
-   never written to disk.
+1. Reads `dhan.clientId` + `dhan.pin` from secrets (decrypts via the
+   cockpit gate).
+2. Checks for a cached access token in `dhan.accessToken` +
+   `dhan.accessTokenExpiresAt`. If present and the expiry is more than
+   5 minutes away, **uses the cached token and skips the TOTP prompt
+   entirely**. The boot log reports something like
+   `data source: dhan · using cached access token (≈19h left)`.
+3. Otherwise (no cache / expired / about to expire), prompts for the
+   current 6-digit TOTP from your authenticator app, exchanges
+   (clientId + pin + TOTP) for a fresh 24-hour token via
+   `https://auth.dhan.co/app/generateAccessToken`, and **persists the
+   new token encrypted in `secrets.json` via the same cockpit gate**.
+4. Holds the (now-cached) access token in memory for the cockpit's
+   lifetime.
+
+Net effect: the TOTP prompt fires at most once per ~24 hours, not on
+every cockpit start.
 
 If the cockpit is started non-interactively (`nohup`, anything without
 a TTY) **and** `dataSource=dhan`, boot fails with a clear message.
